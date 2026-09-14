@@ -1,0 +1,14 @@
+{
+  "symbol": "SPY",
+  "download_start": "2014-01-01",
+  "download_end_exclusive": "2026-01-01",
+  "fast_window": 20,
+  "slow_window": 50,
+  "initial_cash": 10000.0,
+  "slippage_bps": [0, 5, 10],
+  "commission": 0.0,
+  "periods": {
+    "learning": ["2015-01-01", "2021-12-31"],
+    "evaluation": ["2022-01-01", "2025-12-31"]
+  }
+}
