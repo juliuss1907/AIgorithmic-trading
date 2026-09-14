@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Thí nghiệm mới · System Trading Lab{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/">Thư viện</a><span>/</span><span>Thí nghiệm mới</span></nav>
+<section class="form-hero">
+  <p class="eyebrow">New experiment</p>
+  <h1>Viết câu hỏi trước khi chạy số.</h1>
+  <p class="lede">Release 0.1 chỉ cho phép SMA crossover, long-only, khớp ở giá mở cửa phiên kế tiếp.</p>
+</section>
+
+{% if datasets %}
+<form id="experiment-form" class="experiment-layout">
+  <div class="form-stack">
+    <fieldset>
+      <legend>01 · Câu hỏi nghiên cứu</legend>
+      <label for="title">Tên thí nghiệm</label>
+      <input id="title" name="title" required maxlength="120" value="{{ defaults.title }}">
+      <span class="field-error" data-field="title"></span>
+      <label for="hypothesis">Giả thuyết</label>
+      <textarea id="hypothesis" name="hypothesis" required maxlength="1000">{{ defaults.hypothesis }}</textarea>
+      <span class="field-error" data-field="hypothesis"></span>
+    </fieldset>
+    <fieldset>
+      <legend>02 · Dữ liệu và quy tắc</legend>
+      <label for="dataset">Snapshot</label>
+      <select id="dataset" name="dataset_id" required>
+      {% for item in datasets %}
+        <option value="{{ item.id }}" data-symbol="{{ item.symbol }}" data-start="{{ item.start }}" data-end-exclusive="{{ item.end_exclusive }}">{{ item.symbol }} · {{ item.start }} → {{ item.end }} · {{ item.id[:10] }}</option>
+      {% endfor %}
+      </select>
+      <div class="input-grid">
+        <div><label for="fast_window">SMA nhanh</label><input id="fast_window" name="fast_window" type="number" min="1" max="499" required value="{{ defaults.strategy.fast_window }}"><span class="field-error" data-field="fast_window"></span></div>
+        <div><label for="slow_window">SMA chậm</label><input id="slow_window" name="slow_window" type="number" min="2" max="500" required value="{{ defaults.strategy.slow_window }}"><span class="field-error" data-field="slow_window"></span></div>
+        <div><label for="initial_cash">Vốn giả lập (USD)</label><input id="initial_cash" name="initial_cash" type="number" min="1" step="0.01" required value="{{ defaults.initial_cash }}"></div>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>03 · Giai đoạn đánh giá</legend>
+      <div class="period-row"><strong>Learning</strong><label for="learning_start">Từ ngày</label><input id="learning_start" type="date" required value="{{ defaults.periods.learning[0] }}"><label for="learning_end">Đến ngày</label><input id="learning_end" type="date" required value="{{ defaults.periods.learning[1] }}"></div>
+      <div class="period-row"><strong>Evaluation</strong><label for="evaluation_start">Từ ngày</label><input id="evaluation_start" type="date" required value="{{ defaults.periods.evaluation[0] }}"><label for="evaluation_end">Đến ngày</label><input id="evaluation_end" type="date" required value="{{ defaults.periods.evaluation[1] }}"></div>
+      <span class="field-error" data-field="periods"></span>
+    </fieldset>
+  </div>
+  <aside class="review-card">
+    <p class="eyebrow">Review rule</p><h2>Điều sắp được chạy</h2>
+    <p id="rule-preview"></p>
+    <ul><li>Long hoặc tiền mặt</li><li>Signal cuối phiên, fill mở cửa kế tiếp</li><li>Chi phí: 0 / 5 / 10 bps mỗi fill</li><li>Benchmark cùng engine và điều kiện</li></ul>
+    <p id="submit-error" class="submit-error" role="alert"></p>
+    <button id="submit-button" type="submit">Xác nhận & đưa vào hàng đợi</button>
+  </aside>
+</form>
+{% else %}
+<div class="empty-state"><h2>Chưa có snapshot ready</h2><p>Chạy <code>python -m lab fetch</code> trước khi tạo thí nghiệm.</p></div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+{% if datasets %}<script>
+const form = document.querySelector('#experiment-form');
+const key = crypto.randomUUID();
+const value = id => document.querySelector(`#${id}`).value;
+function review() {
+  const option = document.querySelector('#dataset').selectedOptions[0];
+  document.querySelector('#rule-preview').textContent = `Nắm giữ ${option.dataset.symbol} khi SMA ${value('fast_window')} > SMA ${value('slow_window')}; nếu không thì giữ tiền mặt.`;
+}
+form.addEventListener('input', review); review();
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+  document.querySelectorAll('.field-error').forEach(node => node.textContent = '');
+  const option = document.querySelector('#dataset').selectedOptions[0];
+  const payload = {
+    title: value('title'), hypothesis: value('hypothesis'), symbol: option.dataset.symbol,
+    dataset_id: option.value,
+    data: {start: option.dataset.start, end_exclusive: option.dataset.endExclusive},
+    strategy: {family: 'sma_crossover', fast_window: Number(value('fast_window')), slow_window: Number(value('slow_window'))},
+    initial_cash: Number(value('initial_cash')), slippage_bps: [0, 5, 10], commission: 0,
+    periods: {learning: [value('learning_start'), value('learning_end')], evaluation: [value('evaluation_start'), value('evaluation_end')]}
+  };
+  const button = document.querySelector('#submit-button'); button.disabled = true;
+  const response = await fetch('/api/jobs', {method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': key}, body: JSON.stringify(payload)});
+  if (response.ok) { const job = await response.json(); window.location.assign(`/jobs/${job.id}`); return; }
+  const error = await response.json();
+  const items = Array.isArray(error.detail) ? error.detail : [{loc: ['submit'], msg: error.detail}];
+  for (const item of items) {
+    const field = item.loc[item.loc.length - 1];
+    const alias = {strategy: 'slow_window', data: 'periods'}[field] || field;
+    const target = document.querySelector(`[data-field="${alias}"]`) || document.querySelector('[data-field="periods"]');
+    if (target) target.textContent = item.msg;
+  }
+  document.querySelector('#submit-error').textContent = 'Cấu hình chưa hợp lệ. Kiểm tra các trường được đánh dấu.';
+  button.disabled = false;
+});
+</script>{% endif %}
+{% endblock %}

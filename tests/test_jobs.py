@@ -121,6 +121,36 @@ def test_api_returns_job_id_before_worker_runs(job_lab):
     assert client.get(f"/api/jobs/{job_id}").json()["config"]["dataset_id"] == config.dataset_id
 
 
+def test_api_idempotency_key_prevents_double_submit(job_lab):
+    queue, config = job_lab
+    client = TestClient(create_app(
+        database=queue.database, runs_dir=queue.runs_dir, data_dir=queue.catalog.base_dir
+    ))
+    headers = {"Idempotency-Key": "form-submit-123"}
+
+    first = client.post("/api/jobs", json=config.to_json_dict(), headers=headers)
+    second = client.post("/api/jobs", json=config.to_json_dict(), headers=headers)
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert first.json()["id"] == second.json()["id"]
+    assert len(queue.list()) == 1
+
+
+def test_idempotency_key_cannot_be_reused_for_different_config(job_lab):
+    queue, config = job_lab
+    client = TestClient(create_app(
+        database=queue.database, runs_dir=queue.runs_dir, data_dir=queue.catalog.base_dir
+    ))
+    headers = {"Idempotency-Key": "form-submit-456"}
+    client.post("/api/jobs", json=config.to_json_dict(), headers=headers)
+
+    changed = config.model_copy(update={"title": "Different question"})
+    response = client.post("/api/jobs", json=changed.to_json_dict(), headers=headers)
+
+    assert response.status_code == 409
+
+
 def test_default_worker_completes_only_after_report_and_audit(job_lab):
     queue, config = job_lab
     job = queue.enqueue(config, entry_point="integration_test")
@@ -133,3 +163,68 @@ def test_default_worker_completes_only_after_report_and_audit(job_lab):
     assert (output / "report.md").is_file()
     assert (output / "evaluation/0bps/sma/audit.json").is_file()
     assert (output / "evaluation/0bps/buy-hold/audit.json").is_file()
+
+
+def test_browser_pages_expose_form_review_and_job_status(job_lab):
+    queue, config = job_lab
+    client = TestClient(create_app(
+        database=queue.database, runs_dir=queue.runs_dir, data_dir=queue.catalog.base_dir
+    ))
+
+    form = client.get("/experiments/new")
+    assert form.status_code == 200
+    assert "Review rule" in form.text
+    assert config.dataset_id in form.text
+
+    job = queue.enqueue(config, entry_point="test")
+    status = client.get(f"/jobs/{job['id']}")
+    assert status.status_code == 200
+    assert "Đã xếp hàng" in status.text
+
+
+def test_invalid_form_payload_points_to_strategy_field(job_lab):
+    queue, config = job_lab
+    client = TestClient(create_app(
+        database=queue.database, runs_dir=queue.runs_dir, data_dir=queue.catalog.base_dir
+    ))
+    payload = config.to_json_dict()
+    payload["strategy"]["fast_window"] = 100
+    payload["strategy"]["slow_window"] = 20
+
+    response = client.post("/api/jobs", json=payload, headers={"Idempotency-Key": "invalid-form-1"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"][-1] == "strategy"
+
+
+def test_form_rejects_period_without_indicator_warmup(job_lab):
+    queue, config = job_lab
+    client = TestClient(create_app(
+        database=queue.database, runs_dir=queue.runs_dir, data_dir=queue.catalog.base_dir
+    ))
+    payload = config.to_json_dict()
+    payload["periods"]["evaluation"][0] = "2025-01-03"
+
+    response = client.post("/api/jobs", json=payload, headers={"Idempotency-Key": "warmup-invalid"})
+
+    assert response.status_code == 422
+    assert "warmup" in response.json()["detail"].lower()
+
+
+def test_web_job_runs_to_result_and_survives_app_restart(job_lab):
+    queue, config = job_lab
+    client = TestClient(create_app(
+        database=queue.database, runs_dir=queue.runs_dir, data_dir=queue.catalog.base_dir
+    ))
+    created = client.post(
+        "/api/jobs", json=config.to_json_dict(), headers={"Idempotency-Key": "full-web-flow"}
+    ).json()
+
+    JobWorker(queue).run_once()
+    completed = client.get(f"/api/jobs/{created['id']}").json()
+    restarted = TestClient(create_app(
+        database=queue.database, runs_dir=queue.runs_dir, data_dir=queue.catalog.base_dir
+    ))
+
+    assert completed["status"] == "completed"
+    assert restarted.get(f"/runs/{completed['result_run_id']}").status_code == 200

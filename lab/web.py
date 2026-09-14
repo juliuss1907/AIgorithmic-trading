@@ -1,8 +1,9 @@
 """Local Vietnamese web workbench for inspecting completed experiments."""
 
+from datetime import timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -12,7 +13,8 @@ from starlette.requests import Request
 from lab.contracts import ExperimentSpec
 from lab.data import DATA
 from lab.datasets import DatasetCatalog
-from lab.jobs import JobQueue
+from lab.experiment import read_config
+from lab.jobs import IdempotencyConflict, JobQueue
 from lab.store import ArtifactChanged, RunStore
 
 
@@ -24,10 +26,14 @@ class NoteRequest(BaseModel):
 def create_app(database=None, runs_dir=None, data_dir=None):
     app = FastAPI(title="Phòng thử nghiệm trading", version="0.1.0")
     store = RunStore(database=database, runs_dir=runs_dir)
+    catalog = DatasetCatalog(data_dir or DATA)
+    if (catalog.base_dir / "manifest.json").exists():
+        from lab.datasets import register_legacy_pilot
+        register_legacy_pilot(catalog)
     queue = JobQueue(
         database=store.database,
         runs_dir=store.runs_dir,
-        catalog=DatasetCatalog(data_dir or DATA),
+        catalog=catalog,
     )
     app.state.store = store
     app.state.queue = queue
@@ -50,6 +56,26 @@ def create_app(database=None, runs_dir=None, data_dir=None):
             request, "library.html", {"runs": store.list_runs(), "sync": app.state.sync_result}
         )
 
+    @app.get("/experiments/new")
+    def new_experiment(request: Request):
+        datasets = []
+        for snapshot in catalog.list_ready():
+            item = snapshot.model_dump(mode="json")
+            item["end_exclusive"] = str(snapshot.end + timedelta(days=1))
+            datasets.append(item)
+        return templates.TemplateResponse(
+            request, "experiment-form.html",
+            {"datasets": datasets, "defaults": read_config().to_json_dict()},
+        )
+
+    @app.get("/jobs/{job_id}")
+    def job_page(request: Request, job_id: str):
+        try:
+            job = queue.get(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return templates.TemplateResponse(request, "job.html", {"job": job})
+
     @app.get("/runs/{run_id}")
     def run_page(request: Request, run_id: str):
         detail = detail_or_404(run_id)
@@ -65,9 +91,13 @@ def create_app(database=None, runs_dir=None, data_dir=None):
         return queue.list()
 
     @app.post("/api/jobs", status_code=202)
-    def create_job(config: ExperimentSpec):
+    def create_job(config: ExperimentSpec, idempotency_key: str | None = Header(default=None)):
         try:
-            return queue.enqueue(config, entry_point="web_api")
+            return queue.enqueue(
+                config, entry_point="web_api", idempotency_key=idempotency_key
+            )
+        except IdempotencyConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 

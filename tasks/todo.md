@@ -61,17 +61,17 @@ báo cáo lấy tên/tham số/vốn/kỳ từ cấu hình. Chốt typed request
 **Phụ thuộc:** 4.
 **Nội dung:** form giả thuyết, SMA nhanh/chậm, kỳ/vốn; màn hình xem lại quy tắc trước khi bấm chạy.
 
-- [ ] Người dùng tạo và chạy từ trình duyệt mà không sửa JSON hoặc dùng terminal.
-- [ ] Lỗi tham số/thời gian/warmup hiển thị tại trường liên quan; run lưu đúng nội dung đã xác nhận.
-- [ ] Trang trạng thái tự cập nhật và dẫn tới kết quả; nhấn gửi lặp không vô tình tạo hai job.
+- [x] Người dùng tạo và chạy từ trình duyệt mà không sửa JSON hoặc dùng terminal.
+- [x] Lỗi tham số/thời gian/warmup hiển thị tại trường liên quan; run lưu đúng nội dung đã xác nhận.
+- [x] Trang trạng thái tự cập nhật và dẫn tới kết quả; nhấn gửi lặp không vô tình tạo hai job.
 
 **Kiểm tra:** browser flow hợp lệ/sai dữ liệu/refresh, request deduplication và hợp đồng UI/API.
 **Vùng tệp:** form template, JS/CSS, routes và tests; tối đa 5 tệp chính.
 
 ## Checkpoint B
 
-- [ ] Từ web hoàn thành một thí nghiệm SPY mới và kiểm tra một giao dịch.
-- [ ] Tắt/mở lại app vẫn thấy lịch sử; CLI và pilot regression vẫn đạt.
+- [x] Từ web hoàn thành một thí nghiệm SPY mới và kiểm tra một giao dịch.
+- [x] Tắt/mở lại app vẫn thấy lịch sử; CLI và pilot regression vẫn đạt.
 
 ## 6. Thêm dữ liệu QQQ qua giao diện — M
 

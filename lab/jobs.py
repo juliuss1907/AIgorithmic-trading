@@ -8,6 +8,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pandas as pd
+
 from lab.contracts import ExperimentSpec
 from lab.data import DATA, ROOT, resolve_snapshot
 from lab.datasets import DatasetCatalog
@@ -15,6 +17,10 @@ from lab.datasets import DatasetCatalog
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
+
+
+class IdempotencyConflict(ValueError):
+    pass
 
 
 class JobQueue:
@@ -42,6 +48,7 @@ class JobQueue:
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY,
                     entry_point TEXT NOT NULL,
+                    idempotency_key TEXT,
                     status TEXT NOT NULL CHECK (
                         status IN ('queued', 'running', 'completed', 'failed', 'interrupted')
                     ),
@@ -57,6 +64,13 @@ class JobQueue:
                 )
                 """
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+            if "idempotency_key" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN idempotency_key TEXT")
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency_key "
+                "ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL"
+            )
 
     def _event(self, job, event, level="info", **fields):
         record = {
@@ -68,21 +82,56 @@ class JobQueue:
             stream.write(line + "\n")
         print(line, flush=True)
 
-    def enqueue(self, config, entry_point):
+    def enqueue(self, config, entry_point, idempotency_key=None):
         config = ExperimentSpec.model_validate(config)
         snapshot = resolve_snapshot(config, self.catalog)
-        self.catalog.load(snapshot.id)
+        frame, _ = self.catalog.load(snapshot.id)
+        for name, (start, _) in config.periods.items():
+            first = frame.index.searchsorted(pd.Timestamp(start))
+            if first < config.strategy.slow_window:
+                raise ValueError(
+                    f"Period {name!r} needs at least {config.strategy.slow_window} warmup sessions"
+                )
+            if first >= len(frame) - 1:
+                raise ValueError(f"Period {name!r} needs at least two evaluation sessions")
         frozen = config.model_copy(update={"dataset_id": snapshot.id})
+        config_json = json.dumps(frozen.to_json_dict(), separators=(",", ":"))
+        if idempotency_key is not None:
+            idempotency_key = idempotency_key.strip()
+            if not 8 <= len(idempotency_key) <= 128:
+                raise ValueError("Idempotency-Key must contain 8 to 128 characters")
+            with self._connect() as connection:
+                existing = connection.execute(
+                    "SELECT * FROM jobs WHERE idempotency_key = ?", (idempotency_key,)
+                ).fetchone()
+            if existing is not None:
+                if existing["config_json"] != config_json:
+                    raise IdempotencyConflict("Idempotency-Key belongs to a different config")
+                return self._decode(existing)
         job_id = uuid.uuid4().hex
         created_at = utc_now()
         values = (
-            job_id, entry_point, "queued", json.dumps(frozen.to_json_dict(), separators=(",", ":")),
+            job_id, entry_point, idempotency_key, "queued", config_json,
             snapshot.id, job_id, None, None, None, created_at, None, None,
         )
-        with self._connect() as connection:
-            connection.execute(
-                "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values
-            )
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    "INSERT INTO jobs (id, entry_point, idempotency_key, status, config_json, "
+                    "dataset_id, output_relative, result_run_id, error_type, error_message, "
+                    "created_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    values,
+                )
+        except sqlite3.IntegrityError:
+            if idempotency_key is None:
+                raise
+            with self._connect() as connection:
+                existing = connection.execute(
+                    "SELECT * FROM jobs WHERE idempotency_key = ?", (idempotency_key,)
+                ).fetchone()
+            if existing is None or existing["config_json"] != config_json:
+                raise IdempotencyConflict("Idempotency-Key belongs to a different config")
+            return self._decode(existing)
         job = self.get(job_id)
         self._event(job, "job_queued", status="queued", dataset_id=snapshot.id)
         return job

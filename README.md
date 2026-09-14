@@ -43,7 +43,8 @@ Mở thư viện web trên loopback:
 uv run --frozen uvicorn lab.web:app --host 127.0.0.1 --port 8000
 ```
 
-Sau đó mở `http://127.0.0.1:8000`. App tự nhập các run hoàn chỉnh trong `runs/` vào
+Sau đó mở `http://127.0.0.1:8000`. Chọn **Thí nghiệm mới**, viết giả thuyết, chọn snapshot,
+SMA/vốn/giai đoạn rồi review rule trước khi đưa vào hàng đợi. App tự nhập các run hoàn chỉnh trong `runs/` vào
 `state/lab.sqlite3`. Chỉ ghi chú được thay đổi; summary, provenance và artifact được kiểm checksum
 trước khi phục vụ. App không nhận đường dẫn file tùy ý từ URL.
 
