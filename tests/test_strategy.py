@@ -10,7 +10,7 @@ def test_warmup_equality_and_known_trend():
 
 
 def test_future_prices_cannot_change_past_signals():
-    frame = pd.DataFrame({"close": list(range(1, 81))})
+    frame = pd.DataFrame({"close": list(range(1, 81))}, dtype=float)
     before = SignalEngine().generate({"SPY": frame})["SPY"]
     frame.loc[60:, "close"] = 0.1
     after = SignalEngine().generate({"SPY": frame})["SPY"]
