@@ -4,7 +4,8 @@ Thí nghiệm đầu tiên: chiến lược SPY SMA 20/50, dùng engine **Vibe-T
 Bạn có thể đọc quy tắc, xem từng lệnh, so sánh với mua rồi nắm giữ và chạy lại từ cùng dữ liệu.
 
 **Trạng thái:** đã chạy trên dữ liệu thật, kiểm tra số dư độc lập và tái lập thành công.
-Đây là môi trường nghiên cứu. AI trong cuộc trò chuyện giúp giải thích; phần tính toán chạy bằng code cố định.
+Web library cục bộ cho phép đọc chỉ tiêu, đường vốn, từng fill và lưu research note.
+Đây là môi trường nghiên cứu; phần tính toán chạy bằng code cố định và chưa đặt lệnh thật.
 
 ## Bắt đầu từ kết quả
 
@@ -36,6 +37,16 @@ uv run --frozen pytest -q
 Mở `runs/my-first-run/report.md` để đọc kết quả. Mỗi lần chạy cần tên thư mục mới;
 lệnh từ chối ghi đè lần chạy cũ. `compare` báo lỗi nếu nguồn, cấu hình, dữ liệu hoặc kết quả khác nhau.
 
+Mở thư viện web trên loopback:
+
+```bash
+uv run --frozen uvicorn lab.web:app --host 127.0.0.1 --port 8000
+```
+
+Sau đó mở `http://127.0.0.1:8000`. App tự nhập các run hoàn chỉnh trong `runs/` vào
+`state/lab.sqlite3`. Chỉ ghi chú được thay đổi; summary, provenance và artifact được kiểm checksum
+trước khi phục vụ. App không nhận đường dẫn file tùy ý từ URL.
+
 ## Cài lại trên máy khác
 
 Cần `uv` và Python 3.12. `uv sync` có thể tải Python phù hợp và tạo môi trường riêng trong dự án.
@@ -49,13 +60,15 @@ uv run --frozen python -m lab compare runs/initial runs/replay
 ```
 
 `fetch` là bước tải dữ liệu từ Yahoo Finance. Không cần API key hay tài khoản broker.
-Nó từ chối chạy khi `data/` đã tồn tại. Nếu tải thất bại trước khi tạo snapshot, sửa kết nối rồi thử lại;
-nếu thư mục dữ liệu đã tạo nhưng thiếu manifest, giữ lại để kiểm tra và đổi tên thủ công trước khi tải lại.
+Dữ liệu được kiểm tra đầy đủ trước khi đăng ký `ready`; kết quả lệnh trả về dataset ID theo nội dung.
+Các lần tải giống nhau không tạo bản ghi trùng. Replay chỉ đọc snapshot đã chọn hoặc snapshot duy nhất
+khớp symbol/khoảng thời gian, không tự gọi mạng.
 
 `data/` và `runs/` là dữ liệu cục bộ, không nằm trong Git. Muốn tái lập đúng kết quả ở bảng trên,
-hãy mang theo **toàn bộ `data/` hiện tại**, gồm hai CSV và `manifest.json`.
+hãy mang theo **toàn bộ `data/` hiện tại**, gồm catalog, manifest và các CSV/snapshot.
 Tải mới có thể cho giá đã được nhà cung cấp điều chỉnh lại; không hứa giống snapshot cũ.
-Giữ `runs/initial/` để lưu cấu hình, bản sao mã nguồn, lockfile và các bằng chứng liên quan.
+Giữ `runs/` để lưu cấu hình, bản sao mã nguồn, lockfile và các bằng chứng liên quan;
+giữ `state/lab.sqlite3` nếu muốn mang theo ghi chú web.
 
 ## Đọc một giao dịch cùng AI
 
@@ -76,8 +89,11 @@ Bạn có thể hỏi: “Dùng dữ liệu và mã trong dự án, giải thíc
 | `experiment.json` | Ghi giả thuyết 20/50, hai giai đoạn, vốn và ba mức chi phí |
 | `lab/strategy.py` | Quy tắc tạo mục tiêu mua/giữ tiền mặt |
 | `lab/data.py` | Tải, điều chỉnh, kiểm tra lịch và checksum dữ liệu |
+| `lab/datasets.py` | Catalog SQLite và snapshot ID theo nội dung |
 | `lab/experiment.py` | Gọi engine, kiểm tra từng lệnh và tính chỉ tiêu |
 | `lab/report.py` | Viết báo cáo và biểu đồ từ kết quả đã lưu |
+| `lab/web.py` | Web library/API cục bộ để đọc bằng chứng và ghi chú |
+| `lab/store.py` | Index run/artifact bất biến và research note SQLite |
 | `runs/initial/provenance.json` | Nguồn dữ liệu và dấu vết của lần chạy |
 | `runs/initial/*/*/*/audit.json` | Kết quả đối chiếu số dư của từng ca |
 

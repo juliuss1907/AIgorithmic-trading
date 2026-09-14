@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}{{ run.title }} · System Trading Lab{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/">Thư viện</a><span>/</span><span>{{ run.run_name }}</span></nav>
+
+<section class="run-hero">
+  <div>
+    <div class="run-labels"><span class="symbol">{{ run.symbol }}</span><span class="complete">Đã hoàn tất & audit</span></div>
+    <h1>{{ run.title }}</h1>
+    <p class="lede">{{ run.hypothesis }}</p>
+  </div>
+  <dl class="provenance-card">
+    <div><dt>Chiến lược</dt><dd>{{ run.strategy_label }}</dd></div>
+    <div><dt>Dataset ID</dt><dd title="{{ run.dataset_id }}">{{ run.dataset_id[:12] if run.dataset_id else 'Legacy' }}</dd></div>
+    <div><dt>Trạng thái</dt><dd>Completed</dd></div>
+  </dl>
+</section>
+
+<section>
+  <div class="section-head"><div><p class="eyebrow">Kết quả</p><h2>Ma trận chi phí và giai đoạn</h2></div></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Ca chạy</th><th>Vốn cuối</th><th>Lợi nhuận</th><th>CAGR</th><th>Drawdown</th><th>Vòng GD</th></tr></thead>
+      <tbody>
+      {% for case, metric in summary.items() %}
+        <tr><td>{{ case }}</td><td>${{ "{:,.2f}".format(metric.final_equity) }}</td><td>{{ "{:.2%}".format(metric.total_return) }}</td><td>{{ "{:.2%}".format(metric.cagr_252) }}</td><td class="negative">{{ "{:.2%}".format(metric.max_drawdown) }}</td><td>{{ metric.round_trips }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="chart-section">
+  <div class="section-head"><div><p class="eyebrow">Đường vốn</p><h2>Strategy và buy-and-hold</h2></div></div>
+  {% set chart = artifacts|selectattr('relative_path', 'equalto', 'equity.png')|first %}
+  {% if chart %}<img class="equity-chart" src="/api/runs/{{ run.id }}/artifacts/{{ chart.id }}" alt="Biểu đồ đường vốn của strategy và buy-and-hold">{% endif %}
+</section>
+
+<section>
+  <div class="section-head"><div><p class="eyebrow">Trade evidence</p><h2>Lệnh khớp · {{ featured_case }}</h2></div><span class="status">{{ fills|length }} fills</span></div>
+  <div class="table-wrap compact">
+    <table>
+      <thead><tr><th>Ngày</th><th>Hành động</th><th>Số lượng</th><th>Giá khớp</th><th>Lý do</th></tr></thead>
+      <tbody>
+      {% for fill in fills %}
+        <tr><td>{{ fill.timestamp }}</td><td><span class="action {{ 'buy' if fill.signed_quantity|float > 0 else 'sell' }}">{{ 'Mua' if fill.signed_quantity|float > 0 else 'Bán' }}</span></td><td>{{ "{:.2f}".format(fill.signed_quantity|float|abs) }}</td><td>{{ "{:,.4f}".format(fill.execution_price|float) }}</td><td>{{ fill.reason }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="two-column">
+  <section class="panel">
+    <p class="eyebrow">Bằng chứng</p><h2>Artifact đã đăng ký</h2>
+    <ul class="artifact-list">
+    {% for artifact in artifacts %}
+      <li><a href="/api/runs/{{ run.id }}/artifacts/{{ artifact.id }}">{{ artifact.label }}</a><span>{{ artifact.media_type }}</span></li>
+    {% endfor %}
+    </ul>
+  </section>
+  <section class="panel">
+    <p class="eyebrow">Research journal</p><h2>Ghi chú của bạn</h2>
+    <form id="note-form">
+      <label for="note">Điều gì đáng kiểm tra tiếp?</label>
+      <textarea id="note" name="body" maxlength="2000" required placeholder="Ví dụ: drawdown giảm ở learning nhưng không còn tốt ở evaluation…"></textarea>
+      <div class="form-row"><span id="note-status" role="status"></span><button type="submit">Lưu ghi chú</button></div>
+    </form>
+    <ol id="notes" class="notes">
+    {% for note in notes %}<li><p>{{ note.body }}</p><time>{{ note.created_at }}</time></li>{% endfor %}
+    </ol>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const form = document.querySelector('#note-form');
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const body = document.querySelector('#note').value.trim();
+  const status = document.querySelector('#note-status');
+  status.textContent = 'Đang lưu…';
+  const response = await fetch('/api/runs/{{ run.id }}/notes', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({body})
+  });
+  if (!response.ok) { status.textContent = 'Không lưu được ghi chú.'; return; }
+  const note = await response.json();
+  const item = document.createElement('li');
+  const text = document.createElement('p'); text.textContent = note.body;
+  const time = document.createElement('time'); time.textContent = note.created_at;
+  item.append(text, time); document.querySelector('#notes').prepend(item);
+  form.reset(); status.textContent = 'Đã lưu.';
+});
+</script>
+{% endblock %}

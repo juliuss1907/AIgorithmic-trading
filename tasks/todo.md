@@ -37,9 +37,9 @@ báo cáo lấy tên/tham số/vốn/kỳ từ cấu hình. Chốt typed request
 **Phụ thuộc:** 1–2.
 **Nội dung:** FastAPI + Jinja2, SQLite metadata; trang thư viện và chi tiết kết quả bằng tiếng Việt.
 
-- [ ] Mở được pilot đã có, xem chỉ tiêu, đường vốn và danh sách giao dịch.
-- [ ] Ghi chú gắn đúng run và còn sau restart; phần số liệu/provenance không thể sửa từ trang này.
-- [ ] Bằng chứng có đường dẫn theo ID; không trả về tệp tùy ý ngoài artifact đã đăng ký.
+- [x] Mở được pilot đã có, xem chỉ tiêu, đường vốn và danh sách giao dịch.
+- [x] Ghi chú gắn đúng run và còn sau restart; phần số liệu/provenance không thể sửa từ trang này.
+- [x] Bằng chứng có đường dẫn theo ID; không trả về tệp tùy ý ngoài artifact đã đăng ký.
 
 **Kiểm tra:** API read/write notes, mở trang bằng browser, kiểm tra cả trường hợp thiếu artifact.
 **Vùng tệp:** module web, store SQLite, template thư viện/chi tiết và tests; giới hạn 5 vùng/tệp chính.

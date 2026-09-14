@@ -2,15 +2,16 @@
 
 ## Phạm vi
 
-Chỉ SPY, dữ liệu ngày, SMA 20/50, vốn giả lập 10.000 USD, giữ vị thế mua hoặc tiền mặt.
-Không tối ưu, không short, không đòn bẩy, không đặt lệnh thật. Đối tượng là người mới học trading và lập trình.
-Không có API công khai hoặc giao diện mới; sử dụng CLI và báo cáo Markdown/PNG.
+Release 0.1 hỗ trợ hợp đồng SPY/QQQ, dữ liệu ngày và chiến lược SMA crossover, giữ vị thế mua
+hoặc tiền mặt. Pilot hiện tại là SPY SMA 20/50 với vốn giả lập 10.000 USD.
+Không tối ưu, không short, không đòn bẩy, không đặt lệnh thật. Web app chỉ bind loopback và hiện
+là thư viện đọc run; form tạo run và worker được triển khai ở các task kế tiếp.
 
 ## Luồng dữ liệu
 
 ```text
-Yahoo Finance → CSV gốc + giá đã điều chỉnh + manifest
-                       ↓ kiểm tra lịch và checksum
+Yahoo Finance → snapshot ID + CSV gốc + giá đã điều chỉnh + manifest
+                       ↓ kiểm tra lịch/checksum → catalog SQLite
               SignalEngine: SMA 20 > SMA 50
                        ↓ mục tiêu ở cuối phiên
               Vibe-Trading: mở cửa phiên kế tiếp
@@ -18,11 +19,18 @@ Yahoo Finance → CSV gốc + giá đã điều chỉnh + manifest
               Lệnh khớp + vốn từng phiên
                        ↓ đối chiếu tiền mặt/số lượng độc lập
               Báo cáo tiếng Việt + biểu đồ + dấu vết
+                       ↓ whitelist artifact theo ID
+              Web library → chỉ tiêu/trade/note SQLite
 ```
 
-`fetch` là tác vụ mạng tách biệt. `run` dùng CSV cố định và gọi trực tiếp
+`fetch` là tác vụ mạng tách biệt; snapshot chỉ được công bố `ready` sau khi đủ file và qua validation.
+Đăng ký lặp cùng nội dung là idempotent. `run` dùng snapshot đã chọn và gọi trực tiếp
 `GlobalEquityEngine.run_backtest` của Vibe-Trading, qua loader bộ nhớ nhỏ.
 Không gọi loader dự phòng hoặc benchmark bên ngoài. Không cần nạp cấu hình broker/AI.
+
+Web library index các run hoàn chỉnh vào SQLite nhưng không chép hoặc sửa kết quả. Artifact chỉ được
+phục vụ qua ID đã đăng ký và được đối chiếu checksum mỗi lần đọc. Research note ở bảng riêng nên restart
+không làm mất ghi chú và không thay đổi provenance/summary.
 
 ## Tín hiệu và khớp lệnh
 

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Thư viện · System Trading Lab{% endblock %}
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">Research workbench · v0.1</p>
+  <h1>Mỗi giả thuyết cần một dấu vết.</h1>
+  <p class="lede">Đọc kết quả, kiểm tra từng giao dịch và ghi lại điều bạn học được. Số liệu bên dưới đến từ artifact bất biến đã qua audit.</p>
+</section>
+
+<section class="section-head">
+  <div>
+    <p class="eyebrow">Thư viện</p>
+    <h2>{{ runs|length }} lần chạy hoàn tất</h2>
+  </div>
+  <span class="status"><i></i> Local · offline replay</span>
+</section>
+
+{% if runs %}
+<div class="run-grid">
+  {% for run in runs %}
+  <a class="run-card" href="/runs/{{ run.id }}">
+    <div class="run-card-top">
+      <span class="symbol">{{ run.symbol }}</span>
+      <span class="complete">Đã audit</span>
+    </div>
+    <h3>{{ run.title }}</h3>
+    <p>{{ run.hypothesis }}</p>
+    <dl>
+      <div><dt>Chiến lược</dt><dd>{{ run.strategy_label }}</dd></div>
+      <div><dt>Run</dt><dd>{{ run.run_name }}</dd></div>
+    </dl>
+    <span class="open-link">Mở bằng chứng <b>→</b></span>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+  <h2>Chưa có run hoàn chỉnh</h2>
+  <p>Chạy thí nghiệm bằng CLI; thư viện sẽ tự nhập artifact ở lần khởi động tiếp theo.</p>
+</div>
+{% endif %}
+
+{% if sync.skipped %}
+<details class="warning">
+  <summary>{{ sync.skipped|length }} thư mục chưa được nhập</summary>
+  <ul>{% for item in sync.skipped %}<li>{{ item.run_name }} — {{ item.reason }}</li>{% endfor %}</ul>
+</details>
+{% endif %}
+{% endblock %}
