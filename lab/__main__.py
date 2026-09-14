@@ -22,7 +22,7 @@ def main():
     regression.add_argument("second", type=Path)
     args = parser.parse_args()
     if args.command == "fetch":
-        print(json.dumps(fetch(read_config()), indent=2))
+        print(json.dumps(fetch(read_config()).model_dump(mode="json"), indent=2))
     elif args.command == "run":
         results = run(read_config(args.config), args.output)
         generate(args.output)

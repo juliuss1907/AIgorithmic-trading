@@ -20,17 +20,17 @@ báo cáo lấy tên/tham số/vốn/kỳ từ cấu hình. Chốt typed request
 **Phụ thuộc:** 1.
 **Nội dung:** quản lý dataset bằng ID; đăng ký dữ liệu SPY hiện có mà không sửa nguồn.
 
-- [ ] Snapshot được nhận diện bằng metadata/checksum, không gắn vào một tên CSV cố định.
-- [ ] Đăng ký lại pilot không sinh bản trùng; snapshot thiếu dữ liệu hoặc checksum sai không dùng được.
-- [ ] Tải mới hoàn tất rồi mới công bố ready; replay chỉ đọc snapshot đã chọn.
+- [x] Snapshot được nhận diện bằng metadata/checksum, không gắn vào một tên CSV cố định.
+- [x] Đăng ký lại pilot không sinh bản trùng; snapshot thiếu dữ liệu hoặc checksum sai không dùng được.
+- [x] Tải mới hoàn tất rồi mới công bố ready; replay chỉ đọc snapshot đã chọn.
 
 **Kiểm tra:** test đăng ký lặp, lỗi mạng/CSV/checksum và replay không mạng.
 **Vùng tệp:** `lab/data.py`, module lưu dataset, tests dữ liệu và hợp đồng; tối đa 4 tệp chính.
 
 ## Checkpoint A
 
-- [ ] Đạt hồi quy pilot và toàn bộ tests lõi.
-- [ ] Code/report hỗ trợ cấu hình rõ ràng mà không đổi quy ước tính toán.
+- [x] Đạt hồi quy pilot và toàn bộ tests lõi.
+- [x] Code/report hỗ trợ cấu hình rõ ràng mà không đổi quy ước tính toán.
 
 ## 3. Thư viện web đọc lại pilot — M
 

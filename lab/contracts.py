@@ -45,6 +45,7 @@ class ExperimentSpec(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     hypothesis: str = Field(min_length=1, max_length=1000)
     symbol: str
+    dataset_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     data: DataSpec
     strategy: SmaStrategySpec
     initial_cash: float = Field(gt=0, allow_inf_nan=False)
@@ -110,3 +111,23 @@ class RunSummary(BaseModel):
     sessions: int
     start: date
     end: date
+
+
+class DatasetSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^[a-f0-9]{64}$")
+    symbol: Literal["SPY", "QQQ"]
+    source: str
+    start: date
+    end: date
+    retrieved_at_utc: str
+    rows: int = Field(gt=0)
+    adjustment: str
+    raw_path: str
+    adjusted_path: str
+    manifest_path: str
+    raw_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    adjusted_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    manifest_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    status: Literal["ready"] = "ready"
