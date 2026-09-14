@@ -13,28 +13,13 @@ import pandas as pd
 from backtest.engines.global_equity import GlobalEquityEngine
 
 from lab.data import ROOT, digest, load
+from lab.contracts import ExperimentSpec, RunSummary
 from lab.strategy import SignalEngine
 
 
-def read_config():
-    config = json.loads((ROOT / "experiment.json").read_text())
-    SignalEngine(config["fast_window"], config["slow_window"])
-    if config["symbol"] != "SPY" or config["commission"] != 0:
-        raise ValueError("This pilot supports SPY and zero commission only")
-    if not math.isfinite(config["initial_cash"]) or config["initial_cash"] <= 0:
-        raise ValueError("initial_cash must be positive and finite")
-    if any(not math.isfinite(b) or not 0 <= b < 100 for b in config["slippage_bps"]):
-        raise ValueError("slippage_bps must be finite and in [0, 100)")
-    if not config["slippage_bps"] or len(set(config["slippage_bps"])) != len(config["slippage_bps"]):
-        raise ValueError("Expected distinct cost scenarios")
-    windows = []
-    for start, end in config["periods"].values():
-        if not config["download_start"] < start <= end < config["download_end_exclusive"]:
-            raise ValueError("Invalid evaluation window")
-        windows.append((start, end))
-    if not windows or any(a[1] >= b[0] for a, b in zip(sorted(windows), sorted(windows)[1:])):
-        raise ValueError("Evaluation windows must be nonempty and disjoint")
-    return config
+def read_config(path=None):
+    path = Path(path) if path else ROOT / "experiment.json"
+    return ExperimentSpec.model_validate_json(path.read_text())
 
 
 class SnapshotLoader:
@@ -115,7 +100,8 @@ def run_case(frame, config, output, buy_and_hold=False):
     engine = GlobalEquityEngine(config, market="us")
     with (output / "engine-metrics.json").open("w") as log, contextlib.redirect_stdout(log):
         engine.run_backtest(config, SnapshotLoader(inputs), strategy, output)
-    signals = strategy.generate({"SPY.US": inputs})["SPY.US"]
+    symbol = config["codes"][0]
+    signals = strategy.generate({symbol: inputs})[symbol]
     evidence = audit(engine, inputs, signals, config)
     (output / "audit.json").write_text(json.dumps(evidence, indent=2) + "\n")
     records = [asdict(fill) for fill in engine.fill_records]
@@ -143,35 +129,43 @@ def run_case(frame, config, output, buy_and_hold=False):
     return summary
 
 
-def run(config, output):
+def run(config: ExperimentSpec, output):
     frame, manifest = load(config)
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     (output / "source").mkdir()
-    source_files = [ROOT / "experiment.json", ROOT / "pyproject.toml", ROOT / "uv.lock", *sorted((ROOT / "lab").glob("*.py"))]
+    source_files = [ROOT / "pyproject.toml", ROOT / "uv.lock", *sorted((ROOT / "lab").glob("*.py"))]
     for path in source_files:
         shutil.copyfile(path, output / "source" / path.name)
+    canonical_config = output / "source" / "experiment.json"
+    canonical_config.write_text(json.dumps(config.to_json_dict(), indent=2) + "\n")
     provenance = {
         "engine": f"vibe-trading-ai=={version('vibe-trading-ai')}", "data": manifest,
-        "source_hashes": {str(p.relative_to(ROOT)): digest(p) for p in source_files},
-        "experiment": config,
+        "source_hashes": {
+            "experiment.json": digest(canonical_config),
+            **{str(p.relative_to(ROOT)): digest(p) for p in source_files},
+        },
+        "experiment": config.to_json_dict(),
         "benchmark": "Separate buy-and-hold run using identical engine, snapshot and costs",
     }
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     summaries = {}
-    for period, (start, end) in config["periods"].items():
-        for bps in config["slippage_bps"]:
+    for period, (start, end) in config.periods.items():
+        for bps in config.slippage_bps:
             for strategy in ("sma", "buy-hold"):
-                key = f"{period}/{bps}bps/{strategy}"
+                cost_label = f"{bps:g}bps"
+                key = f"{period}/{cost_label}/{strategy}"
                 case = {
-                    "codes": ["SPY.US"], "source": "local", "interval": "1D",
-                    "start_date": config["download_start"], "end_date": end,
-                    "evaluation_start_date": start, "initial_cash": config["initial_cash"],
+                    "codes": [config.engine_symbol], "source": "local", "interval": "1D",
+                    "start_date": str(config.data.start), "end_date": str(end),
+                    "evaluation_start_date": str(start), "initial_cash": config.initial_cash,
                     "leverage": 1.0, "position_adjustment": "hold", "slippage_us": bps / 10000,
-                    "fast_window": config["fast_window"], "slow_window": config["slow_window"],
+                    "fast_window": config.strategy.fast_window, "slow_window": config.strategy.slow_window,
                     "buy_and_hold": strategy == "buy-hold", "commission": 0.0,
                 }
-                summaries[key] = run_case(frame, case, output / key, case["buy_and_hold"])
+                summaries[key] = RunSummary.model_validate(
+                    run_case(frame, case, output / key, case["buy_and_hold"])
+                ).model_dump(mode="json")
     (output / "summary.json").write_text(json.dumps(summaries, indent=2, allow_nan=False) + "\n")
     return summaries
 
@@ -188,3 +182,31 @@ def compare(first, second):
             if (first / case / name).read_bytes() != (second / case / name).read_bytes():
                 raise AssertionError(f"Replay differs: {case}/{name}")
     return {"identical": True, "cases": len(cases), "files_compared": 2 + 3 * len(cases)}
+
+
+def compare_results(first, second, tolerance=1e-8):
+    """Compare research results across refactors while allowing provenance changes."""
+    first, second = Path(first), Path(second)
+    left = json.loads((first / "summary.json").read_text())
+    right = json.loads((second / "summary.json").read_text())
+    if left.keys() != right.keys():
+        raise AssertionError("Result cases differ")
+    for case in left:
+        if left[case].keys() != right[case].keys():
+            raise AssertionError(f"Summary fields differ: {case}")
+        for field, expected in left[case].items():
+            actual = right[case][field]
+            if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+                if not np.isclose(expected, actual, rtol=tolerance, atol=tolerance):
+                    raise AssertionError(f"Metric differs: {case}/{field}")
+            elif expected != actual:
+                raise AssertionError(f"Metric differs: {case}/{field}")
+    for case in left:
+        for name in ("fills-exact.csv", "equity.csv"):
+            expected = pd.read_csv(first / case / name)
+            actual = pd.read_csv(second / case / name)
+            try:
+                pd.testing.assert_frame_equal(expected, actual, rtol=tolerance, atol=tolerance)
+            except AssertionError as exc:
+                raise AssertionError(f"Artifact differs: {case}/{name}") from exc
+    return {"equivalent": True, "cases": len(left), "tolerance": tolerance}

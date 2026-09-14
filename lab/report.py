@@ -16,13 +16,18 @@ def generate(output):
     config = provenance["experiment"]
     periods = list(config["periods"])
     base_cost = 5 if 5 in config["slippage_bps"] else config["slippage_bps"][0]
+    cost_label = f"{base_cost:g}bps"
+    strategy = config["strategy"]
+    strategy_label = f"SMA {strategy['fast_window']}/{strategy['slow_window']}"
+    symbol = config["symbol"]
+    capital = config["initial_cash"]
     fig, axes = plt.subplots(len(periods), 1, figsize=(10, 4 * len(periods)), squeeze=False)
     for period, ax in zip(periods, axes[:, 0]):
-        for strategy, color, label in (("sma", "#176b87", "SMA 20/50"),
+        for strategy_name, color, label in (("sma", "#176b87", strategy_label),
                                        ("buy-hold", "#ad5b27", "Buy and hold")):
-            curve = pd.read_csv(output / f"{period}/{base_cost}bps/{strategy}/equity.csv", index_col="date", parse_dates=True)
+            curve = pd.read_csv(output / f"{period}/{cost_label}/{strategy_name}/equity.csv", index_col="date", parse_dates=True)
             ax.plot(curve.index, curve["equity"], color=color, label=label, linewidth=1.5)
-        ax.set_title(f"{period.title()} | SPY | {base_cost} bps per fill", loc="left")
+        ax.set_title(f"{period.title()} | {symbol} | {base_cost:g} bps per fill", loc="left")
         ax.set_ylabel("Portfolio value (USD)")
         ax.grid(alpha=0.18)
         ax.legend(frameon=False)
@@ -31,16 +36,18 @@ def generate(output):
     fig.savefig(output / "equity.png", dpi=160)
     plt.close(fig)
     lines = [
-        "# Thí nghiệm SPY: SMA 20/50", "",
+        f"# {config['title']}", "",
+        f"**Giả thuyết:** {config['hypothesis']}", "",
         f"Engine: `{provenance['engine']}`. Dữ liệu: {provenance['data']['rows']:,} phiên từ "
         f"{provenance['data']['start']} đến {provenance['data']['end']}.", "",
         "## Cách đọc", "",
-        "SMA là trung bình giá đóng cửa của một số phiên gần nhất. Sau mỗi phiên, nếu SMA 20 cao hơn "
-        "SMA 50 thì mục tiêu là nắm giữ SPY; nếu thấp hơn hoặc bằng thì giữ tiền mặt. "
+        f"SMA là trung bình giá đóng cửa của một số phiên gần nhất. Sau mỗi phiên, nếu SMA "
+        f"{strategy['fast_window']} cao hơn SMA {strategy['slow_window']} thì mục tiêu là nắm giữ "
+        f"{symbol}; nếu thấp hơn hoặc bằng thì giữ tiền mặt. "
         "Lệnh thực hiện tại giá mở cửa phiên kế tiếp, cộng/trừ trượt giá. Không dịch tín hiệu hai lần.", "",
-        "Mỗi giai đoạn bắt đầu lại với 10.000 USD; dữ liệu trước giai đoạn chỉ dùng tính chỉ báo. "
-        "2015–2021 là giai đoạn tìm hiểu; 2022–2025 là giai đoạn đánh giá riêng. "
-        "Quy tắc 20/50 được cố định trước khi xem kết quả; không có tối ưu tham số.", "",
+        f"Mỗi giai đoạn bắt đầu lại với {capital:,.2f} USD; dữ liệu trước giai đoạn chỉ dùng tính chỉ báo. "
+        "Các giai đoạn được đánh giá riêng. Quy tắc được đóng băng trong cấu hình của lần chạy; "
+        "không có tối ưu tham số tự động.", "",
         "## Kết quả", "",
         "Lợi nhuận là tổng cả giai đoạn. CAGR quy đổi theo 252 phiên/năm. Drawdown là mức giảm "
         "từ đỉnh vốn xuống đáy tiếp theo, bao gồm vốn ban đầu. Một vòng giao dịch gồm một lần mua và bán.", "",
@@ -54,10 +61,10 @@ def generate(output):
                      f"{row['time_in_market']:.1%} | {row['mean_holding_sessions']:.1f} |")
     lines.extend(["", "![Đường vốn của hai phương án](equity.png)", "", "## Điều kết quả cho thấy", ""])
     for period in periods:
-        sma = summary[f"{period}/{base_cost}bps/sma"]
-        hold = summary[f"{period}/{base_cost}bps/buy-hold"]
+        sma = summary[f"{period}/{cost_label}/sma"]
+        hold = summary[f"{period}/{cost_label}/buy-hold"]
         difference = (sma["total_return"] - hold["total_return"]) * 100
-        lines.append(f"- **{period}, {base_cost} bps/lệnh:** SMA kết thúc với {sma['final_equity']:,.2f} USD; "
+        lines.append(f"- **{period}, {base_cost:g} bps/lệnh:** {strategy_label} kết thúc với {sma['final_equity']:,.2f} USD; "
                      f"mua–nắm giữ với {hold['final_equity']:,.2f} USD. Chênh lệch lợi nhuận: "
                      f"{difference:+.2f} điểm phần trăm. Drawdown lần lượt {sma['max_drawdown']:.2%} "
                      f"và {hold['max_drawdown']:.2%}.")
@@ -88,7 +95,7 @@ def generate(output):
         "|---|---|---:|---|---:|---:|---:|",
     ])
     for period in periods:
-        fills = pd.read_csv(output / f"{period}/{base_cost}bps/sma/fills-exact.csv")
+        fills = pd.read_csv(output / f"{period}/{cost_label}/sma/fills-exact.csv")
         for i in range(0, min(len(fills) - 1, 6), 2):
             buy, sell = fills.iloc[i], fills.iloc[i + 1]
             pnl = buy.signed_quantity * (sell.execution_price - buy.execution_price)
@@ -97,4 +104,3 @@ def generate(output):
     lines.extend(["", "Kiểm tra tái lập bằng lệnh `compare` trong README. "
                   "`provenance.json` lưu nguồn, thời điểm tải, checksum dữ liệu, mã nguồn và lockfile.", ""])
     (output / "report.md").write_text("\n".join(lines), encoding="utf-8")
-

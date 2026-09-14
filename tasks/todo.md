@@ -8,9 +8,9 @@ Trạng thái: sẵn sàng triển khai theo thứ tự. Roadmap các release sa
 **Nội dung:** nhận cấu hình và đường dẫn rõ ràng, giữ nguyên adapter engine một tài sản;
 báo cáo lấy tên/tham số/vốn/kỳ từ cấu hình. Chốt typed request/result dùng chung cho CLI và web.
 
-- [ ] CLI hiện tại vẫn chạy được; schema từ chối cấu hình không hỗ trợ trước khi tạo run.
-- [ ] SPY pilot có cùng ngày/giá/số lượng giao dịch và vốn trong dung sai serialization 1e-8 tương đối.
-- [ ] Thay tham số hoặc vốn làm nhãn và thuyết minh đổi đúng, không còn chữ cố định sai.
+- [x] CLI hiện tại vẫn chạy được; schema từ chối cấu hình không hỗ trợ trước khi tạo run.
+- [x] SPY pilot có cùng ngày/giá/số lượng giao dịch và vốn trong dung sai serialization 1e-8 tương đối.
+- [x] Thay tham số hoặc vốn làm nhãn và thuyết minh đổi đúng, không còn chữ cố định sai.
 
 **Kiểm tra:** `uv run --frozen pytest -q`; chạy lại pilot, đối chiếu số liệu và audit.
 **Vùng tệp:** `lab/experiment.py`, `lab/report.py`, module hợp đồng mới và tests tương ứng; tối đa 5 tệp chính.

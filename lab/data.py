@@ -59,25 +59,25 @@ def fetch(config):
         raise FileExistsError("data/ already exists; use the saved snapshot for replay")
     import yfinance as yf
 
-    raw = yf.Ticker(config["symbol"]).history(
-        start=config["download_start"], end=config["download_end_exclusive"],
+    raw = yf.Ticker(config.symbol).history(
+        start=str(config.data.start), end=str(config.data.end_exclusive),
         interval="1d", auto_adjust=False, actions=True, repair=False,
         raise_errors=True, timeout=30,
     )
     raw.index = raw.index.tz_localize(None).normalize()
     raw.index.name = "date"
     raw.columns = raw.columns.str.lower().str.replace(" ", "_")
-    end = str((pd.Timestamp(config["download_end_exclusive"]) - pd.Timedelta(days=1)).date())
-    validate(raw, config["download_start"], end)
+    end = str(config.data.end_exclusive - pd.Timedelta(days=1))
+    validate(raw, str(config.data.start), end)
     adjusted = adjust(raw)
-    validate(adjusted, config["download_start"], end)
+    validate(adjusted, str(config.data.start), end)
     DATA.mkdir()
     raw.to_csv(DATA / "spy-raw.csv", float_format="%.12g")
     adjusted.to_csv(DATA / "spy-adjusted.csv", float_format="%.12g")
     manifest = {
-        "source": "Yahoo Finance via yfinance", "symbol": config["symbol"],
+        "source": "Yahoo Finance via yfinance", "symbol": config.symbol,
         "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
-        "start": config["download_start"], "end": end, "rows": len(raw),
+        "start": str(config.data.start), "end": end, "rows": len(raw),
         "adjustment": "OHLC * (Adj Close / Close); synthetic total-return prices",
         "dividends": "Implicit in adjusted prices; never credited a second time",
         "files": {p.name: digest(p) for p in sorted(DATA.glob("*.csv"))},
@@ -88,16 +88,16 @@ def fetch(config):
 
 def load(config):
     manifest = json.loads((DATA / "manifest.json").read_text())
-    if manifest["symbol"] != config["symbol"]:
+    if manifest["symbol"] != config.symbol:
         raise ValueError("Snapshot symbol differs from experiment")
     for name in ("spy-raw.csv", "spy-adjusted.csv"):
         if digest(DATA / name) != manifest["files"][name]:
             raise ValueError(f"Snapshot checksum mismatch: {name}")
     frame = pd.read_csv(DATA / "spy-adjusted.csv", index_col="date", parse_dates=True)
     validate(frame, manifest["start"], manifest["end"])
-    if manifest["start"] != config["download_start"]:
+    if manifest["start"] != str(config.data.start):
         raise ValueError("Snapshot start differs from experiment")
-    expected_end = str((pd.Timestamp(config["download_end_exclusive"]) - pd.Timedelta(days=1)).date())
+    expected_end = str(config.data.end_exclusive - pd.Timedelta(days=1))
     if manifest["end"] != expected_end:
         raise ValueError("Snapshot end differs from experiment")
     return frame, manifest
