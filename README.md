@@ -47,6 +47,17 @@ Sau đó mở `http://127.0.0.1:8000`. App tự nhập các run hoàn chỉnh tr
 `state/lab.sqlite3`. Chỉ ghi chú được thay đổi; summary, provenance và artifact được kiểm checksum
 trước khi phục vụ. App không nhận đường dẫn file tùy ý từ URL.
 
+API `POST /api/jobs` nhận đúng schema của `experiment.json` và trả job ID ngay. Worker chạy riêng,
+mỗi lần chỉ xử lý một job:
+
+```bash
+uv run --frozen python -m lab.jobs
+```
+
+Trạng thái xem tại `GET /api/jobs/{job_id}`. Nếu worker dừng giữa chừng, lần khởi động tiếp theo
+đánh dấu job cũ là `interrupted`; retry tạo job ID và thư mục output mới thay vì ghi tiếp kết quả cũ.
+Log JSONL theo job nằm trong `state/job-logs/`.
+
 ## Cài lại trên máy khác
 
 Cần `uv` và Python 3.12. `uv sync` có thể tải Python phù hợp và tạo môi trường riêng trong dự án.

@@ -129,8 +129,8 @@ def run_case(frame, config, output, buy_and_hold=False):
     return summary
 
 
-def run(config: ExperimentSpec, output):
-    frame, manifest = load(config)
+def run(config: ExperimentSpec, output, catalog=None):
+    frame, manifest = load(config, catalog=catalog)
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     (output / "source").mkdir()

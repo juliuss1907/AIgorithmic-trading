@@ -129,8 +129,8 @@ def fetch(config, catalog=None, downloader=None):
     return save_snapshot(downloader(config), config, catalog=catalog)
 
 
-def load(config, catalog=None):
-    """Load exactly one registered snapshot without any network fallback."""
+def resolve_snapshot(config, catalog=None):
+    """Resolve one immutable snapshot without reading prices or using the network."""
     from lab.datasets import DatasetCatalog, register_legacy_pilot
 
     catalog = catalog or DatasetCatalog()
@@ -148,10 +148,19 @@ def load(config, catalog=None):
         snapshot = matches[0]
     if snapshot.symbol != config.symbol:
         raise ValueError("Snapshot symbol differs from experiment")
-    frame, manifest = catalog.load(snapshot.id)
     if str(snapshot.start) != str(config.data.start):
         raise ValueError("Snapshot start differs from experiment")
     expected_end = str(config.data.end_exclusive - timedelta(days=1))
     if str(snapshot.end) != expected_end:
         raise ValueError("Snapshot end differs from experiment")
+    return snapshot
+
+
+def load(config, catalog=None):
+    """Load exactly one registered snapshot without any network fallback."""
+    from lab.datasets import DatasetCatalog
+
+    catalog = catalog or DatasetCatalog()
+    snapshot = resolve_snapshot(config, catalog)
+    frame, manifest = catalog.load(snapshot.id)
     return frame, manifest

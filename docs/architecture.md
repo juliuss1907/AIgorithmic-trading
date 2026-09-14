@@ -32,6 +32,15 @@ Web library index các run hoàn chỉnh vào SQLite nhưng không chép hoặc 
 phục vụ qua ID đã đăng ký và được đối chiếu checksum mỗi lần đọc. Research note ở bảng riêng nên restart
 không làm mất ghi chú và không thay đổi provenance/summary.
 
+Web API chỉ enqueue cấu hình đã validate và đóng băng dataset ID; nó không chạy backtest trong request.
+Worker riêng claim một job bằng transaction SQLite, chạy tuần tự, tạo report/audit rồi mới đăng ký run và
+đánh dấu `completed`. Run đang `running` khi worker khởi động lại được chuyển thành `interrupted`; retry
+luôn có job/output ID mới. Mỗi event `queued/started/completed/failed/interrupted` là một dòng JSON có
+`request_id` và `entry_point` trong `state/job-logs/<job-id>.jsonl` đồng thời được in ra stdout.
+
+Các câu hỏi vận hành mà telemetry phải trả lời: job nào đang chờ/chạy; job lỗi ở loại lỗi nào; một job
+đã tạo ra run nào; và worker restart đã ngắt những job nào. Không ghi toàn bộ config hay dữ liệu giá vào log.
+
 ## Tín hiệu và khớp lệnh
 
 - Tính SMA bằng giá đóng cửa, chỉ dùng cửa sổ lùi. Chưa đủ 50 phiên: mục tiêu bằng 0.

@@ -49,9 +49,9 @@ báo cáo lấy tên/tham số/vốn/kỳ từ cấu hình. Chốt typed request
 **Phụ thuộc:** 3.
 **Nội dung:** job bền vững trong SQLite, worker riêng chạy lần lượt, endpoint tạo và xem trạng thái.
 
-- [ ] Request tạo run trả ID ngay; job đóng băng cấu hình và snapshot trước khi chạy.
-- [ ] completed chỉ sau audit/report; lỗi không tạo kết quả thành công giả.
-- [ ] Restart ghi nhận interrupted, thử lại bằng run mới và không trộn output của hai lần chạy.
+- [x] Request tạo run trả ID ngay; job đóng băng cấu hình và snapshot trước khi chạy.
+- [x] completed chỉ sau audit/report; lỗi không tạo kết quả thành công giả.
+- [x] Restart ghi nhận interrupted, thử lại bằng run mới và không trộn output của hai lần chạy.
 
 **Kiểm tra:** integration job thành công/thất bại/restart, gửi hai job, kiểm tra tách stdout/artifact.
 **Vùng tệp:** worker, store, routes run, entrypoint và tests; tối đa 5 tệp chính.
