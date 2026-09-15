@@ -147,3 +147,44 @@ def test_clone_api_rejects_changes_to_shared_conditions(tmp_path):
 
     assert response.status_code == 422
     assert "initial_cash" in response.json()["detail"]
+
+
+def test_compare_page_supports_free_selection_and_compatible_deltas(tmp_path):
+    client, runs, _, _ = comparison_lab(tmp_path)
+
+    picker = client.get("/compare")
+    result = client.get(
+        "/compare", params={"left_id": runs["left"]["id"], "right_id": runs["right"]["id"]}
+    )
+
+    assert picker.status_code == 200
+    assert "Chọn hai run" in picker.text
+    assert "SMA 20/50" in picker.text and "SMA 10/50" in picker.text
+    assert result.status_code == 200
+    assert "Cùng điều kiện" in result.text
+    assert "+5.00%" in result.text
+    assert f'/runs/{runs["left"]["id"]}/clone' in result.text
+
+
+def test_compare_page_explains_incompatibility_without_a_ranking(tmp_path):
+    client, runs, _, _ = comparison_lab(tmp_path, different_conditions=True)
+
+    result = client.get(
+        "/compare", params={"left_id": runs["left"]["id"], "right_id": runs["right"]["id"]}
+    )
+
+    assert result.status_code == 200
+    assert "Không xếp hạng" in result.text
+    assert "Dataset" in result.text
+    assert "Vốn giả lập" in result.text
+    assert "+5.00%" not in result.text
+
+
+def test_run_detail_offers_clone_action(tmp_path):
+    client, runs, _, _ = comparison_lab(tmp_path)
+    run_id = runs["left"]["id"]
+
+    page = client.get(f"/runs/{run_id}")
+
+    assert page.status_code == 200
+    assert f'href="/runs/{run_id}/clone"' in page.text

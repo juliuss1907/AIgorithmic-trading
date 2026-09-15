@@ -82,6 +82,25 @@ def create_app(database=None, runs_dir=None, data_dir=None):
             {"datasets": snapshots, "ready_symbols": {item["symbol"] for item in snapshots}},
         )
 
+    @app.get("/compare")
+    def compare_page(request: Request, left_id: str | None = None, right_id: str | None = None):
+        comparison = None
+        error = None
+        if left_id and right_id:
+            try:
+                comparison = compare_runs(store, left_id, right_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ArtifactChanged as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except (ValueError, ValidationError, json.JSONDecodeError) as exc:
+                error = str(exc)
+        return templates.TemplateResponse(
+            request, "compare.html",
+            {"runs": store.list_runs(), "comparison": comparison, "error": error,
+             "left_id": left_id, "right_id": right_id},
+        )
+
     @app.get("/dataset-jobs/{job_id}")
     def dataset_job_page(request: Request, job_id: str):
         try:

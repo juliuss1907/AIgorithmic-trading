@@ -8,6 +8,10 @@
     <div class="run-labels"><span class="symbol">{{ run.symbol }}</span><span class="complete">Đã hoàn tất & audit</span></div>
     <h1>{{ run.title }}</h1>
     <p class="lede">{{ run.hypothesis }}</p>
+    <div class="run-actions">
+      <a class="button-link" href="/runs/{{ run.id }}/clone">Nhân bản thí nghiệm</a>
+      {% if run.parent_run_id %}<a href="/compare?left_id={{ run.parent_run_id }}&right_id={{ run.id }}">So sánh với run cha →</a>{% endif %}
+    </div>
   </div>
   <dl class="provenance-card">
     <div><dt>Chiến lược</dt><dd>{{ run.strategy_label }}</dd></div>

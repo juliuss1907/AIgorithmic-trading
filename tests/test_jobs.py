@@ -251,6 +251,9 @@ def test_valid_clone_runs_with_frozen_conditions_and_persisted_parent(job_lab):
     )
     completed = JobWorker(queue).run_once()
     child = RunStore(queue.database, queue.runs_dir).get_run(completed["result_run_id"])
+    status_page = client.get(f"/jobs/{created.json()['id']}")
 
     assert created.status_code == 202
     assert child["parent_run_id"] == parent["result_run_id"]
+    assert "So sánh với run cha" in status_page.text
+    assert parent["result_run_id"] in status_page.text
