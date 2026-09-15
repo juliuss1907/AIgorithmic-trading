@@ -88,9 +88,9 @@ class JobQueue:
         frame, _ = self.catalog.load(snapshot.id)
         for name, (start, _) in config.periods.items():
             first = frame.index.searchsorted(pd.Timestamp(start))
-            if first < config.strategy.slow_window:
+            if first < config.strategy.warmup_sessions:
                 raise ValueError(
-                    f"Period {name!r} needs at least {config.strategy.slow_window} warmup sessions"
+                    f"Period {name!r} needs at least {config.strategy.warmup_sessions} warmup sessions"
                 )
             if first >= len(frame) - 1:
                 raise ValueError(f"Period {name!r} needs at least two evaluation sessions")

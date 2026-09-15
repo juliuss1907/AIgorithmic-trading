@@ -62,6 +62,10 @@ class SmaStrategySpec(BaseModel):
     def label(self) -> str:
         return f"SMA {self.fast_window}/{self.slow_window}"
 
+    @property
+    def warmup_sessions(self) -> int:
+        return self.slow_window
+
 
 class RsiBollingerStrategySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -83,6 +87,10 @@ class RsiBollingerStrategySpec(BaseModel):
     def label(self) -> str:
         return f"RSI {self.rsi_window} + Bollinger {self.bollinger_window}/{self.bollinger_stddev:g}"
 
+    @property
+    def warmup_sessions(self) -> int:
+        return max(self.rsi_window, self.bollinger_window)
+
 
 class DonchianStrategySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -95,6 +103,10 @@ class DonchianStrategySpec(BaseModel):
     @property
     def label(self) -> str:
         return f"Donchian {self.entry_window}/{self.exit_window} + ATR {self.atr_window}"
+
+    @property
+    def warmup_sessions(self) -> int:
+        return max(self.entry_window, self.exit_window, self.atr_window)
 
 
 StrategySpec = SmaStrategySpec | RsiBollingerStrategySpec | DonchianStrategySpec
@@ -218,6 +230,8 @@ class RunSummary(BaseModel):
     final_equity: float
     total_return: float
     cagr_252: float
+    cagr_annualized: float | None = None
+    annualization_days: int = Field(default=252, ge=1)
     max_drawdown: float
     round_trips: int
     fills: int

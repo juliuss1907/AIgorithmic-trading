@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from lab.experiment import run_case
+from lab.execution import CryptoSpotEngine
 from lab.strategy import SignalEngine
 
 
@@ -61,3 +62,36 @@ def test_truncated_history_produces_same_signals():
     for end in range(1, len(data) + 1):
         partial = SignalEngine(1, 2).generate({"SPY.US": data.iloc[:end]})["SPY.US"]
         pd.testing.assert_series_equal(partial, full.iloc[:end])
+
+
+def test_crypto_engine_applies_step_min_notional_and_taker_fee():
+    engine = CryptoSpotEngine({
+        "initial_cash": 10_000, "quantity_step": "0.00001000",
+        "min_notional": "5.00000000", "taker_fee_bps": 10,
+        "slippage_us": .0005,
+    })
+
+    assert engine.round_size(0.123456789, 40_000) == pytest.approx(0.12345)
+    assert engine.round_size(0.0001, 40_000) == 0
+    assert engine.apply_slippage(40_000, 1) == 40_020
+    assert engine.calc_commission(.1, 40_000, 1, True) == 4
+
+
+def test_btc_case_uses_half_capital_next_open_and_365_day_cagr(tmp_path):
+    data = frame()
+    config = case(5) | {
+        "codes": ["BTCUSDT"], "market": "crypto_spot",
+        "strategy": {"family": "sma_crossover", "fast_window": 1, "slow_window": 2},
+        "target_weight": .5, "quantity_step": "0.00001000", "min_notional": "5",
+        "taker_fee_bps": 10, "bars_per_year": 365,
+    }
+
+    result = run_case(data, config, tmp_path / "btc")
+    fills = pd.read_csv(tmp_path / "btc/fills-exact.csv")
+
+    assert fills.iloc[0]["notional"] <= 5_000
+    assert fills.iloc[0]["fee"] > 0
+    assert fills.iloc[0]["execution_price"] == pytest.approx(120.06)
+    assert result["annualization_days"] == 365
+    assert "cagr_annualized" in result
+    assert (tmp_path / "btc/signal-evidence.csv").exists()

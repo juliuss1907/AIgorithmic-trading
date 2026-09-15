@@ -14,7 +14,8 @@ from backtest.engines.global_equity import GlobalEquityEngine
 
 from lab.data import ROOT, digest, load
 from lab.contracts import ExperimentSpec, RunSummary
-from lab.strategy import SignalEngine
+from lab.execution import CryptoSpotEngine
+from lab.strategy import RuleSignalEngine, SignalEngine, strategy_from_dict
 
 
 def read_config(path=None):
@@ -23,7 +24,7 @@ def read_config(path=None):
 
 
 class SnapshotLoader:
-    name = "local-validated-yahoo-snapshot"
+    name = "local-validated-snapshot"
 
     def __init__(self, frame):
         self.frame = frame
@@ -79,7 +80,8 @@ def audit(engine, frame, signals, config):
             raise AssertionError(f"Cash/share ledger differs at {date}")
     if abs(quantity) > 1e-8:
         raise AssertionError("Unclosed terminal position")
-    if not math.isclose(cash, config["initial_cash"] + sum(t.pnl for t in engine.trades), abs_tol=1e-6):
+    realized = sum(t.pnl - t.commission for t in engine.trades)
+    if not math.isclose(cash, config["initial_cash"] + realized, abs_tol=1e-6):
         raise AssertionError("Trade P&L does not reconcile to final cash")
     return {"fills_checked": len(engine.fill_records), "sessions_checked": len(engine.equity_snapshots),
             "max_equity_error_usd": max_error, "held_days": int(held_days)}
@@ -91,17 +93,37 @@ def run_case(frame, config, output, buy_and_hold=False):
     (output / "artifacts").mkdir()
     (output / "code").mkdir()
     shutil.copyfile(ROOT / "lab/strategy.py", output / "code/signal_engine.py")
+    shutil.copyfile(ROOT / "lab/execution.py", output / "code/execution_engine.py")
     (output / "config.json").write_text(json.dumps(config, indent=2) + "\n")
-    strategy = SignalEngine(config["fast_window"], config["slow_window"], buy_and_hold)
+    if "strategy" in config:
+        strategy = RuleSignalEngine(
+            strategy_from_dict(config["strategy"]),
+            config.get("target_weight", 1.0),
+            buy_and_hold,
+        )
+        warmup = strategy.strategy.warmup_sessions
+    else:
+        strategy = SignalEngine(config["fast_window"], config["slow_window"], buy_and_hold)
+        warmup = config["slow_window"]
     inputs = frame.loc[config["start_date"]:config["end_date"]]
     first = inputs.index.searchsorted(pd.Timestamp(config["evaluation_start_date"]))
-    if first < config["slow_window"] or first >= len(inputs) - 1:
+    if first < warmup or first >= len(inputs) - 1:
         raise ValueError("Need full indicator warmup and at least two evaluation sessions")
-    engine = GlobalEquityEngine(config, market="us")
+    engine = (
+        CryptoSpotEngine(config)
+        if config.get("market") == "crypto_spot"
+        else GlobalEquityEngine(config, market="us")
+    )
+    bars_per_year = int(config.get("bars_per_year", 252))
     with (output / "engine-metrics.json").open("w") as log, contextlib.redirect_stdout(log):
-        engine.run_backtest(config, SnapshotLoader(inputs), strategy, output)
+        engine.run_backtest(
+            config, SnapshotLoader(inputs), strategy, output, bars_per_year=bars_per_year
+        )
     symbol = config["codes"][0]
     signals = strategy.generate({symbol: inputs})[symbol]
+    signal_evidence = strategy.evidence(inputs)
+    signal_evidence.index.name = "date"
+    signal_evidence.to_csv(output / "signal-evidence.csv", float_format="%.12g")
     evidence = audit(engine, inputs, signals, config)
     (output / "audit.json").write_text(json.dumps(evidence, indent=2) + "\n")
     records = [asdict(fill) for fill in engine.fill_records]
@@ -119,6 +141,10 @@ def run_case(frame, config, output, buy_and_hold=False):
         "final_equity": float(curve.iloc[-1]),
         "total_return": float(curve.iloc[-1] / config["initial_cash"] - 1),
         "cagr_252": float((curve.iloc[-1] / config["initial_cash"]) ** (252 / len(curve)) - 1),
+        "cagr_annualized": float(
+            (curve.iloc[-1] / config["initial_cash"]) ** (bars_per_year / len(curve)) - 1
+        ),
+        "annualization_days": bars_per_year,
         "max_drawdown": float(drawdown.min()),
         "round_trips": len(engine.trades), "fills": len(engine.fill_records),
         "time_in_market": evidence["held_days"] / len(curve),
@@ -152,19 +178,34 @@ def run(config: ExperimentSpec, output, catalog=None):
     summaries = {}
     for period, (start, end) in config.periods.items():
         for bps in config.slippage_bps:
-            for strategy in ("sma", "buy-hold"):
+            strategy_cases = (
+                (("rule", False, config.risk_policy.max_target_weight),
+                 ("buy-hold-50", True, config.risk_policy.max_target_weight),
+                 ("buy-hold-100", True, 1.0))
+                if config.market == "crypto_spot"
+                else (("sma", False, 1.0), ("buy-hold", True, 1.0))
+            )
+            for strategy_name, buy_and_hold, target_weight in strategy_cases:
                 cost_label = f"{bps:g}bps"
-                key = f"{period}/{cost_label}/{strategy}"
+                key = f"{period}/{cost_label}/{strategy_name}"
                 case = {
                     "codes": [config.engine_symbol], "source": "local", "interval": "1D",
                     "start_date": str(config.data.start), "end_date": str(end),
                     "evaluation_start_date": str(start), "initial_cash": config.initial_cash,
                     "leverage": 1.0, "position_adjustment": "hold", "slippage_us": bps / 10000,
-                    "fast_window": config.strategy.fast_window, "slow_window": config.strategy.slow_window,
-                    "buy_and_hold": strategy == "buy-hold", "commission": 0.0,
+                    "strategy": config.strategy.model_dump(mode="json"),
+                    "target_weight": target_weight, "buy_and_hold": buy_and_hold,
+                    "commission": 0.0, "market": config.market,
+                    "bars_per_year": config.bars_per_year,
                 }
+                if config.market == "crypto_spot":
+                    case.update({
+                        "quantity_step": manifest["exchange_rules"]["quantity_step"],
+                        "min_notional": manifest["exchange_rules"]["min_notional"],
+                        "taker_fee_bps": config.taker_fee_bps,
+                    })
                 summaries[key] = RunSummary.model_validate(
-                    run_case(frame, case, output / key, case["buy_and_hold"])
+                    run_case(frame, case, output / key, buy_and_hold)
                 ).model_dump(mode="json")
     (output / "summary.json").write_text(json.dumps(summaries, indent=2, allow_nan=False) + "\n")
     return summaries
