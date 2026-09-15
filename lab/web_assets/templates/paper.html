@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Paper trading · System Trading Lab{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/">Thư viện</a><span>/</span><span>Paper trading</span></nav>
+<section class="form-hero paper-hero">
+  <p class="eyebrow">BTCUSDT · simulated execution</p>
+  <h1>Paper trading, có phanh.</h1>
+  <p class="lede">Bot thuật toán quyết định; AI chỉ giải thích. Mỗi fill, biến động số dư và lý do dừng đều có dấu vết đối soát.</p>
+</section>
+
+<section class="section-head">
+  <div><p class="eyebrow">Accounts</p><h2>{{ accounts|length }} tài khoản mô phỏng</h2></div>
+  <span class="safety-note">Không kết nối API đặt lệnh thật</span>
+</section>
+{% if accounts %}
+<div class="paper-list">
+  {% for account in accounts %}
+  <a class="paper-row" href="/paper/{{ account.id }}">
+    <span class="status-pill {{ account.status }}">{{ 'Đang chạy' if account.status == 'active' else 'Đã dừng' }}</span>
+    <span><strong>BTCUSDT</strong><small>{{ account.strategy.family }}</small></span>
+    <span><small>Equity</small><strong>{{ "{:,.2f}".format(account.equity) }} USDT</strong></span>
+    <span><small>Drawdown</small><strong>{{ "{:.2%}".format(account.drawdown) }}</strong></span>
+    <b aria-hidden="true">→</b>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+  <h2>Chưa có tài khoản paper</h2>
+  <p>Tài khoản chỉ được tạo sau khi một chiến lược vượt promotion gate và holdout. Hiện bot giữ tiền mặt.</p>
+</div>
+{% endif %}
+{% endblock %}

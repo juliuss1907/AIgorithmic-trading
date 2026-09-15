@@ -6,6 +6,7 @@ from lab.paper import PaperTradingService
 
 
 RULES = {"quantity_step": "0.00001000", "min_notional": "5.00000000"}
+SNAPSHOT = "a" * 64
 
 
 def bars(closes):
@@ -22,8 +23,14 @@ def service(tmp_path):
     return PaperTradingService(tmp_path / "paper.sqlite3", log_dir=tmp_path / "logs")
 
 
+def create_account(service):
+    return service.create_account(
+        SmaStrategySpec(fast_window=1, slow_window=2), dataset_snapshot_id=SNAPSHOT
+    )
+
+
 def test_buy_cycle_is_idempotent_and_reconciles(service):
-    account = service.create_account(SmaStrategySpec(fast_window=1, slow_window=2))
+    account = create_account(service)
 
     first = service.run_cycle(account["id"], bars([100, 120]), bid=100, ask=101)
     repeated = service.run_cycle(account["id"], bars([100, 120]), bid=100, ask=101)
@@ -41,7 +48,7 @@ def test_buy_cycle_is_idempotent_and_reconciles(service):
 
 
 def test_exit_cycle_sells_the_entire_spot_position(service):
-    account = service.create_account(SmaStrategySpec(fast_window=1, slow_window=2))
+    account = create_account(service)
     service.run_cycle(account["id"], bars([100, 120]), bid=100, ask=101)
 
     cycle = service.run_cycle(account["id"], bars([100, 120, 90]), bid=89, ask=90)
@@ -53,7 +60,7 @@ def test_exit_cycle_sells_the_entire_spot_position(service):
 
 
 def test_drawdown_halts_before_a_new_order(service):
-    account = service.create_account(SmaStrategySpec(fast_window=1, slow_window=2))
+    account = create_account(service)
     service.run_cycle(account["id"], bars([100, 120]), bid=100, ask=100)
 
     cycle = service.run_cycle(account["id"], bars([100, 120, 130]), bid=50, ask=51)
@@ -66,7 +73,7 @@ def test_drawdown_halts_before_a_new_order(service):
 
 
 def test_changed_exchange_rules_halt_the_account(service):
-    account = service.create_account(SmaStrategySpec(fast_window=1, slow_window=2))
+    account = create_account(service)
     changed = RULES | {"quantity_step": "0.00010000"}
 
     cycle = service.run_cycle(
@@ -79,9 +86,21 @@ def test_changed_exchange_rules_halt_the_account(service):
 
 
 def test_manual_kill_switch_is_persistent_and_audited(service):
-    account = service.create_account(SmaStrategySpec(fast_window=1, slow_window=2))
+    account = create_account(service)
 
     halted = service.halt_account(account["id"], reason="manual_kill_switch")
 
     assert halted["status"] == "halted"
     assert service.list_halts(account["id"])[0]["reason"] == "manual_kill_switch"
+
+
+def test_dashboard_collections_expose_the_audit_chain(service):
+    account = create_account(service)
+    service.run_cycle(account["id"], bars([100, 120]), bid=100, ask=101)
+
+    assert service.list_accounts()[0]["dataset_snapshot_id"] == SNAPSHOT
+    assert len(service.list_cycles(account["id"])) == 1
+    assert len(service.list_signals(account["id"])) == 1
+    assert len(service.list_intents(account["id"])) == 1
+    assert len(service.list_fills(account["id"])) == 1
+    assert len(service.list_ledger(account["id"])) == 2

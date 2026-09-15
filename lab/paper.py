@@ -41,6 +41,7 @@ class PaperTradingService:
                 """
                 CREATE TABLE IF NOT EXISTS paper_accounts (
                     id TEXT PRIMARY KEY, strategy_json TEXT NOT NULL,
+                    dataset_snapshot_id TEXT NOT NULL,
                     initial_cash REAL NOT NULL, cash REAL NOT NULL,
                     btc_quantity REAL NOT NULL, average_cost REAL NOT NULL,
                     equity REAL NOT NULL, peak_equity REAL NOT NULL, drawdown REAL NOT NULL,
@@ -86,6 +87,12 @@ class PaperTradingService:
                 );
                 """
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(paper_accounts)")}
+            if "dataset_snapshot_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE paper_accounts ADD COLUMN dataset_snapshot_id TEXT NOT NULL "
+                    "DEFAULT 'legacy-untracked'"
+                )
 
     def _event(self, account_id, event, *, cycle_id=None, entry_point=None, **fields):
         record = {
@@ -103,10 +110,12 @@ class PaperTradingService:
         return result
 
     def create_account(
-        self, strategy, *, initial_cash=10_000, exchange_rules=None,
+        self, strategy, *, dataset_snapshot_id, initial_cash=10_000, exchange_rules=None,
         max_target_weight=.5, halt_drawdown=.20, fee_bps=10, slippage_bps=5,
     ):
         strategy = strategy_from_dict(strategy)
+        if len(dataset_snapshot_id) != 64 or any(c not in "0123456789abcdef" for c in dataset_snapshot_id):
+            raise ValueError("Paper account requires a frozen dataset snapshot id")
         rules = exchange_rules or DEFAULT_RULES
         if initial_cash <= 0 or max_target_weight != .5 or halt_drawdown != .20:
             raise ValueError("BTC paper MVP freezes 10,000+ cash, 50% target and 20% halt")
@@ -119,8 +128,12 @@ class PaperTradingService:
         strategy_json = json.dumps(strategy.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO paper_accounts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (account_id, strategy_json, initial_cash, initial_cash, 0, 0,
+                "INSERT INTO paper_accounts "
+                "(id,strategy_json,dataset_snapshot_id,initial_cash,cash,btc_quantity,average_cost,"
+                "equity,peak_equity,drawdown,max_target_weight,halt_drawdown,quantity_step,min_notional,"
+                "fee_bps,slippage_bps,status,halt_reason,last_candle,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (account_id, strategy_json, dataset_snapshot_id, initial_cash, initial_cash, 0, 0,
                  initial_cash, initial_cash, 0, max_target_weight, halt_drawdown,
                  str(rules["quantity_step"]), str(rules["min_notional"]), fee_bps,
                  slippage_bps, "active", None, None, now, now),
@@ -140,6 +153,13 @@ class PaperTradingService:
         if row is None:
             raise KeyError(f"Unknown paper account: {account_id}")
         return self._account(row)
+
+    def list_accounts(self):
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM paper_accounts ORDER BY created_at DESC,id"
+            ).fetchall()
+        return [self._account(row) for row in rows]
 
     @staticmethod
     def _rules_match(account, rules):
@@ -359,6 +379,38 @@ class PaperTradingService:
         with self._connect() as connection:
             return [dict(row) for row in connection.execute(
                 "SELECT * FROM paper_fills WHERE account_id=? ORDER BY created_at,id", (account_id,)
+            )]
+
+    def list_cycles(self, account_id):
+        self.get_account(account_id)
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM paper_cycles WHERE account_id=? ORDER BY candle_date DESC,id", (account_id,)
+            ).fetchall()
+        return [self.get_cycle(row["id"]) for row in rows]
+
+    def list_signals(self, account_id):
+        self.get_account(account_id)
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT s.* FROM paper_signals s JOIN paper_cycles c ON c.id=s.cycle_id "
+                "WHERE c.account_id=? ORDER BY c.candle_date DESC", (account_id,)
+            ).fetchall()
+        return [{**dict(row), "evidence": json.loads(row["evidence_json"])} for row in rows]
+
+    def list_intents(self, account_id):
+        self.get_account(account_id)
+        with self._connect() as connection:
+            return [dict(row) for row in connection.execute(
+                "SELECT i.* FROM paper_order_intents i JOIN paper_cycles c ON c.id=i.cycle_id "
+                "WHERE c.account_id=? ORDER BY c.candle_date DESC", (account_id,)
+            )]
+
+    def list_ledger(self, account_id):
+        self.get_account(account_id)
+        with self._connect() as connection:
+            return [dict(row) for row in connection.execute(
+                "SELECT * FROM paper_ledger WHERE account_id=? ORDER BY id", (account_id,)
             )]
 
     def list_halts(self, account_id):

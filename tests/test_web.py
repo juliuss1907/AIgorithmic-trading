@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from lab.paper import PaperTradingService
 from lab.store import RunStore
 from lab.web import create_app
 
@@ -160,3 +161,30 @@ def test_imported_clone_preserves_parent_lineage(tmp_path):
 
     assert child["parent_run_id"] == parent["id"]
     assert store.get_run(parent["id"])["parent_run_id"] is None
+
+
+def test_paper_dashboard_and_audit_apis(tmp_path):
+    database = tmp_path / "state/lab.sqlite3"
+    runs_dir = tmp_path / "runs"
+    data_dir = tmp_path / "data"
+    paper = PaperTradingService(database)
+    account = paper.create_account(
+        {"family": "sma_crossover", "fast_window": 1, "slow_window": 2},
+        dataset_snapshot_id="a" * 64,
+    )
+    client = TestClient(create_app(database=database, runs_dir=runs_dir, data_dir=data_dir))
+
+    listing = client.get("/paper")
+    detail = client.get(f"/paper/{account['id']}")
+
+    assert listing.status_code == 200
+    assert "Paper trading" in listing.text
+    assert detail.status_code == 200
+    assert "10,000.00 USDT" in detail.text
+    assert client.get("/api/paper/accounts").json()[0]["id"] == account["id"]
+    assert client.get(f"/api/paper/accounts/{account['id']}/cycles").json() == []
+    assert client.get("/api/ai/status").json()["status"] == "disabled"
+
+    stopped = client.post(f"/api/paper/accounts/{account['id']}/halt")
+    assert stopped.status_code == 200
+    assert stopped.json()["halt_reason"] == "manual_kill_switch"

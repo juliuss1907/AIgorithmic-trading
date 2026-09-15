@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}BTCUSDT paper · System Trading Lab{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/paper">Paper trading</a><span>/</span><span>{{ account.id[:8] }}</span></nav>
+<section class="paper-account-head">
+  <div>
+    <div class="run-labels"><span class="symbol">BTCUSDT</span><span class="status-pill {{ account.status }}">{{ 'Đang chạy' if account.status == 'active' else 'Đã dừng' }}</span></div>
+    <h1>{{ account.strategy.family|replace('_', ' ')|title }}</h1>
+    <p class="lede">Snapshot <code>{{ account.dataset_snapshot_id[:12] }}</code> · signal nến đóng UTC · fill mô phỏng ở bid/ask kế tiếp.</p>
+  </div>
+  {% if account.status == 'active' %}<button id="kill-switch" class="danger-button" type="button">Dừng bot</button>{% endif %}
+</section>
+
+{% if account.halt_reason %}<div class="halt-banner" role="alert"><strong>Bot đã dừng</strong><span>Lý do: {{ account.halt_reason }}</span></div>{% endif %}
+
+<section class="metric-strip" aria-label="Trạng thái tài khoản">
+  <div><small>Equity</small><strong>{{ "{:,.2f}".format(account.equity) }} USDT</strong></div>
+  <div><small>Tiền mặt</small><strong>{{ "{:,.2f}".format(account.cash) }} USDT</strong></div>
+  <div><small>BTC</small><strong>{{ "{:.8f}".format(account.btc_quantity) }}</strong></div>
+  <div><small>Drawdown</small><strong>{{ "{:.2%}".format(account.drawdown) }}</strong></div>
+</section>
+
+<div class="two-column paper-columns">
+  <section class="panel"><p class="eyebrow">Decision ledger</p><h2>Chu kỳ gần đây</h2>
+    {% if cycles %}<ol class="cycle-list">{% for cycle in cycles %}<li>
+      <span><strong>{{ cycle.candle_date }}</strong><small>Target {{ "{:.0%}".format(cycle.signal) }}</small></span>
+      <span>{{ 'Đã đối soát' if cycle.reconciliation_ok else 'Lỗi đối soát' }}</span>
+    </li>{% endfor %}</ol>{% else %}<p class="muted-copy">Chưa có nến nào được xử lý.</p>{% endif %}
+  </section>
+  <section class="panel"><p class="eyebrow">AI copilot</p><h2>Chỉ giải thích</h2>
+    <div class="ai-disabled" role="status"><strong>AI chưa cấu hình</strong><p>Không có provider hoặc API key. Bot thuật toán vẫn hoạt động độc lập; AI không thể tạo hay sửa lệnh.</p></div>
+  </section>
+</div>
+
+<section class="section-head"><div><p class="eyebrow">Execution evidence</p><h2>{{ fills|length }} fill mô phỏng</h2></div></section>
+<div class="table-wrap"><table>
+  <thead><tr><th>Thời gian UTC</th><th>Side</th><th>Số BTC</th><th>Giá</th><th>Phí USDT</th></tr></thead>
+  <tbody>{% if fills %}{% for fill in fills %}<tr><td>{{ fill.created_at[:19] }}</td><td><span class="action {{ fill.side }}">{{ fill.side }}</span></td><td>{{ "{:.8f}".format(fill.quantity) }}</td><td>{{ "{:,.2f}".format(fill.price) }}</td><td>{{ "{:.4f}".format(fill.fee) }}</td></tr>{% endfor %}{% else %}<tr><td colspan="5" class="empty-cell">Chưa có fill — tài khoản đang giữ tiền mặt.</td></tr>{% endif %}</tbody>
+</table></div>
+<p id="kill-status" class="submit-error" role="status" aria-live="polite"></p>
+{% endblock %}
+{% block scripts %}{% if account.status == 'active' %}<script>
+const kill = document.querySelector('#kill-switch');
+kill.addEventListener('click', async () => {
+  kill.disabled = true;
+  const response = await fetch('/api/paper/accounts/{{ account.id }}/halt', {method: 'POST'});
+  if (response.ok) { window.location.reload(); return; }
+  document.querySelector('#kill-status').textContent = 'Không thể dừng bot. Hãy kiểm tra API và thử lại.';
+  kill.disabled = false;
+});
+</script>{% endif %}{% endblock %}

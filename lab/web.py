@@ -18,6 +18,7 @@ from lab.dataset_jobs import DatasetJobQueue
 from lab.datasets import DatasetCatalog
 from lab.experiment import read_config
 from lab.jobs import IdempotencyConflict, JobQueue
+from lab.paper import PaperTradingService
 from lab.store import ArtifactChanged, RunStore
 
 
@@ -39,9 +40,11 @@ def create_app(database=None, runs_dir=None, data_dir=None):
         catalog=catalog,
     )
     dataset_queue = DatasetJobQueue(store.database, catalog)
+    paper = PaperTradingService(store.database)
     app.state.store = store
     app.state.queue = queue
     app.state.dataset_queue = dataset_queue
+    app.state.paper = paper
     app.state.sync_result = store.sync_runs()
     web_root = Path(__file__).with_name("web_assets")
     templates = Jinja2Templates(directory=web_root / "templates")
@@ -80,6 +83,24 @@ def create_app(database=None, runs_dir=None, data_dir=None):
             request, "datasets.html",
             {"datasets": snapshots, "ready_symbols": {item["symbol"] for item in snapshots}},
         )
+
+    @app.get("/paper")
+    def paper_accounts_page(request: Request):
+        return templates.TemplateResponse(
+            request, "paper.html", {"accounts": paper.list_accounts()}
+        )
+
+    @app.get("/paper/{account_id}")
+    def paper_account_page(request: Request, account_id: str):
+        try:
+            account = paper.get_account(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return templates.TemplateResponse(request, "paper-account.html", {
+            "account": account, "cycles": paper.list_cycles(account_id),
+            "fills": paper.list_fills(account_id), "ledger": paper.list_ledger(account_id),
+            "halts": paper.list_halts(account_id), "ai_status": "disabled",
+        })
 
     @app.get("/compare")
     def compare_page(request: Request, left_id: str | None = None, right_id: str | None = None):
@@ -170,6 +191,63 @@ def create_app(database=None, runs_dir=None, data_dir=None):
     @app.get("/api/datasets")
     def datasets_api():
         return [item.model_dump(mode="json") for item in catalog.list_ready()]
+
+    @app.get("/api/paper/accounts")
+    def paper_accounts_api():
+        return paper.list_accounts()
+
+    @app.get("/api/paper/accounts/{account_id}")
+    def paper_account_api(account_id: str):
+        try:
+            return paper.get_account(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/paper/accounts/{account_id}/cycles")
+    def paper_cycles_api(account_id: str):
+        try:
+            return paper.list_cycles(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/paper/accounts/{account_id}/signals")
+    def paper_signals_api(account_id: str):
+        try:
+            return paper.list_signals(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/paper/accounts/{account_id}/intents")
+    def paper_intents_api(account_id: str):
+        try:
+            return paper.list_intents(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/paper/accounts/{account_id}/fills")
+    def paper_fills_api(account_id: str):
+        try:
+            return paper.list_fills(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/paper/accounts/{account_id}/ledger")
+    def paper_ledger_api(account_id: str):
+        try:
+            return paper.list_ledger(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/paper/accounts/{account_id}/halt")
+    def paper_halt_api(account_id: str):
+        try:
+            return paper.halt_account(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/ai/status")
+    def ai_status_api():
+        return {"status": "disabled", "provider": "not-configured", "advisory_only": True}
 
     @app.post("/api/dataset-jobs", status_code=202)
     def create_dataset_job(
