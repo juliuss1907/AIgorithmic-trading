@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from lab.contracts import DatasetRequest
-from lab.data import ROOT, _download_yahoo, fetch
+from lab.data import ROOT, download_market_data, fetch
 
 
 def now():
@@ -21,7 +21,7 @@ class DatasetJobQueue:
             catalog = DatasetCatalog()
         self.database = Path(database or ROOT / "state/lab.sqlite3").resolve()
         self.catalog = catalog
-        self.downloader = downloader or _download_yahoo
+        self.downloader = downloader or download_market_data
         self.database.parent.mkdir(parents=True, exist_ok=True)
         self.log_dir = self.database.parent / "dataset-job-logs"
         self.log_dir.mkdir(parents=True, exist_ok=True)
