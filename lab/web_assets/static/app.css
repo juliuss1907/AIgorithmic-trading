@@ -79,6 +79,8 @@ button:disabled { cursor: wait; opacity: .55; }
 .button-link { display: inline-block; padding: 11px 18px; color: white; background: var(--green); border-radius: 8px; text-decoration: none; font-weight: 750; }
 .form-hero { padding: 48px 0 54px; max-width: 900px; }
 .form-hero h1 { font-size: clamp(45px, 6vw, 76px); }
+.lineage-note { margin: -24px 0 32px; padding: 18px 20px; display: grid; gap: 4px; background: var(--green-soft); border-left: 4px solid var(--green); }
+.lineage-note span { color: var(--muted); }
 .experiment-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 22px; align-items: start; }
 .form-stack { display: grid; gap: 16px; }
 fieldset { min-width: 0; margin: 0; padding: 28px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
@@ -88,6 +90,10 @@ input:focus, select:focus { outline: 3px solid rgba(15, 107, 79, .16); border-co
 .input-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .period-row { display: grid; grid-template-columns: 100px 70px 1fr 70px 1fr; gap: 10px; align-items: center; margin: 12px 0; }
 .period-row label { margin: 0; }
+.locked-periods { margin: 10px 0 0; }
+.locked-periods div { padding: 12px 0; display: flex; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); }
+.locked-periods div:last-child { border-bottom: 0; }
+.locked-periods dd { color: var(--muted); text-align: right; }
 .review-card { position: sticky; top: 20px; padding: 28px; color: #fff; background: var(--ink); border-radius: 14px; }
 .review-card .eyebrow { color: #8fd2b6; }
 .review-card ul { margin: 24px 0; padding-left: 20px; color: #c7d1cd; }

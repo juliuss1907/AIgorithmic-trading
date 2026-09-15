@@ -10,7 +10,7 @@ COMPARISON_FIELDS = (
 )
 
 
-def _context(store, run_id):
+def load_experiment(store, run_id):
     detail = store.detail(run_id)
     provenance = next(
         item for item in detail["artifacts"] if item["relative_path"] == "provenance.json"
@@ -18,6 +18,24 @@ def _context(store, run_id):
     path, _ = store.artifact(run_id, provenance["id"])
     payload = json.loads(path.read_text())
     config = ExperimentSpec.model_validate(payload["experiment"])
+    return detail, config
+
+
+def validate_clone_config(store, config):
+    if config.parent_run_id is None:
+        return
+    _, parent = load_experiment(store, config.parent_run_id)
+    shared = ("symbol", "dataset_id", "data", "periods", "initial_cash", "slippage_bps", "commission")
+    changed = [field for field in shared if getattr(config, field) != getattr(parent, field)]
+    expected_observed = set(parent.prior_observed_periods) | set(parent.periods)
+    if set(config.prior_observed_periods) != expected_observed:
+        changed.append("prior_observed_periods")
+    if changed:
+        raise ValueError(f"Clone must preserve shared conditions: {', '.join(changed)}")
+
+
+def _context(store, run_id):
+    detail, config = load_experiment(store, run_id)
     return detail["run"], detail["summary"], config
 
 

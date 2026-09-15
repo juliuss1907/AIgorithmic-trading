@@ -1,12 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Thí nghiệm mới · System Trading Lab{% endblock %}
+{% block title %}{{ 'Nhân bản thí nghiệm' if is_clone else 'Thí nghiệm mới' }} · System Trading Lab{% endblock %}
 {% block content %}
-<nav class="breadcrumb"><a href="/">Thư viện</a><span>/</span><span>Thí nghiệm mới</span></nav>
+<nav class="breadcrumb"><a href="/">Thư viện</a><span>/</span>{% if is_clone %}<a href="/runs/{{ parent.id }}">{{ parent.run_name }}</a><span>/</span>{% endif %}<span>{{ 'Nhân bản' if is_clone else 'Thí nghiệm mới' }}</span></nav>
 <section class="form-hero">
-  <p class="eyebrow">New experiment</p>
-  <h1>Viết câu hỏi trước khi chạy số.</h1>
-  <p class="lede">Release 0.1 chỉ cho phép SMA crossover, long-only, khớp ở giá mở cửa phiên kế tiếp.</p>
+  <p class="eyebrow">{{ 'Clone experiment' if is_clone else 'New experiment' }}</p>
+  <h1>{{ 'Nhân bản thí nghiệm.' if is_clone else 'Viết câu hỏi trước khi chạy số.' }}</h1>
+  <p class="lede">{% if is_clone %}Giữ nguyên điều kiện, thay đổi giả thuyết hoặc quy tắc SMA, rồi so sánh với run cha.{% else %}Release 0.1 chỉ cho phép SMA crossover, long-only, khớp ở giá mở cửa phiên kế tiếp.{% endif %}</p>
 </section>
+
+{% if is_clone %}<aside class="lineage-note" role="note"><strong>Run cha · {{ parent.title }}</strong><span>Dataset, vốn, chi phí và các kỳ được khóa. Các kỳ này đã được quan sát trước đó, không phải holdout mới.</span></aside>{% endif %}
 
 {% if datasets %}
 <form id="experiment-form" class="experiment-layout">
@@ -23,7 +25,7 @@
     <fieldset>
       <legend>02 · Dữ liệu và quy tắc</legend>
       <label for="dataset">Snapshot</label>
-      <select id="dataset" name="dataset_id" required>
+      <select id="dataset" name="dataset_id" required{% if is_clone %} disabled{% endif %}>
       {% for item in datasets %}
         <option value="{{ item.id }}" data-symbol="{{ item.symbol }}" data-start="{{ item.start }}" data-end-exclusive="{{ item.end_exclusive }}">{{ item.symbol }} · {{ item.start }} → {{ item.end }} · {{ item.id[:10] }}</option>
       {% endfor %}
@@ -31,13 +33,19 @@
       <div class="input-grid">
         <div><label for="fast_window">SMA nhanh</label><input id="fast_window" name="fast_window" type="number" min="1" max="499" required value="{{ defaults.strategy.fast_window }}"><span class="field-error" data-field="fast_window"></span></div>
         <div><label for="slow_window">SMA chậm</label><input id="slow_window" name="slow_window" type="number" min="2" max="500" required value="{{ defaults.strategy.slow_window }}"><span class="field-error" data-field="slow_window"></span></div>
-        <div><label for="initial_cash">Vốn giả lập (USD)</label><input id="initial_cash" name="initial_cash" type="number" min="1" step="0.01" required value="{{ defaults.initial_cash }}"></div>
+        <div><label for="initial_cash">Vốn giả lập (USD)</label><input id="initial_cash" name="initial_cash" type="number" min="1" step="0.01" required value="{{ defaults.initial_cash }}"{% if is_clone %} readonly{% endif %}></div>
       </div>
     </fieldset>
     <fieldset>
       <legend>03 · Giai đoạn đánh giá</legend>
-      <div class="period-row"><strong>Learning</strong><label for="learning_start">Từ ngày</label><input id="learning_start" type="date" required value="{{ defaults.periods.learning[0] }}"><label for="learning_end">Đến ngày</label><input id="learning_end" type="date" required value="{{ defaults.periods.learning[1] }}"></div>
-      <div class="period-row"><strong>Evaluation</strong><label for="evaluation_start">Từ ngày</label><input id="evaluation_start" type="date" required value="{{ defaults.periods.evaluation[0] }}"><label for="evaluation_end">Đến ngày</label><input id="evaluation_end" type="date" required value="{{ defaults.periods.evaluation[1] }}"></div>
+      {% if is_clone %}
+      <dl class="locked-periods">
+        {% for name, dates in defaults.periods.items() %}<div><dt>{{ name }}</dt><dd>{{ dates[0] }} → {{ dates[1] }} · Đã quan sát</dd></div>{% endfor %}
+      </dl>
+      {% else %}
+      <div class="period-row"><strong>Learning</strong><label for="learning_start">Từ ngày</label><input id="learning_start" type="date" required value="{{ defaults.periods.learning[0] }}"{% if is_clone %} readonly{% endif %}><label for="learning_end">Đến ngày</label><input id="learning_end" type="date" required value="{{ defaults.periods.learning[1] }}"{% if is_clone %} readonly{% endif %}></div>
+      <div class="period-row"><strong>Evaluation</strong><label for="evaluation_start">Từ ngày</label><input id="evaluation_start" type="date" required value="{{ defaults.periods.evaluation[0] }}"{% if is_clone %} readonly{% endif %}><label for="evaluation_end">Đến ngày</label><input id="evaluation_end" type="date" required value="{{ defaults.periods.evaluation[1] }}"{% if is_clone %} readonly{% endif %}></div>
+      {% endif %}
       <span class="field-error" data-field="periods"></span>
     </fieldset>
   </div>
@@ -57,6 +65,9 @@
 {% if datasets %}<script>
 const form = document.querySelector('#experiment-form');
 const key = crypto.randomUUID();
+const parentRunId = {% if defaults.parent_run_id %}'{{ defaults.parent_run_id }}'{% else %}null{% endif %};
+const priorObservedPeriods = {{ defaults.prior_observed_periods|default([])|tojson }};
+const lockedPeriods = {{ defaults.periods|tojson }};
 const value = id => document.querySelector(`#${id}`).value;
 function review() {
   const option = document.querySelector('#dataset').selectedOptions[0];
@@ -70,10 +81,11 @@ form.addEventListener('submit', async event => {
   const payload = {
     title: value('title'), hypothesis: value('hypothesis'), symbol: option.dataset.symbol,
     dataset_id: option.value,
+    parent_run_id: parentRunId, prior_observed_periods: priorObservedPeriods,
     data: {start: option.dataset.start, end_exclusive: option.dataset.endExclusive},
     strategy: {family: 'sma_crossover', fast_window: Number(value('fast_window')), slow_window: Number(value('slow_window'))},
     initial_cash: Number(value('initial_cash')), slippage_bps: [0, 5, 10], commission: 0,
-    periods: {learning: [value('learning_start'), value('learning_end')], evaluation: [value('evaluation_start'), value('evaluation_end')]}
+    periods: parentRunId ? lockedPeriods : {learning: [value('learning_start'), value('learning_end')], evaluation: [value('evaluation_start'), value('evaluation_end')]}
   };
   const button = document.querySelector('#submit-button'); button.disabled = true;
   const response = await fetch('/api/jobs', {method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': key}, body: JSON.stringify(payload)});

@@ -8,6 +8,7 @@ from lab.contracts import ExperimentSpec
 from lab.data import save_snapshot, sessions
 from lab.datasets import DatasetCatalog
 from lab.jobs import JobQueue, JobWorker
+from lab.store import RunStore
 from lab.web import create_app
 
 
@@ -228,3 +229,28 @@ def test_web_job_runs_to_result_and_survives_app_restart(job_lab):
 
     assert completed["status"] == "completed"
     assert restarted.get(f"/runs/{completed['result_run_id']}").status_code == 200
+
+
+def test_valid_clone_runs_with_frozen_conditions_and_persisted_parent(job_lab):
+    queue, config = job_lab
+    queue.enqueue(config, entry_point="test_parent")
+    parent = JobWorker(queue).run_once()
+    child_config = config.model_copy(update={
+        "title": "Clone of queued SPY check",
+        "hypothesis": "The same rule should reproduce the parent.",
+        "parent_run_id": parent["result_run_id"],
+        "prior_observed_periods": tuple(config.periods),
+    })
+    client = TestClient(create_app(
+        database=queue.database, runs_dir=queue.runs_dir, data_dir=queue.catalog.base_dir
+    ))
+
+    created = client.post(
+        "/api/jobs", json=child_config.to_json_dict(),
+        headers={"Idempotency-Key": "valid-clone-flow"},
+    )
+    completed = JobWorker(queue).run_once()
+    child = RunStore(queue.database, queue.runs_dir).get_run(completed["result_run_id"])
+
+    assert created.status_code == 202
+    assert child["parent_run_id"] == parent["result_run_id"]

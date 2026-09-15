@@ -114,3 +114,36 @@ def test_comparison_refuses_changed_provenance(tmp_path):
     )
 
     assert response.status_code == 409
+
+
+def test_clone_form_locks_shared_conditions_and_marks_prior_periods_observed(tmp_path):
+    client, runs, _, _ = comparison_lab(tmp_path)
+    parent = runs["left"]
+
+    response = client.get(f"/runs/{parent['id']}/clone")
+
+    assert response.status_code == 200
+    assert "Nhân bản thí nghiệm" in response.text
+    assert "Bản sao · SMA 20/50" in response.text
+    assert 'id="dataset"' in response.text and "disabled" in response.text
+    assert 'id="initial_cash"' in response.text and "readonly" in response.text
+    assert f"const parentRunId = '{parent['id']}'" in response.text
+    assert 'const priorObservedPeriods = ["evaluation"]' in response.text
+
+
+def test_clone_api_rejects_changes_to_shared_conditions(tmp_path):
+    client, runs, left_path, _ = comparison_lab(tmp_path)
+    parent = runs["left"]
+    payload = json.loads((left_path / "provenance.json").read_text())["experiment"]
+    payload.update({
+        "title": "Changed capital", "hypothesis": "Try a different rule.",
+        "parent_run_id": parent["id"], "prior_observed_periods": ["evaluation"],
+        "initial_cash": 2000,
+    })
+
+    response = client.post(
+        "/api/jobs", json=payload, headers={"Idempotency-Key": "clone-changed-capital"}
+    )
+
+    assert response.status_code == 422
+    assert "initial_cash" in response.json()["detail"]

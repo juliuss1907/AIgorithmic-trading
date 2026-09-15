@@ -13,7 +13,7 @@ from pydantic_core import ValidationError
 from starlette.requests import Request
 
 from lab.contracts import DatasetRequest, ExperimentSpec
-from lab.comparison import compare_runs
+from lab.comparison import compare_runs, load_experiment, validate_clone_config
 from lab.data import DATA
 from lab.dataset_jobs import DatasetJobQueue
 from lab.datasets import DatasetCatalog
@@ -71,7 +71,7 @@ def create_app(database=None, runs_dir=None, data_dir=None):
             datasets.append(item)
         return templates.TemplateResponse(
             request, "experiment-form.html",
-            {"datasets": datasets, "defaults": read_config().to_json_dict()},
+            {"datasets": datasets, "defaults": read_config().to_json_dict(), "is_clone": False},
         )
 
     @app.get("/datasets")
@@ -97,6 +97,36 @@ def create_app(database=None, runs_dir=None, data_dir=None):
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return templates.TemplateResponse(request, "job.html", {"job": job})
+
+    @app.get("/runs/{run_id}/clone")
+    def clone_experiment(request: Request, run_id: str):
+        try:
+            detail, config = load_experiment(store, run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ArtifactChanged as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (ValueError, ValidationError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        defaults = config.to_json_dict()
+        defaults.update({
+            "title": f"Bản sao · {config.title}"[:120],
+            "hypothesis": "",
+            "parent_run_id": run_id,
+            "prior_observed_periods": list(config.periods),
+        })
+        dataset = {
+            "id": config.dataset_id,
+            "symbol": config.symbol,
+            "start": str(config.data.start),
+            "end": str(config.data.end_exclusive - timedelta(days=1)),
+            "end_exclusive": str(config.data.end_exclusive),
+        }
+        return templates.TemplateResponse(
+            request, "experiment-form.html",
+            {"datasets": [dataset], "defaults": defaults, "is_clone": True,
+             "parent": detail["run"]},
+        )
 
     @app.get("/runs/{run_id}")
     def run_page(request: Request, run_id: str):
@@ -158,6 +188,7 @@ def create_app(database=None, runs_dir=None, data_dir=None):
     @app.post("/api/jobs", status_code=202)
     def create_job(config: ExperimentSpec, idempotency_key: str | None = Header(default=None)):
         try:
+            validate_clone_config(store, config)
             return queue.enqueue(
                 config, entry_point="web_api", idempotency_key=idempotency_key
             )
