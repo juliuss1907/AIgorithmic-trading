@@ -154,6 +154,15 @@ class PaperTradingService:
         self._event(account_id, "account_created", entry_point="manual")
         return self.get_account(account_id)
 
+    def create_promoted_account(self, promotion_store, strategy, **kwargs):
+        strategy = strategy_from_dict(strategy)
+        state = promotion_store.get()
+        if not state.get("holdout") or not state["holdout"].get("passed"):
+            raise ValueError("Paper account requires a passing holdout")
+        if state.get("selected") != strategy.family:
+            raise ValueError("Paper account must use the selected strategy")
+        return self.create_account(strategy, **kwargs)
+
     def get_account(self, account_id):
         with self._connect() as connection:
             row = connection.execute(

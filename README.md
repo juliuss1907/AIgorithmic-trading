@@ -1,5 +1,35 @@
 # Phòng thử nghiệm trading
 
+Hệ thống hiện là **bot thuật toán BTCUSDT + AI copilot chỉ đọc**. Quy tắc deterministic tạo signal
+và paper order; AI chỉ giải thích evidence, không thể đặt lệnh. Binance integration chỉ dùng public
+market-data API; dự án không có endpoint giao dịch thật.
+
+## Kết quả BTC hiện tại
+
+Ba chiến lược mặc định đã chạy trên 3.059 nến thật (2017-08-17 → 2025-12-31), tám fold 2018–2025,
+với target tối đa 50%, taker fee 10 bps và slippage 0/5/10 bps. Cả ba qua điều kiện số năm có lãi
+và stress-return, nhưng trượt trần drawdown 20%:
+
+| Chiến lược | Năm có lãi | Stress return gộp | Drawdown tệ nhất | Gate |
+|---|---:|---:|---:|---|
+| Donchian 20/10 + ATR14 | 5/8 | +375,21% | −21,73% | Không qua |
+| RSI14 + Bollinger20/2 | 6/8 | +56,95% | −23,83% | Không qua |
+| SMA 20/50 | 6/8 | +222,73% | −42,18% | Không qua |
+
+Quyết định đã khóa là **giữ cash**. Holdout 2026 chưa mở và chưa tạo paper account. Đây là kết quả
+an toàn mong đợi của promotion gate, không phải lỗi. Xem [runbook BTC](docs/btc-paper-runbook.md)
+và [kế hoạch hiện tại](tasks/plan.md).
+
+Mở dashboard bằng một lệnh:
+
+```bash
+make web
+```
+
+Sau đó vào `http://127.0.0.1:8000/paper`. Chạy toàn bộ kiểm tra bằng `make test`.
+
+## Pilot SPY trước đây
+
 Thí nghiệm đầu tiên: chiến lược SPY SMA 20/50, dùng engine **Vibe-Trading 0.1.15**.
 Bạn có thể đọc quy tắc, xem từng lệnh, so sánh với mua rồi nắm giữ và chạy lại từ cùng dữ liệu.
 

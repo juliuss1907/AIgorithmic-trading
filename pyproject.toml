@@ -1,7 +1,7 @@
 [project]
 name = "system-trading-lab"
 version = "0.1.0"
-description = "Reproducible SPY moving-average research experiment"
+description = "Auditable BTC-first algorithmic trading research and paper bot"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "vibe-trading-ai==0.1.15",

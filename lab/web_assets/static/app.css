@@ -138,6 +138,8 @@ input:focus, select:focus { outline: 3px solid rgba(15, 107, 79, .16); border-co
 .paper-hero { max-width: 940px; }
 .safety-note { color: var(--muted); font-size: 13px; font-weight: 700; }
 .paper-list { border-top: 1px solid var(--line); }
+.gate-panel { margin-bottom: 44px; padding: 24px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+.gate-panel > div:first-child { margin-bottom: 20px; }
 .paper-row { min-height: 84px; padding: 16px 8px; display: grid; grid-template-columns: 110px 1.2fr 1fr 1fr auto; gap: 20px; align-items: center; border-bottom: 1px solid var(--line); text-decoration: none; }
 .paper-row:hover { background: rgba(255, 253, 247, .65); }
 .paper-row span { display: grid; gap: 3px; }

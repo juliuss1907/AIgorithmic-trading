@@ -184,6 +184,7 @@ def test_paper_dashboard_and_audit_apis(tmp_path):
     assert client.get("/api/paper/accounts").json()[0]["id"] == account["id"]
     assert client.get(f"/api/paper/accounts/{account['id']}/cycles").json() == []
     assert client.get("/api/ai/status").json()["status"] == "disabled"
+    assert client.get("/api/promotion").json()["status"] == "not_frozen"
 
     stopped = client.post(f"/api/paper/accounts/{account['id']}/halt")
     assert stopped.status_code == 200

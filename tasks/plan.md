@@ -1,133 +1,45 @@
-# Kế hoạch Release 0.1: Phòng nghiên cứu trading cá nhân
+# Kế hoạch BTC-first: bot thuật toán + AI copilot
 
-Roadmap từ rule-based đến ML, AI và paper trading nằm tại [roadmap.md](roadmap.md).
+Ngày chốt: 2026-09-15. Trạng thái: **đã triển khai MVP nghiên cứu và paper infrastructure**.
 
-Trạng thái: **đã chốt hướng mặc định web app + AI giải thích**; chưa bắt đầu triển khai release 0.1.
-Ngày: 2026-09-14. Tiếp nối thí nghiệm SPY đã hoàn thành.
+## Mục tiêu
 
-## Mục tiêu và giả định
+Xây bot BTCUSDT spot chạy bằng quy tắc có thể audit. Thuật toán là bên duy nhất tạo signal/order intent;
+AI chỉ nhận evidence packet bất biến và trả văn bản giải thích. Không có endpoint đặt lệnh thật.
 
-Xây một ứng dụng giúp Julius biến giả thuyết trading thành thí nghiệm có thể kiểm chứng:
-chọn quy tắc, chạy dữ liệu lịch sử, xem từng giao dịch, so sánh kết quả và ghi lại điều đã học.
-Thành công là hoàn thành vòng nghiên cứu mà không cần sửa code hoặc gõ lệnh cho mỗi lần chạy.
+## Hợp đồng đã khóa
 
-Đã biết: người dùng mới cả trading và lập trình, chọn chứng khoán Mỹ, muốn dùng thử công cụ rồi xây.
-Mặc định đề xuất cho bản này: một người dùng, chạy trên máy cá nhân, giao diện và giải thích tiếng Việt.
+- Binance BTCUSDT spot, nến `1d`, lịch UTC 24/7; chỉ dùng nến đã đóng.
+- Vốn paper 10.000 USDT; long/cash, không đòn bẩy; target tối đa 50%.
+- Taker fee 10 bps mỗi fill; stress slippage 0/5/10 bps, mức chính 5 bps.
+- Tự dừng khi drawdown tài khoản đạt 20%, đối soát lỗi, dữ liệu lỗi hoặc quy tắc sàn thay đổi.
+- Ba ứng viên: SMA 20/50; RSI14 + Bollinger20/2; Donchian20/10 + ATR14.
+- Learning/validation là tám fold năm 2018–2025. Holdout là 2026-01-01 → 2026-08-31,
+  chỉ mở một lần sau khi promotion gate đã khóa.
 
-Hướng mặc định là **web app + AI giải thích kết quả**. Model, endpoint và ngân sách AI chưa được chọn;
-không tự mua dịch vụ hoặc dùng một tài khoản API chưa được chỉ định.
+## Promotion gate
 
-## Bản đầu người dùng nhận được
+Ứng viên phải có lãi ít nhất 5/8 fold ở base cost, lợi nhuận gộp dương ở stress 10 bps,
+và drawdown tệ nhất không quá 20%. Nếu nhiều ứng viên qua: drawdown thấp hơn → median return cao hơn
+→ turnover thấp hơn. Không ai qua thì giữ cash.
 
-### Vòng sử dụng
+Kết quả dữ liệu thật đã khóa ngày 2026-09-15: cả ba ứng viên đều trượt điều kiện drawdown.
+Quyết định hiện tại là `stay_cash`; holdout chưa mở và paper account không được tạo.
 
-1. Vào thư viện, mở lại thí nghiệm SPY hiện tại hoặc tạo một thí nghiệm mới.
-2. Viết lý do thử, chọn dữ liệu, SMA nhanh/chậm, thời gian và vốn mô phỏng.
-3. Đọc bản tóm tắt bằng tiếng Việt: mua lúc nào, bán lúc nào, khớp giá nào, chi phí bao nhiêu.
-4. Bấm chạy; xem trạng thái và lỗi cụ thể nếu dữ liệu hoặc phép tính không hợp lệ.
-5. Xem đường vốn, drawdown, đối chứng mua–nắm giữ và từng vòng mua/bán.
-6. Yêu cầu AI giải thích một kết quả/giao dịch, rồi lưu ghi chú cho thí nghiệm kế tiếp.
+## Thành phần đã triển khai
 
-### Phạm vi đề xuất
+1. Snapshot Binance v2 có market/venue/calendar, exchange rules và checksum; catalog cũ vẫn tương thích.
+2. Ba signal engine có indicator evidence và test không nhìn tương lai.
+3. Crypto execution adapter có quantity step, min-notional, fee, slippage, next-open và CAGR 365.
+4. Walk-forward gate + SQLite latch ngăn ghi đè quyết định và mở holdout lần hai.
+5. Paper broker SQLite có cycle → signal → intent → fill → ledger → reconciliation và kill switch.
+6. Worker 00:02 UTC chỉ dùng public market-data API; không có secret hay live-order transport.
+7. AI provider interface read-only; khi chưa có provider, API/UI hiện `disabled`.
+8. Dashboard `/paper` và API audit cho account/cycle/signal/intent/fill/ledger.
 
-- Dữ liệu ngày cho SPY và QQQ; mỗi thí nghiệm chỉ một tài sản. Đây là phạm vi kiểm thử kỹ thuật.
-- Hai kiểu chiến lược: SMA crossover với tham số nhập được, buy-and-hold làm đối chứng.
-- Long/cash, không đòn bẩy; giữ nguyên cách điều chỉnh giá và quy ước thực thi đã kiểm chứng.
-- Ba kịch bản trượt giá 0/5/10 bps mỗi chiều; commission 0 được hiển thị là giả định.
-- Giai đoạn tìm hiểu và đánh giá riêng; mỗi phiên bản ghi nhận giả thuyết trước khi chạy.
-- Thư viện lần chạy, nhân bản cấu hình, ghi chú và so sánh hai thí nghiệm tương thích.
-- AI giải thích khi người dùng yêu cầu, dựa trên bằng chứng của lần chạy đã hoàn thành.
+## Việc tiếp theo hợp lệ
 
-Để sau v1: tự sinh/chạy Python, đọc tin tức mạng, nhiều agent tranh luận, ML dự báo, tối ưu hàng loạt,
-phân bổ nhiều tài sản, dữ liệu intraday, paper trading liên tục, broker và giao dịch thật, triển khai nhiều người dùng.
-Các phần này cần thí nghiệm và quyết định riêng; không suy ra hiệu quả từ backtest SMA hiện tại.
-
-## Các phần kế thừa và cần sửa
-
-Kế thừa Vibe-Trading 0.1.15, loader kiểm tra lịch, checksum, tín hiệu có tính nhân quả,
-kiểm toán số dư và các chỉ tiêu trong `lab/`. Không fork toàn bộ UI/agent runtime của Vibe-Trading.
-
-Cần sửa trước khi mở rộng:
-
-- Tách các chỗ gắn cố định `SPY.US`, tên CSV, thư mục dữ liệu và đường dẫn cấu hình.
-- Báo cáo hiện có nội dung cố định SMA 20/50, 10.000 USD và kỳ đánh giá: phải sinh từ cấu hình thực tế.
-- Không chạy nhiều backtest bằng thread trong web process: `redirect_stdout` và matplotlib có trạng thái toàn cục.
-- Kiểm toán đang giả định một tài sản, long/cash: giữ phạm vi này cho v1.
-- `compare` hiện yêu cầu provenance giống hệt; kiểm tra hồi quy sau refactor cần so số liệu thí nghiệm gốc,
-  cho phép code hash thay đổi có giải thích. Kiểm tra tái lập giữa hai lần chạy cùng bản code vẫn giữ chặt.
-
-Thư mục `data/` và `runs/initial/`, `runs/replay/` của pilot tiếp tục được đọc như bằng chứng gốc.
-Đưa pilot vào thư viện bằng bước đăng ký có thể chạy lặp an toàn; không di chuyển/ghi đè dữ liệu cũ.
-
-## Kiến trúc đề xuất
-
-**Python 3.12 + FastAPI + Jinja2 + JavaScript nhỏ + SQLite + Vibe-Trading.**
-FastAPI/Jinja2 đã có trong môi trường qua phụ thuộc; khai báo trực tiếp khi dùng cho ứng dụng.
-Giữ uv.lock. Giao diện render ở server, form gửi JSON và polling trạng thái; chưa cần frontend build riêng.
-Biểu đồ tương tác nhẹ bằng SVG/JavaScript; báo cáo PNG/Markdown vẫn là đầu ra tải về.
-
-```text
-Giao diện web tiếng Việt
-        ↓
-FastAPI: cấu hình, thư viện, so sánh, giải thích
-        ├── SQLite: bản nháp, lần chạy, trạng thái, ghi chú
-        ├── Snapshot/artifact bất biến trên filesystem
-        └── Worker riêng, xử lý từng công việc
-                  ↓
-            lab → Vibe-Trading → audit → báo cáo
-
-AI nhận gói bằng chứng của lần chạy hoàn thành và trả lời giải thích
-```
-
-Web chạy loopback, một instance. Worker lấy công việc từ SQLite, mỗi thời điểm một backtest;
-web request trả ngay ID công việc. Tách tải dữ liệu thành công việc có trạng thái; replay không tải lại.
-Khi khởi động lại, công việc bị dở đánh dấu interrupted; người dùng tạo lần chạy mới để thử lại.
-Chỉ hiển thị completed khi báo cáo và audit đã thành công. Lỗi có thông báo ngắn và log cục bộ.
-Các route ghi nhận chỉ request từ chính app; không mở endpoint chạy shell hoặc nhận đường dẫn filesystem tùy ý.
-
-### Dữ liệu và giao diện tối thiểu
-
-- **DatasetSnapshot:** mã tài sản, khoảng ngày, nguồn, thời điểm tải, cách điều chỉnh và checksum.
-- **ExperimentDraft:** tiêu đề, giả thuyết, snapshot, chiến lược/tham số, kỳ đánh giá và giả định vốn/chi phí.
-- **Run:** bản cấu hình đóng băng, snapshot ID, phiên bản engine/code, trạng thái, artifact và liên kết bản gốc nếu nhân bản.
-- **ResearchNote:** run ID và ghi chú người dùng.
-- **AIExplanation:** run ID, câu hỏi, nội dung trả lời, tham chiếu bằng chứng, model/thời điểm/usage nếu có.
-
-API nội bộ theo tài nguyên: `/api/datasets`, `/api/experiments`, `/api/runs`,
-`/api/runs/{id}/results`, `/api/runs/{id}/notes`, `/api/runs/{id}/explanations`.
-Tạo run trả ID + trạng thái; web kiểm tra trạng thái qua GET.
-Server tự giải quyết ID sang tệp được phép. Schema response của kết quả dùng chung cho UI và gói bằng chứng AI.
-Wire schema chi tiết sẽ chốt trong task hợp đồng trước khi nối form và worker.
-
-### Nguyên tắc kiểm chứng
-
-- Snapshot mới chỉ sẵn sàng sau khi đủ lịch phiên, giá hợp lệ và checksum hoàn tất. Lần tải lỗi không thành dataset sử dụng được.
-- Thay tham số hoặc kỳ dữ liệu tạo run mới. Kết quả và giả thuyết cũ không bị sửa theo run mới.
-- So sánh hai chiến lược chỉ khi cùng snapshot, kỳ, vốn và chi phí; khác điều kiện thì chỉ xem riêng, không xếp hạng chung.
-- Phân biệt giai đoạn đánh giá đã xem. Nhân bản sau khi xem kết quả không biến dữ liệu đó thành holdout mới.
-- AI nhận số liệu, giả định, audit và giao dịch liên quan; không tự tính lại P&L bằng văn bản.
-- Kết luận AI có liên kết bằng chứng để kiểm tra; thiếu bằng chứng thì nói thiếu. Giao diện tách số liệu engine và diễn giải AI.
-- Chưa cấu hình AI vẫn chạy toàn bộ nghiên cứu. API AI lỗi không làm mất kết quả backtest.
-
-## Thứ tự triển khai và nghiệm thu
-
-Chi tiết công việc, phụ thuộc và kiểm tra tại [todo.md](todo.md).
-
-1. Chuẩn hóa lõi và snapshot; chứng minh thí nghiệm SPY cũ giữ nguyên số liệu.
-2. Mở thư viện web để đọc bằng chứng và ghi chú của pilot hiện tại.
-3. Tạo/chạy thí nghiệm từ form; lưu trạng thái và cấu hình từng lần.
-4. Bổ sung QQQ và so sánh các biến thể với cùng điều kiện.
-5. Thêm AI giải thích sau khi chốt model/endpoint/ngân sách.
-6. Kiểm tra trọn luồng, restart và hướng dẫn khởi động một lệnh.
-
-**V1 đạt khi:** từ trình duyệt có thể chọn dữ liệu, mô tả giả thuyết, chạy SMA với tham số hợp lệ,
-đối chiếu buy-and-hold, mở một giao dịch để kiểm tra, ghi chú và mở lại sau restart.
-Khi AI đã được cấu hình, người dùng nhận được giải thích có nguồn từ chính run đó.
-Số liệu pilot không thay đổi ngoài dung sai serialization đã nêu; audit và replay đều đạt.
-
-## Nguồn kỹ thuật
-
-- [Thí nghiệm và đánh giá hiện tại](../docs/evaluation.md).
-- [FastAPI: Jinja2 templates](https://fastapi.tiangolo.com/advanced/templates/).
-- [FastAPI: lưu ý về tác vụ tính toán nền](https://fastapi.tiangolo.com/tutorial/background-tasks/).
-- [Python 3.12: SQLite](https://docs.python.org/3.12/library/sqlite3.html).
+Không nới gate sau khi xem kết quả. Bước tiếp theo là viết giả thuyết rủi ro mới trước khi chạy,
+ví dụ sizing theo volatility hoặc stop/risk budget có lý do kinh tế. Mọi biến thể phải dùng run mới và
+2018–2025 là dữ liệu đã quan sát. Chỉ khi một rule mới qua gate mới tạo config holdout, mở holdout đúng một lần,
+rồi shadow-paper tối thiểu tám tuần trước khi thảo luận broker thật.

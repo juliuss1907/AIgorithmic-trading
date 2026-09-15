@@ -104,3 +104,30 @@ def test_dashboard_collections_expose_the_audit_chain(service):
     assert len(service.list_intents(account["id"])) == 1
     assert len(service.list_fills(account["id"])) == 1
     assert len(service.list_ledger(account["id"])) == 2
+
+
+def test_promoted_account_requires_selected_candidate_and_passing_holdout(service):
+    class Gate:
+        def __init__(self, state):
+            self.state = state
+
+        def get(self):
+            return self.state
+
+    strategy = SmaStrategySpec(fast_window=1, slow_window=2)
+    with pytest.raises(ValueError, match="passing holdout"):
+        service.create_promoted_account(
+            Gate({"selected": "sma_crossover", "holdout": None}), strategy,
+            dataset_snapshot_id=SNAPSHOT,
+        )
+    with pytest.raises(ValueError, match="selected strategy"):
+        service.create_promoted_account(
+            Gate({"selected": "donchian_breakout", "holdout": {"passed": True}}), strategy,
+            dataset_snapshot_id=SNAPSHOT,
+        )
+
+    created = service.create_promoted_account(
+        Gate({"selected": "sma_crossover", "holdout": {"passed": True}}), strategy,
+        dataset_snapshot_id=SNAPSHOT,
+    )
+    assert created["status"] == "active"

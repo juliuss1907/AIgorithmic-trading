@@ -12,11 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.requests import Request
 
 from lab.contracts import DatasetRequest, ExperimentSpec
+from lab.ai import build_evidence_packet
 from lab.comparison import compare_runs, load_experiment, validate_clone_config
 from lab.data import DATA
 from lab.dataset_jobs import DatasetJobQueue
 from lab.datasets import DatasetCatalog
 from lab.experiment import read_config
+from lab.evaluation import PromotionStore
 from lab.jobs import IdempotencyConflict, JobQueue
 from lab.paper import PaperTradingService
 from lab.store import ArtifactChanged, RunStore
@@ -41,10 +43,12 @@ def create_app(database=None, runs_dir=None, data_dir=None):
     )
     dataset_queue = DatasetJobQueue(store.database, catalog)
     paper = PaperTradingService(store.database)
+    promotion = PromotionStore(store.database.parent / "btc-promotion.sqlite3")
     app.state.store = store
     app.state.queue = queue
     app.state.dataset_queue = dataset_queue
     app.state.paper = paper
+    app.state.promotion = promotion
     app.state.sync_result = store.sync_runs()
     web_root = Path(__file__).with_name("web_assets")
     templates = Jinja2Templates(directory=web_root / "templates")
@@ -86,8 +90,12 @@ def create_app(database=None, runs_dir=None, data_dir=None):
 
     @app.get("/paper")
     def paper_accounts_page(request: Request):
+        try:
+            gate = promotion.get()
+        except KeyError:
+            gate = None
         return templates.TemplateResponse(
-            request, "paper.html", {"accounts": paper.list_accounts()}
+            request, "paper.html", {"accounts": paper.list_accounts(), "gate": gate}
         )
 
     @app.get("/paper/{account_id}")
@@ -238,6 +246,13 @@ def create_app(database=None, runs_dir=None, data_dir=None):
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.get("/api/paper/accounts/{account_id}/evidence")
+    def paper_evidence_api(account_id: str):
+        try:
+            return build_evidence_packet(paper, account_id).model_dump(mode="json")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/api/paper/accounts/{account_id}/halt")
     def paper_halt_api(account_id: str):
         try:
@@ -248,6 +263,13 @@ def create_app(database=None, runs_dir=None, data_dir=None):
     @app.get("/api/ai/status")
     def ai_status_api():
         return {"status": "disabled", "provider": "not-configured", "advisory_only": True}
+
+    @app.get("/api/promotion")
+    def promotion_api():
+        try:
+            return promotion.get()
+        except KeyError:
+            return {"status": "not_frozen", "selected": None, "scores": []}
 
     @app.post("/api/dataset-jobs", status_code=202)
     def create_dataset_job(

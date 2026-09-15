@@ -12,6 +12,16 @@
   <div><p class="eyebrow">Accounts</p><h2>{{ accounts|length }} tài khoản mô phỏng</h2></div>
   <span class="safety-note">Không kết nối API đặt lệnh thật</span>
 </section>
+{% if gate %}
+<section class="gate-panel" aria-labelledby="gate-heading">
+  <div><p class="eyebrow">Promotion gate · đã khóa</p><h2 id="gate-heading">{{ 'Giữ tiền mặt' if gate.status == 'stay_cash' else 'Ứng viên: ' ~ gate.selected }}</h2></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Chiến lược</th><th>Năm có lãi</th><th>Stress return</th><th>Drawdown tệ nhất</th><th>Kết quả</th></tr></thead>
+    <tbody>{% for score in gate.scores %}<tr><td>{{ score.name }}</td><td>{{ score.profitable_folds }}/8</td><td>{{ "{:.2%}".format(score.aggregate_stress_return) }}</td><td class="negative">{{ "{:.2%}".format(score.worst_drawdown) }}</td><td>{{ 'Qua' if score.passed else 'Không qua' }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% if gate.status == 'stay_cash' %}<p class="muted-copy">Không chiến lược nào đạt trần drawdown 20%. Holdout chưa mở; bot không được tạo vị thế.</p>{% endif %}
+</section>
+{% endif %}
 {% if accounts %}
 <div class="paper-list">
   {% for account in accounts %}

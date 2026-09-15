@@ -1,7 +1,10 @@
 import pytest
 from pydantic import ValidationError
 
-from lab.ai import Copilot, DisabledAIProvider, EvidencePacket
+import pandas as pd
+
+from lab.ai import Copilot, DisabledAIProvider, EvidencePacket, build_evidence_packet
+from lab.paper import PaperTradingService
 
 
 def packet():
@@ -56,3 +59,27 @@ def test_provider_output_is_bounded():
 
     with pytest.raises(ValueError, match="4,000"):
         Copilot(Provider()).explain(packet())
+
+
+def test_evidence_packet_is_built_from_persisted_paper_evidence(tmp_path):
+    service = PaperTradingService(tmp_path / "paper.sqlite3")
+    account = service.create_account(
+        {"family": "sma_crossover", "fast_window": 1, "slow_window": 2},
+        dataset_snapshot_id="a" * 64,
+    )
+    index = pd.date_range("2025-01-01", periods=2)
+    close = pd.Series([100., 120], index=index)
+    frame = pd.DataFrame({
+        "open": close, "high": close + 1, "low": close - 1,
+        "close": close, "volume": 1,
+    }, index=index)
+    service.run_cycle(
+        account["id"], frame, bid=100, ask=101, dataset_snapshot_id="b" * 64,
+    )
+
+    evidence = build_evidence_packet(service, account["id"])
+
+    assert evidence.dataset_snapshot_id == "b" * 64
+    assert evidence.latest_cycle_id is not None
+    assert evidence.indicator_evidence["sma_fast"] == 120
+    assert len(evidence.recent_fills) == 1

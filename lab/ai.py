@@ -64,3 +64,24 @@ class Copilot:
         return CopilotResponse(
             status="available", provider=self.provider.name, text=text,
         )
+
+
+def build_evidence_packet(paper_service, account_id):
+    account = paper_service.get_account(account_id)
+    cycles = paper_service.list_cycles(account_id)
+    latest = cycles[0] if cycles else None
+    fills = paper_service.list_fills(account_id)[-10:]
+    return EvidencePacket(
+        as_of_utc=latest["created_at"] if latest else account["updated_at"],
+        account_id=account_id,
+        strategy=account["strategy"],
+        dataset_snapshot_id=(
+            latest["dataset_snapshot_id"] if latest else account["dataset_snapshot_id"]
+        ),
+        indicator_evidence=latest["evidence"] if latest else {},
+        target_weight=latest["signal"] if latest else 0,
+        account_status=account["status"],
+        drawdown=account["drawdown"],
+        latest_cycle_id=latest["id"] if latest else None,
+        recent_fills=tuple(fills),
+    )
