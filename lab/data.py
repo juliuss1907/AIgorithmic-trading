@@ -54,11 +54,16 @@ def adjust(raw):
     return result
 
 
+def _date_spec(config):
+    return getattr(config, "data", config)
+
+
 def _download_yahoo(config):
     import yfinance as yf
 
+    dates = _date_spec(config)
     return yf.Ticker(config.symbol).history(
-        start=str(config.data.start), end=str(config.data.end_exclusive),
+        start=str(dates.start), end=str(dates.end_exclusive),
         interval="1d", auto_adjust=False, actions=True, repair=False,
         raise_errors=True, timeout=30,
     )
@@ -96,10 +101,11 @@ def save_snapshot(raw, config, catalog=None, retrieved_at_utc=None):
 
     catalog = catalog or DatasetCatalog()
     raw = _normalize(raw)
-    end = str(config.data.end_exclusive - timedelta(days=1))
-    validate(raw, str(config.data.start), end)
+    dates = _date_spec(config)
+    end = str(dates.end_exclusive - timedelta(days=1))
+    validate(raw, str(dates.start), end)
     adjusted = adjust(raw)
-    validate(adjusted, str(config.data.start), end)
+    validate(adjusted, str(dates.start), end)
     raw_content = _csv_bytes(raw)
     adjusted_content = _csv_bytes(adjusted)
     raw_hash = hashlib.sha256(raw_content).hexdigest()
@@ -107,7 +113,7 @@ def save_snapshot(raw, config, catalog=None, retrieved_at_utc=None):
     manifest = {
         "source": "Yahoo Finance via yfinance", "symbol": config.symbol,
         "retrieved_at_utc": retrieved_at_utc or datetime.now(timezone.utc).isoformat(),
-        "start": str(config.data.start), "end": end, "rows": len(raw),
+        "start": str(dates.start), "end": end, "rows": len(raw),
         "adjustment": "OHLC * (Adj Close / Close); synthetic total-return prices",
         "dividends": "Implicit in adjusted prices; never credited a second time",
         "files": {"raw.csv": raw_hash, "adjusted.csv": adjusted_hash},

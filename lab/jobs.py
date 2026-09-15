@@ -284,11 +284,17 @@ def main():
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     args = parser.parse_args()
     worker = JobWorker()
+    from lab.dataset_jobs import DatasetJobQueue, DatasetWorker
+    dataset_worker = DatasetWorker(
+        DatasetJobQueue(worker.queue.database, worker.queue.catalog)
+    )
     if args.once:
-        worker.run_once()
+        dataset_worker.run_once() or worker.run_once()
     else:
         try:
-            worker.run_forever(args.poll_seconds)
+            while True:
+                if dataset_worker.run_once() is None and worker.run_once() is None:
+                    time.sleep(args.poll_seconds)
         except KeyboardInterrupt:
             pass
 

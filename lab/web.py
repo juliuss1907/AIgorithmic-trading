@@ -10,8 +10,9 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.requests import Request
 
-from lab.contracts import ExperimentSpec
+from lab.contracts import DatasetRequest, ExperimentSpec
 from lab.data import DATA
+from lab.dataset_jobs import DatasetJobQueue
 from lab.datasets import DatasetCatalog
 from lab.experiment import read_config
 from lab.jobs import IdempotencyConflict, JobQueue
@@ -35,8 +36,10 @@ def create_app(database=None, runs_dir=None, data_dir=None):
         runs_dir=store.runs_dir,
         catalog=catalog,
     )
+    dataset_queue = DatasetJobQueue(store.database, catalog)
     app.state.store = store
     app.state.queue = queue
+    app.state.dataset_queue = dataset_queue
     app.state.sync_result = store.sync_runs()
     web_root = Path(__file__).with_name("web_assets")
     templates = Jinja2Templates(directory=web_root / "templates")
@@ -85,6 +88,38 @@ def create_app(database=None, runs_dir=None, data_dir=None):
     @app.get("/api/runs")
     def runs_api():
         return store.list_runs()
+
+    @app.get("/api/datasets")
+    def datasets_api():
+        return [item.model_dump(mode="json") for item in catalog.list_ready()]
+
+    @app.post("/api/dataset-jobs", status_code=202)
+    def create_dataset_job(
+        request: DatasetRequest, idempotency_key: str | None = Header(default=None)
+    ):
+        try:
+            return dataset_queue.enqueue(
+                request, entry_point="web_api", idempotency_key=idempotency_key
+            )
+        except ValueError as exc:
+            status = 409 if "different dataset request" in str(exc) else 422
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    @app.get("/api/dataset-jobs/{job_id}")
+    def dataset_job_api(job_id: str):
+        try:
+            return dataset_queue.get(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/dataset-jobs/{job_id}/retry", status_code=202)
+    def retry_dataset_job(job_id: str):
+        try:
+            return dataset_queue.retry(job_id, entry_point="web_api_retry")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/jobs")
     def jobs_api():

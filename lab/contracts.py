@@ -19,6 +19,17 @@ class DataSpec(BaseModel):
         return self
 
 
+class DatasetRequest(DataSpec):
+    """A bounded market-data download; no arbitrary ticker or interval."""
+
+    symbol: Literal["SPY", "QQQ"]
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        return value.strip().upper()
+
+
 class SmaStrategySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
