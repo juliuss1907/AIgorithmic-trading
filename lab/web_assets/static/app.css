@@ -82,7 +82,7 @@ button:disabled { cursor: wait; opacity: .55; }
 .button-link { display: inline-block; padding: 11px 18px; color: white; background: var(--green); border-radius: 8px; text-decoration: none; font-weight: 750; }
 .form-hero { padding: 48px 0 54px; max-width: 900px; }
 .form-hero h1 { font-size: clamp(45px, 6vw, 76px); }
-.lineage-note { margin: -24px 0 32px; padding: 18px 20px; display: grid; gap: 4px; background: var(--green-soft); border-left: 4px solid var(--green); }
+.lineage-note { margin: -24px 0 32px; padding: 18px 20px; display: grid; gap: 4px; background: var(--green-soft); border: 1px solid var(--line); border-radius: 10px; }
 .lineage-note span { color: var(--muted); }
 .experiment-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 22px; align-items: start; }
 .form-stack { display: grid; gap: 16px; }
@@ -107,8 +107,8 @@ input:focus, select:focus { outline: 3px solid rgba(15, 107, 79, .16); border-co
 .compare-hero { padding-bottom: 30px; }
 .compare-picker { padding: 22px; display: grid; grid-template-columns: 1fr 1fr auto; gap: 16px; align-items: end; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
 .compare-picker label { margin-top: 0; }
-.compatibility { margin: 28px 0; padding: 18px 20px; display: grid; gap: 3px; border-left: 4px solid var(--green); background: var(--green-soft); }
-.compatibility.incompatible { border-left-color: var(--orange); background: #fff7e8; }
+.compatibility { margin: 28px 0; padding: 18px 20px; display: grid; gap: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--green-soft); }
+.compatibility.incompatible { background: #fff7e8; }
 .compatibility span { color: var(--muted); }
 .difference-list { margin: 30px 0; }
 .difference-list ul { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }

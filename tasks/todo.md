@@ -90,9 +90,9 @@ báo cáo lấy tên/tham số/vốn/kỳ từ cấu hình. Chốt typed request
 **Phụ thuộc:** 5.
 **Nội dung:** nhân bản cấu hình thành giả thuyết mới; so sánh hai run cùng điều kiện.
 
-- [ ] Bản nhân có liên kết cha và ghi chú mới; không sửa kết quả bản gốc.
-- [ ] Chỉ so sánh chung khi khớp snapshot/kỳ/vốn/chi phí; lệch điều kiện được giải thích rõ.
-- [ ] Nhãn giai đoạn đã xem được giữ khi nhân bản; không tự gọi lại nó là holdout mới.
+- [x] Bản nhân có liên kết cha và ghi chú mới; không sửa kết quả bản gốc.
+- [x] Chỉ so sánh chung khi khớp snapshot/kỳ/vốn/chi phí; lệch điều kiện được giải thích rõ.
+- [x] Nhãn giai đoạn đã xem được giữ khi nhân bản; không tự gọi lại nó là holdout mới.
 
 **Kiểm tra:** matrix điều kiện tương thích, browser compare và lineage sau restart.
 **Vùng tệp:** service compare, routes, template, store và tests; tối đa 5 tệp chính.

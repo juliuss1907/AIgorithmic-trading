@@ -52,6 +52,11 @@ trước khi phục vụ. App không nhận đường dẫn file tùy ý từ UR
 `2014-01-01` đến hết `2025-12-31`, giống pilot SPY. Trang trạng thái chỉ công bố snapshot sau khi
 đã kiểm đủ lịch XNYS và checksum; khi hoàn tất, QQQ tự xuất hiện trong form thí nghiệm.
 
+Trên trang chi tiết run, chọn **Nhân bản thí nghiệm** để giữ nguyên dataset, kỳ, vốn và chi phí,
+viết giả thuyết mới rồi đổi tham số SMA. Khi worker hoàn tất, trang job dẫn thẳng tới so sánh cha–con.
+Bạn cũng có thể chọn **So sánh run** từ thư viện để đặt hai run bất kỳ cạnh nhau. Nếu điều kiện khác,
+app vẫn hiện số liệu tham khảo nhưng ghi rõ **Không xếp hạng** và không tính delta.
+
 API `POST /api/jobs` nhận đúng schema của `experiment.json`; `POST /api/dataset-jobs` nhận yêu cầu
 tải SPY/QQQ. Cả hai trả job ID ngay. Worker chạy riêng, xử lý dataset job trước rồi đến backtest job:
 
@@ -62,6 +67,7 @@ uv run --frozen python -m lab.jobs
 Trạng thái xem tại `GET /api/jobs/{job_id}` hoặc `GET /api/dataset-jobs/{job_id}`. Nếu worker dừng
 giữa chừng, lần khởi động tiếp theo đánh dấu job cũ là `interrupted`; retry tạo job ID và output mới
 thay vì ghi tiếp kết quả cũ. Log JSONL nằm trong `state/job-logs/` và `state/dataset-job-logs/`.
+API đọc `GET /api/compare?left_id=…&right_id=…` trả điều kiện khác nhau và delta từng case khi hợp lệ.
 
 ## Cài lại trên máy khác
 

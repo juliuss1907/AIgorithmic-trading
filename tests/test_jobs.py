@@ -250,10 +250,17 @@ def test_valid_clone_runs_with_frozen_conditions_and_persisted_parent(job_lab):
         headers={"Idempotency-Key": "valid-clone-flow"},
     )
     completed = JobWorker(queue).run_once()
-    child = RunStore(queue.database, queue.runs_dir).get_run(completed["result_run_id"])
+    store = RunStore(queue.database, queue.runs_dir)
+    child = store.get_run(completed["result_run_id"])
+    store.add_note(parent["result_run_id"], "Parent observation")
+    store.add_note(child["id"], "Child observation")
+    restarted_store = RunStore(queue.database, queue.runs_dir)
     status_page = client.get(f"/jobs/{created.json()['id']}")
 
     assert created.status_code == 202
     assert child["parent_run_id"] == parent["result_run_id"]
+    assert restarted_store.get_run(child["id"])["parent_run_id"] == parent["result_run_id"]
+    assert restarted_store.list_notes(parent["result_run_id"])[0]["body"] == "Parent observation"
+    assert restarted_store.list_notes(child["id"])[0]["body"] == "Child observation"
     assert "So sánh với run cha" in status_page.text
     assert parent["result_run_id"] in status_page.text

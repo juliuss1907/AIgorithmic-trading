@@ -42,6 +42,12 @@ luôn có job/output ID mới. Mỗi event `queued/started/completed/failed/inte
 Dataset job áp dụng cùng quy tắc restart/retry và ghi vào `state/dataset-job-logs/`; lỗi tải hoặc thiếu
 phiên không tạo bản ghi `ready` và không tác động snapshot đã tồn tại.
 
+Clone là một experiment mới có `parent_run_id`; provenance và bảng `runs` cùng giữ liên kết này.
+Dataset, symbol, khoảng dữ liệu, kỳ, vốn và chi phí của clone phải khớp run cha ở cả UI lẫn API.
+Các kỳ từ run cha được ghi trong `prior_observed_periods`, nên không được trình bày lại như holdout mới.
+Ghi chú vẫn thuộc riêng từng run. Comparison chỉ tính delta khi symbol, snapshot, kỳ, vốn và chi phí
+giống nhau; nếu không, nó trả danh sách khác biệt và số liệu hai bên nhưng không xếp hạng.
+
 Các câu hỏi vận hành mà telemetry phải trả lời: job nào đang chờ/chạy; job lỗi ở loại lỗi nào; một job
 đã tạo ra run nào; và worker restart đã ngắt những job nào. Không ghi toàn bộ config hay dữ liệu giá vào log.
 

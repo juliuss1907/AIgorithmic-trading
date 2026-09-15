@@ -60,7 +60,7 @@ def _run_card(run):
 
 def compare_runs(store, left_id, right_id):
     if left_id == right_id:
-        raise ValueError("Choose two different runs")
+        raise ValueError("Hãy chọn hai run khác nhau")
     left_run, left_summary, left_config = _context(store, left_id)
     right_run, right_summary, right_config = _context(store, right_id)
     left_conditions = _conditions(left_run, left_config)

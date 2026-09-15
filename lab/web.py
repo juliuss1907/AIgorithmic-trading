@@ -8,8 +8,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, ConfigDict, Field
-from pydantic_core import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.requests import Request
 
 from lab.contracts import DatasetRequest, ExperimentSpec
