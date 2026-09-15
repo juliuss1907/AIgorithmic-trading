@@ -5,7 +5,7 @@
 Release 0.1 hỗ trợ hợp đồng SPY/QQQ, dữ liệu ngày và chiến lược SMA crossover, giữ vị thế mua
 hoặc tiền mặt. Pilot hiện tại là SPY SMA 20/50 với vốn giả lập 10.000 USD.
 Không tối ưu, không short, không đòn bẩy, không đặt lệnh thật. Web app chỉ bind loopback và hiện
-là thư viện đọc run; form tạo run và worker được triển khai ở các task kế tiếp.
+là workbench cục bộ để quản lý snapshot, tạo thí nghiệm và đọc lại bằng chứng.
 
 ## Luồng dữ liệu
 
@@ -23,7 +23,9 @@ Yahoo Finance → snapshot ID + CSV gốc + giá đã điều chỉnh + manifest
               Web library → chỉ tiêu/trade/note SQLite
 ```
 
-`fetch` là tác vụ mạng tách biệt; snapshot chỉ được công bố `ready` sau khi đủ file và qua validation.
+`fetch` là tác vụ mạng tách biệt; từ web nó được đưa vào bảng `dataset_jobs` riêng để trạng thái tải
+không lẫn với backtest. Cùng một worker ưu tiên dataset job rồi mới claim run job. Snapshot chỉ được
+công bố `ready` sau khi đủ file và qua validation.
 Đăng ký lặp cùng nội dung là idempotent. `run` dùng snapshot đã chọn và gọi trực tiếp
 `GlobalEquityEngine.run_backtest` của Vibe-Trading, qua loader bộ nhớ nhỏ.
 Không gọi loader dự phòng hoặc benchmark bên ngoài. Không cần nạp cấu hình broker/AI.
@@ -37,6 +39,8 @@ Worker riêng claim một job bằng transaction SQLite, chạy tuần tự, t�
 đánh dấu `completed`. Run đang `running` khi worker khởi động lại được chuyển thành `interrupted`; retry
 luôn có job/output ID mới. Mỗi event `queued/started/completed/failed/interrupted` là một dòng JSON có
 `request_id` và `entry_point` trong `state/job-logs/<job-id>.jsonl` đồng thời được in ra stdout.
+Dataset job áp dụng cùng quy tắc restart/retry và ghi vào `state/dataset-job-logs/`; lỗi tải hoặc thiếu
+phiên không tạo bản ghi `ready` và không tác động snapshot đã tồn tại.
 
 Các câu hỏi vận hành mà telemetry phải trả lời: job nào đang chờ/chạy; job lỗi ở loại lỗi nào; một job
 đã tạo ra run nào; và worker restart đã ngắt những job nào. Không ghi toàn bộ config hay dữ liệu giá vào log.

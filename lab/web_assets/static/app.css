@@ -19,6 +19,8 @@ a { color: inherit; }
 .brand-mark { display: grid; place-items: center; width: 34px; height: 34px; color: #fff; background: var(--ink); border-radius: 8px; font-size: 12px; letter-spacing: .08em; }
 .research-badge, .status, .complete { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .research-badge { color: var(--muted); }
+.top-nav { display: flex; align-items: center; gap: 24px; font-size: 13px; font-weight: 700; }
+.top-nav a { text-underline-offset: 4px; }
 main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 80px; }
 .hero { padding: 96px 0 72px; max-width: 850px; }
 .eyebrow { margin: 0 0 10px; color: var(--green); font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
@@ -91,6 +93,8 @@ input:focus, select:focus { outline: 3px solid rgba(15, 107, 79, .16); border-co
 .review-card ul { margin: 24px 0; padding-left: 20px; color: #c7d1cd; }
 .review-card button { width: 100%; background: var(--orange); }
 .field-error, .submit-error { display: block; min-height: 18px; margin-top: 4px; color: var(--red); font-size: 12px; }
+.download-note { width: min(680px, 100%); margin-top: 28px; padding: 24px 0; border-top: 1px solid var(--line); }
+.download-note p { color: var(--muted); }
 .review-card .submit-error { color: #ffc2ac; }
 .job-state { min-height: 650px; padding: 80px 0; text-align: center; }
 .job-state h1 { margin: 28px 0 20px; font-size: clamp(46px, 7vw, 82px); }

@@ -71,6 +71,22 @@ def create_app(database=None, runs_dir=None, data_dir=None):
             {"datasets": datasets, "defaults": read_config().to_json_dict()},
         )
 
+    @app.get("/datasets")
+    def datasets_page(request: Request):
+        snapshots = [item.model_dump(mode="json") for item in catalog.list_ready()]
+        return templates.TemplateResponse(
+            request, "datasets.html",
+            {"datasets": snapshots, "ready_symbols": {item["symbol"] for item in snapshots}},
+        )
+
+    @app.get("/dataset-jobs/{job_id}")
+    def dataset_job_page(request: Request, job_id: str):
+        try:
+            job = dataset_queue.get(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return templates.TemplateResponse(request, "dataset-job.html", {"job": job})
+
     @app.get("/jobs/{job_id}")
     def job_page(request: Request, job_id: str):
         try:

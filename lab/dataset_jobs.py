@@ -72,11 +72,24 @@ class DatasetJobQueue:
                     raise ValueError("Idempotency-Key belongs to a different dataset request")
                 return self._decode(existing)
         job_id = uuid.uuid4().hex
-        with self._connect() as connection:
-            connection.execute(
-                "INSERT INTO dataset_jobs (id,entry_point,idempotency_key,status,request_json,created_at) "
-                "VALUES (?,?,?,?,?,?)", (job_id, entry_point, idempotency_key, "queued", payload, now())
-            )
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    "INSERT INTO dataset_jobs "
+                    "(id,entry_point,idempotency_key,status,request_json,created_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (job_id, entry_point, idempotency_key, "queued", payload, now()),
+                )
+        except sqlite3.IntegrityError:
+            if idempotency_key is None:
+                raise
+            with self._connect() as connection:
+                existing = connection.execute(
+                    "SELECT * FROM dataset_jobs WHERE idempotency_key = ?", (idempotency_key,)
+                ).fetchone()
+            if existing is None or existing["request_json"] != payload:
+                raise ValueError("Idempotency-Key belongs to a different dataset request")
+            return self._decode(existing)
         job = self.get(job_id)
         self._event(job, "dataset_job_queued", symbol=request.symbol, status="queued")
         return job
@@ -115,21 +128,25 @@ class DatasetJobQueue:
 
     def complete(self, job_id, dataset_id):
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 "UPDATE dataset_jobs SET status='completed',result_dataset_id=?,finished_at=? "
                 "WHERE id=? AND status='running'", (dataset_id, now(), job_id),
             )
+        if cursor.rowcount != 1:
+            raise ValueError("Only a running dataset job can complete")
         job = self.get(job_id)
         self._event(job, "dataset_job_completed", status="completed", dataset_id=dataset_id)
         return job
 
     def fail(self, job_id, error):
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 "UPDATE dataset_jobs SET status='failed',error_type=?,error_message=?,finished_at=? "
                 "WHERE id=? AND status='running'",
                 (type(error).__name__, str(error)[:500], now(), job_id),
             )
+        if cursor.rowcount != 1:
+            raise ValueError("Only a running dataset job can fail")
         job = self.get(job_id)
         self._event(job, "dataset_job_failed", level="error", status="failed",
                     error_type=type(error).__name__)
@@ -145,6 +162,10 @@ class DatasetJobQueue:
                 "error_message='Worker stopped before completion',finished_at=? WHERE id=?",
                 [(now(), job_id) for job_id in ids],
             )
+        for job_id in ids:
+            job = self.get(job_id)
+            self._event(job, "dataset_job_interrupted", level="error", status="interrupted",
+                        error_type="WorkerRestart")
         return ids
 
     def retry(self, job_id, entry_point):

@@ -48,16 +48,20 @@ SMA/vốn/giai đoạn rồi review rule trước khi đưa vào hàng đợi. A
 `state/lab.sqlite3`. Chỉ ghi chú được thay đổi; summary, provenance và artifact được kiểm checksum
 trước khi phục vụ. App không nhận đường dẫn file tùy ý từ URL.
 
-API `POST /api/jobs` nhận đúng schema của `experiment.json` và trả job ID ngay. Worker chạy riêng,
-mỗi lần chỉ xử lý một job:
+Để thêm QQQ, mở **Dữ liệu** rồi chọn **Thêm QQQ**. Release 0.1 cố định khoảng tải
+`2014-01-01` đến hết `2025-12-31`, giống pilot SPY. Trang trạng thái chỉ công bố snapshot sau khi
+đã kiểm đủ lịch XNYS và checksum; khi hoàn tất, QQQ tự xuất hiện trong form thí nghiệm.
+
+API `POST /api/jobs` nhận đúng schema của `experiment.json`; `POST /api/dataset-jobs` nhận yêu cầu
+tải SPY/QQQ. Cả hai trả job ID ngay. Worker chạy riêng, xử lý dataset job trước rồi đến backtest job:
 
 ```bash
 uv run --frozen python -m lab.jobs
 ```
 
-Trạng thái xem tại `GET /api/jobs/{job_id}`. Nếu worker dừng giữa chừng, lần khởi động tiếp theo
-đánh dấu job cũ là `interrupted`; retry tạo job ID và thư mục output mới thay vì ghi tiếp kết quả cũ.
-Log JSONL theo job nằm trong `state/job-logs/`.
+Trạng thái xem tại `GET /api/jobs/{job_id}` hoặc `GET /api/dataset-jobs/{job_id}`. Nếu worker dừng
+giữa chừng, lần khởi động tiếp theo đánh dấu job cũ là `interrupted`; retry tạo job ID và output mới
+thay vì ghi tiếp kết quả cũ. Log JSONL nằm trong `state/job-logs/` và `state/dataset-job-logs/`.
 
 ## Cài lại trên máy khác
 
@@ -102,6 +106,7 @@ Bạn có thể hỏi: “Dùng dữ liệu và mã trong dự án, giải thíc
 | `lab/strategy.py` | Quy tắc tạo mục tiêu mua/giữ tiền mặt |
 | `lab/data.py` | Tải, điều chỉnh, kiểm tra lịch và checksum dữ liệu |
 | `lab/datasets.py` | Catalog SQLite và snapshot ID theo nội dung |
+| `lab/dataset_jobs.py` | Hàng đợi tải dữ liệu, retry và log trạng thái |
 | `lab/experiment.py` | Gọi engine, kiểm tra từng lệnh và tính chỉ tiêu |
 | `lab/report.py` | Viết báo cáo và biểu đồ từ kết quả đã lưu |
 | `lab/web.py` | Web library/API cục bộ để đọc bằng chứng và ghi chú |

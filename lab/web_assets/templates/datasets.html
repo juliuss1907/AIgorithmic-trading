@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Dữ liệu · System Trading Lab{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/">Thư viện</a><span>/</span><span>Dữ liệu</span></nav>
+<section class="form-hero">
+  <p class="eyebrow">Dataset registry</p>
+  <h1>Dữ liệu trước, giả thuyết sau.</h1>
+  <p class="lede">Mỗi snapshot được khóa bằng checksum và chỉ xuất hiện ở đây sau khi đủ lịch giao dịch.</p>
+</section>
+
+<section class="section-head">
+  <div><p class="eyebrow">Ready snapshots</p><h2>{{ datasets|length }} bộ dữ liệu có thể replay</h2></div>
+  {% if 'QQQ' not in ready_symbols %}<button id="download-qqq" type="button">Thêm QQQ</button>{% endif %}
+</section>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Symbol</th><th>Khoảng dữ liệu</th><th>Số phiên</th><th>Ngày tải UTC</th><th>Snapshot ID</th></tr></thead>
+    <tbody>
+    {% for item in datasets %}
+      <tr><td><span class="symbol">{{ item.symbol }}</span></td><td>{{ item.start }} → {{ item.end }}</td><td>{{ item.rows }}</td><td>{{ item.retrieved_at_utc[:19] }}</td><td><code title="{{ item.id }}">{{ item.id[:12] }}</code></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if 'QQQ' not in ready_symbols %}
+<section class="download-note">
+  <h2>Snapshot QQQ đầu tiên</h2>
+  <p><strong>2014-01-01 → 2025-12-31.</strong> Khoảng này khớp pilot SPY để hai thí nghiệm có cùng chân trời dữ liệu. Tải chạy ở worker và không thay đổi snapshot SPY.</p>
+  <p id="download-error" class="submit-error" role="alert"></p>
+</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}{% if 'QQQ' not in ready_symbols %}<script>
+const button = document.querySelector('#download-qqq');
+const key = crypto.randomUUID();
+button.addEventListener('click', async () => {
+  button.disabled = true; button.textContent = 'Đang đưa vào hàng đợi…';
+  const response = await fetch('/api/dataset-jobs', {
+    method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': key},
+    body: JSON.stringify({symbol: 'QQQ', start: '2014-01-01', end_exclusive: '2026-01-01'})
+  });
+  if (response.ok) { const job = await response.json(); window.location.assign(`/dataset-jobs/${job.id}`); return; }
+  document.querySelector('#download-error').textContent = 'Không tạo được job tải QQQ. Kiểm tra cấu hình và thử lại.';
+  button.disabled = false; button.textContent = 'Thêm QQQ';
+});
+</script>{% endif %}{% endblock %}

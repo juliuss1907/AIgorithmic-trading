@@ -21,6 +21,15 @@ def bars(offset=0):
     }, index=index)
 
 
+def bars_for(spec, offset=0):
+    index = sessions(str(spec.start), str(spec.end_exclusive))
+    close = pd.Series(range(100 + offset, 100 + offset + len(index)), index=index, dtype=float)
+    return pd.DataFrame({
+        "Open": close - .5, "High": close + 1, "Low": close - 1,
+        "Close": close, "Adj Close": close * .9, "Volume": 1000,
+    }, index=index)
+
+
 def request(symbol="QQQ"):
     return DatasetRequest.model_validate({
         "symbol": symbol, "start": "2025-01-02", "end_exclusive": "2025-01-11"
@@ -115,6 +124,9 @@ def test_dataset_job_restart_and_retry_gets_a_new_id(dataset_lab):
 
     assert queue.get(original["id"])["status"] == "interrupted"
     assert retry["id"] != original["id"]
+    assert "dataset_job_interrupted" in (
+        database.parent / "dataset-job-logs" / f"{original['id']}.jsonl"
+    ).read_text()
 
 
 def test_dataset_api_is_idempotent_and_lists_ready_snapshots(dataset_lab):
@@ -145,3 +157,34 @@ def test_qqq_snapshot_runs_with_qqq_engine_symbol_and_audit(dataset_lab):
     assert completed["status"] == "completed"
     assert '"codes": [\n    "QQQ.US"' in (output / "evaluation/0bps/sma/config.json").read_text()
     assert (output / "evaluation/0bps/sma/audit.json").is_file()
+
+
+def test_dataset_page_offers_fixed_qqq_download_and_status(dataset_lab):
+    catalog, database, runs_dir, _ = dataset_lab
+    client = TestClient(create_app(database, runs_dir, catalog.base_dir))
+
+    page = client.get("/datasets")
+    assert page.status_code == 200
+    assert "Thêm QQQ" in page.text
+    assert "2014-01-01" in page.text
+    assert "2025-12-31" in page.text
+
+    created = client.post(
+        "/api/dataset-jobs",
+        json={"symbol": "QQQ", "start": "2014-01-01", "end_exclusive": "2026-01-01"},
+        headers={"Idempotency-Key": "browser-qqq-download"},
+    ).json()
+    status = client.get(f"/dataset-jobs/{created['id']}")
+    assert status.status_code == 200
+    assert "Đã xếp hàng tải dữ liệu" in status.text
+
+    worker_queue = DatasetJobQueue(database, catalog, downloader=bars_for)
+    completed = DatasetWorker(worker_queue).run_once()
+    ready_page = client.get("/datasets")
+    experiment_page = client.get("/experiments/new")
+
+    assert completed["status"] == "completed"
+    assert "Thêm QQQ" not in ready_page.text
+    assert '<span class="symbol">QQQ</span>' in ready_page.text
+    assert "2014-01-01 → 2025-12-31" in ready_page.text
+    assert "QQQ · 2014-01-01 → 2025-12-31" in experiment_page.text

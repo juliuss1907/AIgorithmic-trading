@@ -78,9 +78,9 @@ báo cáo lấy tên/tham số/vốn/kỳ từ cấu hình. Chốt typed request
 **Phụ thuộc:** 2, 5.
 **Nội dung:** chọn mã từ SPY/QQQ, tải dữ liệu thành job; mỗi thí nghiệm vẫn chỉ một tài sản.
 
-- [ ] Tải/đăng ký QQQ có nguồn, lịch, checksum và trạng thái rõ ràng.
-- [ ] Engine dùng đúng symbol và đúng dữ liệu; không sao dữ liệu SPY sang nhãn khác.
-- [ ] Mạng lỗi hoặc lịch chưa đủ không tạo snapshot ready; không làm mất snapshot trước.
+- [x] Tải/đăng ký QQQ có nguồn, lịch, checksum và trạng thái rõ ràng.
+- [x] Engine dùng đúng symbol và đúng dữ liệu; không sao dữ liệu SPY sang nhãn khác.
+- [x] Mạng lỗi hoặc lịch chưa đủ không tạo snapshot ready; không làm mất snapshot trước.
 
 **Kiểm tra:** kiểm tra phân biệt dữ liệu hai mã, failure injection và một backtest QQQ có audit.
 **Vùng tệp:** loader, worker dataset, routes, template và tests; tối đa 5 tệp chính.
