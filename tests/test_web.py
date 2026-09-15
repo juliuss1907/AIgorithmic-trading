@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -120,3 +121,42 @@ def test_incomplete_run_is_not_imported(tmp_path):
     with pytest.raises(ValueError, match="missing artifacts"):
         store.import_run(incomplete)
     assert store.list_runs() == []
+
+
+def test_store_expands_legacy_runs_table_without_losing_rows(tmp_path):
+    database = tmp_path / "state/lab.sqlite3"
+    database.parent.mkdir(parents=True)
+    with sqlite3.connect(database) as connection:
+        connection.execute("""
+            CREATE TABLE runs (
+                id TEXT PRIMARY KEY, run_name TEXT NOT NULL, title TEXT NOT NULL,
+                hypothesis TEXT NOT NULL, symbol TEXT NOT NULL, strategy_label TEXT NOT NULL,
+                dataset_id TEXT, relative_path TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL CHECK (status = 'completed'), created_at TEXT NOT NULL
+            )
+        """)
+        connection.execute(
+            "INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ("a" * 20, "legacy", "Legacy run", "Keep me", "SPY", "SMA 20/50", None,
+             "legacy", "completed", "2025-01-01T00:00:00+00:00"),
+        )
+
+    store = RunStore(database, tmp_path / "runs")
+
+    assert store.get_run("a" * 20)["parent_run_id"] is None
+
+
+def test_imported_clone_preserves_parent_lineage(tmp_path):
+    runs_dir = tmp_path / "runs"
+    store = RunStore(tmp_path / "state/lab.sqlite3", runs_dir)
+    parent = store.import_run(make_run(runs_dir, "parent"))
+    child_path = make_run(runs_dir, "child")
+    provenance_path = child_path / "provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    provenance["experiment"]["parent_run_id"] = parent["id"]
+    provenance_path.write_text(json.dumps(provenance))
+
+    child = store.import_run(child_path)
+
+    assert child["parent_run_id"] == parent["id"]
+    assert store.get_run(parent["id"])["parent_run_id"] is None

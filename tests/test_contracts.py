@@ -34,6 +34,27 @@ def test_contract_normalizes_user_input():
     assert config.symbol == "QQQ"
     assert config.title == "QQQ trend check"
     assert config.to_json_dict()["data"]["start"] == "2019-01-01"
+    assert config.parent_run_id is None
+    assert config.prior_observed_periods == ()
+
+
+def test_contract_preserves_clone_lineage_and_observed_periods():
+    value = payload()
+    value["parent_run_id"] = "a" * 20
+    value["prior_observed_periods"] = ["learning", "evaluation"]
+
+    config = ExperimentSpec.model_validate(value)
+
+    assert config.parent_run_id == "a" * 20
+    assert config.prior_observed_periods == ("learning", "evaluation")
+
+
+def test_contract_rejects_observed_period_not_present_in_experiment():
+    value = payload()
+    value["prior_observed_periods"] = ["future_holdout"]
+
+    with pytest.raises(ValidationError, match="prior_observed_periods"):
+        ExperimentSpec.model_validate(value)
 
 
 @pytest.mark.parametrize(

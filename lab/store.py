@@ -45,6 +45,7 @@ class RunStore:
                     symbol TEXT NOT NULL,
                     strategy_label TEXT NOT NULL,
                     dataset_id TEXT,
+                    parent_run_id TEXT,
                     relative_path TEXT NOT NULL UNIQUE,
                     status TEXT NOT NULL CHECK (status = 'completed'),
                     created_at TEXT NOT NULL
@@ -65,6 +66,12 @@ class RunStore:
                     created_at TEXT NOT NULL
                 );
                 """
+            )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
+            if "parent_run_id" not in columns:
+                connection.execute("ALTER TABLE runs ADD COLUMN parent_run_id TEXT")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS runs_parent_run_id ON runs(parent_run_id)"
             )
 
     def _inside_runs(self, path):
@@ -108,6 +115,7 @@ class RunStore:
             "symbol": symbol,
             "strategy_label": f"SMA {fast}/{slow}",
             "dataset_id": RunStore._dataset_id(provenance, experiment),
+            "parent_run_id": experiment.get("parent_run_id"),
         }
 
     @staticmethod
@@ -144,11 +152,14 @@ class RunStore:
         values = (
             run_id, metadata["run_name"], metadata["title"], metadata["hypothesis"],
             metadata["symbol"], metadata["strategy_label"], metadata["dataset_id"],
-            relative_root, "completed", created_at,
+            metadata["parent_run_id"], relative_root, "completed", created_at,
         )
         with self._connect() as connection:
             connection.execute(
-                "INSERT OR IGNORE INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values
+                "INSERT OR IGNORE INTO runs "
+                "(id, run_name, title, hypothesis, symbol, strategy_label, dataset_id, "
+                "parent_run_id, relative_path, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values
             )
             for artifact_path in artifact_paths:
                 relative_path = str(artifact_path.relative_to(root))

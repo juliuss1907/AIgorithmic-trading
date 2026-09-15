@@ -57,6 +57,8 @@ class ExperimentSpec(BaseModel):
     hypothesis: str = Field(min_length=1, max_length=1000)
     symbol: str
     dataset_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    parent_run_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{20}$")
+    prior_observed_periods: tuple[str, ...] = ()
     data: DataSpec
     strategy: SmaStrategySpec
     initial_cash: float = Field(gt=0, allow_inf_nan=False)
@@ -98,6 +100,9 @@ class ExperimentSpec(BaseModel):
         ordered = sorted(windows)
         if any(left[1] >= right[0] for left, right in zip(ordered, ordered[1:])):
             raise ValueError("evaluation periods must not overlap")
+        if (len(set(self.prior_observed_periods)) != len(self.prior_observed_periods)
+                or not set(self.prior_observed_periods).issubset(self.periods)):
+            raise ValueError("prior_observed_periods must contain distinct period names")
         return self
 
     @property
