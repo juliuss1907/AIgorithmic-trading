@@ -1,5 +1,6 @@
 """Local Vietnamese web workbench for inspecting completed experiments."""
 
+import json
 from datetime import timedelta
 from pathlib import Path
 
@@ -8,9 +9,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic_core import ValidationError
 from starlette.requests import Request
 
 from lab.contracts import DatasetRequest, ExperimentSpec
+from lab.comparison import compare_runs
 from lab.data import DATA
 from lab.dataset_jobs import DatasetJobQueue
 from lab.datasets import DatasetCatalog
@@ -104,6 +107,17 @@ def create_app(database=None, runs_dir=None, data_dir=None):
     @app.get("/api/runs")
     def runs_api():
         return store.list_runs()
+
+    @app.get("/api/compare")
+    def compare_api(left_id: str, right_id: str):
+        try:
+            return compare_runs(store, left_id, right_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ArtifactChanged as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (ValueError, ValidationError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/datasets")
     def datasets_api():
