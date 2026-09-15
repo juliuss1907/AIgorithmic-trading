@@ -22,12 +22,27 @@ class DataSpec(BaseModel):
 class DatasetRequest(DataSpec):
     """A bounded market-data download; no arbitrary ticker or interval."""
 
-    symbol: Literal["SPY", "QQQ"]
+    market: Literal["us_equity", "crypto_spot"] = "us_equity"
+    venue: Literal["yahoo", "binance"] = "yahoo"
+    symbol: str
+    interval: Literal["1d"] = "1d"
+    calendar: Literal["XNYS", "UTC_24_7"] = "XNYS"
 
     @field_validator("symbol", mode="before")
     @classmethod
     def normalize_symbol(cls, value: str) -> str:
         return value.strip().upper()
+
+    @model_validator(mode="after")
+    def supported_instrument(self):
+        allowed = {
+            ("us_equity", "yahoo", "XNYS"): {"SPY", "QQQ"},
+            ("crypto_spot", "binance", "UTC_24_7"): {"BTCUSDT"},
+        }
+        symbols = allowed.get((self.market, self.venue, self.calendar), set())
+        if self.symbol not in symbols:
+            raise ValueError("Unsupported market, venue, calendar, or symbol combination")
+        return self
 
 
 class SmaStrategySpec(BaseModel):
@@ -48,6 +63,50 @@ class SmaStrategySpec(BaseModel):
         return f"SMA {self.fast_window}/{self.slow_window}"
 
 
+class RsiBollingerStrategySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    family: Literal["rsi_bollinger"] = "rsi_bollinger"
+    rsi_window: int = Field(default=14, ge=2, le=100)
+    bollinger_window: int = Field(default=20, ge=2, le=200)
+    bollinger_stddev: float = Field(default=2, gt=0, le=10, allow_inf_nan=False)
+    entry_rsi: float = Field(default=30, ge=0, le=100, allow_inf_nan=False)
+    exit_rsi: float = Field(default=50, ge=0, le=100, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def thresholds_are_ordered(self):
+        if self.entry_rsi >= self.exit_rsi:
+            raise ValueError("entry_rsi must be smaller than exit_rsi")
+        return self
+
+    @property
+    def label(self) -> str:
+        return f"RSI {self.rsi_window} + Bollinger {self.bollinger_window}/{self.bollinger_stddev:g}"
+
+
+class DonchianStrategySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    family: Literal["donchian_breakout"] = "donchian_breakout"
+    entry_window: int = Field(default=20, ge=2, le=500)
+    exit_window: int = Field(default=10, ge=2, le=500)
+    atr_window: int = Field(default=14, ge=2, le=200)
+
+    @property
+    def label(self) -> str:
+        return f"Donchian {self.entry_window}/{self.exit_window} + ATR {self.atr_window}"
+
+
+StrategySpec = SmaStrategySpec | RsiBollingerStrategySpec | DonchianStrategySpec
+
+
+class RiskPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_target_weight: float = Field(default=1.0, gt=0, le=1, allow_inf_nan=False)
+    halt_drawdown: float = Field(default=0.3, gt=0, lt=1, allow_inf_nan=False)
+
+
 class ExperimentSpec(BaseModel):
     """User-visible research question and all assumptions needed to run it."""
 
@@ -55,15 +114,21 @@ class ExperimentSpec(BaseModel):
 
     title: str = Field(min_length=1, max_length=120)
     hypothesis: str = Field(min_length=1, max_length=1000)
+    market: Literal["us_equity", "crypto_spot"] = "us_equity"
+    venue: Literal["yahoo", "binance"] = "yahoo"
     symbol: str
+    interval: Literal["1d"] = "1d"
+    calendar: Literal["XNYS", "UTC_24_7"] = "XNYS"
     dataset_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     parent_run_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{20}$")
     prior_observed_periods: tuple[str, ...] = ()
     data: DataSpec
-    strategy: SmaStrategySpec
+    strategy: StrategySpec
     initial_cash: float = Field(gt=0, allow_inf_nan=False)
     slippage_bps: tuple[float, ...] = (0, 5, 10)
+    taker_fee_bps: float = Field(default=0, ge=0, lt=100, allow_inf_nan=False)
     commission: Literal[0.0] = 0.0
+    risk_policy: RiskPolicy = Field(default_factory=RiskPolicy)
     periods: dict[str, tuple[date, date]]
 
     @field_validator("title", "hypothesis")
@@ -71,12 +136,31 @@ class ExperimentSpec(BaseModel):
     def strip_text(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("strategy", mode="before")
+    @classmethod
+    def parse_strategy(cls, value):
+        if isinstance(value, (SmaStrategySpec, RsiBollingerStrategySpec, DonchianStrategySpec)):
+            return value
+        family = value.get("family") if isinstance(value, dict) else None
+        models = {
+            "sma_crossover": SmaStrategySpec,
+            "rsi_bollinger": RsiBollingerStrategySpec,
+            "donchian_breakout": DonchianStrategySpec,
+        }
+        model = models.get(family)
+        if model is None:
+            raise ValueError("Unsupported strategy family")
+        try:
+            return model.model_validate(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
     @field_validator("symbol")
     @classmethod
     def supported_symbol(cls, value: str) -> str:
         symbol = value.strip().upper()
-        if symbol not in {"SPY", "QQQ"}:
-            raise ValueError("Release 0.1 supports SPY and QQQ")
+        if symbol not in {"SPY", "QQQ", "BTCUSDT"}:
+            raise ValueError("Supported symbols are SPY, QQQ, and BTCUSDT")
         return symbol
 
     @field_validator("slippage_bps")
@@ -90,6 +174,17 @@ class ExperimentSpec(BaseModel):
 
     @model_validator(mode="after")
     def valid_periods(self):
+        allowed = {
+            ("us_equity", "yahoo", "XNYS"): {"SPY", "QQQ"},
+            ("crypto_spot", "binance", "UTC_24_7"): {"BTCUSDT"},
+        }
+        if self.symbol not in allowed.get((self.market, self.venue, self.calendar), set()):
+            raise ValueError("Unsupported market, venue, calendar, or symbol combination")
+        if self.market == "crypto_spot":
+            if self.taker_fee_bps != 10:
+                raise ValueError("BTC MVP freezes taker_fee_bps at 10")
+            if self.risk_policy.max_target_weight != 0.5:
+                raise ValueError("BTC MVP freezes max_target_weight at 0.5")
         if not self.periods:
             raise ValueError("at least one evaluation period is required")
         windows = []
@@ -107,7 +202,11 @@ class ExperimentSpec(BaseModel):
 
     @property
     def engine_symbol(self) -> str:
-        return f"{self.symbol}.US"
+        return self.symbol if self.market == "crypto_spot" else f"{self.symbol}.US"
+
+    @property
+    def bars_per_year(self) -> int:
+        return 365 if self.calendar == "UTC_24_7" else 252
 
     def to_json_dict(self) -> dict:
         return self.model_dump(mode="json")
@@ -133,7 +232,15 @@ class DatasetSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(pattern=r"^[a-f0-9]{64}$")
-    symbol: Literal["SPY", "QQQ"]
+    symbol: Literal["SPY", "QQQ", "BTCUSDT"]
+    market: Literal["us_equity", "crypto_spot"] = "us_equity"
+    venue: Literal["yahoo", "binance"] = "yahoo"
+    interval: Literal["1d"] = "1d"
+    calendar: Literal["XNYS", "UTC_24_7"] = "XNYS"
+    base_asset: str | None = None
+    quote_asset: str | None = None
+    price_semantics: str = "synthetic total-return prices"
+    exchange_rules: dict = Field(default_factory=dict)
     source: str
     start: date
     end: date
