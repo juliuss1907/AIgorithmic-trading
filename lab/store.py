@@ -106,6 +106,18 @@ class RunStore:
         strategy = experiment.get("strategy", {})
         fast = strategy.get("fast_window", experiment.get("fast_window", "?"))
         slow = strategy.get("slow_window", experiment.get("slow_window", "?"))
+        family = strategy.get("family", "sma_crossover")
+        labels = {
+            "sma_crossover": f"SMA {fast}/{slow}",
+            "rsi_bollinger": (
+                f"RSI {strategy.get('rsi_window', '?')} + Bollinger "
+                f"{strategy.get('bollinger_window', '?')}/{strategy.get('bollinger_stddev', '?')}"
+            ),
+            "donchian_breakout": (
+                f"Donchian {strategy.get('entry_window', '?')}/{strategy.get('exit_window', '?')} "
+                f"+ ATR {strategy.get('atr_window', '?')}"
+            ),
+        }
         return {
             "run_name": run_name,
             "title": experiment.get("title", f"{symbol} SMA {fast}/{slow} pilot"),
@@ -113,7 +125,7 @@ class RunStore:
                 "hypothesis", "Run cũ được nhập vào thư viện; giả thuyết chưa có trong metadata."
             ),
             "symbol": symbol,
-            "strategy_label": f"SMA {fast}/{slow}",
+            "strategy_label": labels.get(family, family),
             "dataset_id": RunStore._dataset_id(provenance, experiment),
             "parent_run_id": experiment.get("parent_run_id"),
         }
@@ -231,10 +243,16 @@ class RunStore:
         summary_id = by_path["summary.json"]["id"]
         summary_path, _ = self.artifact(run_id, summary_id)
         summary = json.loads(summary_path.read_text())
-        sma_cases = [key for key in summary if key.endswith("/sma")]
-        preferred = next((key for key in sma_cases if key.startswith("evaluation/5bps/")), None)
-        preferred = preferred or next((key for key in sma_cases if "/5bps/" in key), None)
-        preferred = preferred or (sma_cases[-1] if sma_cases else None)
+        strategy_cases = [
+            key for key in summary if key.endswith("/sma") or key.endswith("/rule")
+        ]
+        preferred = next(
+            (key for key in strategy_cases if key.startswith("evaluation/5bps/")), None
+        )
+        preferred = preferred or next(
+            (key for key in strategy_cases if "/5bps/" in key), None
+        )
+        preferred = preferred or (strategy_cases[-1] if strategy_cases else None)
         fills = []
         if preferred:
             relative = f"{preferred}/fills-exact.csv"

@@ -25,7 +25,10 @@ def validate_clone_config(store, config):
     if config.parent_run_id is None:
         return
     _, parent = load_experiment(store, config.parent_run_id)
-    shared = ("symbol", "dataset_id", "data", "periods", "initial_cash", "slippage_bps", "commission")
+    shared = (
+        "market", "venue", "symbol", "interval", "calendar", "dataset_id", "data",
+        "periods", "initial_cash", "slippage_bps", "taker_fee_bps", "commission", "risk_policy",
+    )
     changed = [field for field in shared if getattr(config, field) != getattr(parent, field)]
     expected_observed = set(parent.prior_observed_periods) | set(parent.periods)
     if set(config.prior_observed_periods) != expected_observed:
@@ -42,12 +45,18 @@ def _context(store, run_id):
 def _conditions(run, config):
     payload = config.to_json_dict()
     return {
+        "market": config.market,
+        "venue": config.venue,
         "symbol": config.symbol,
+        "interval": config.interval,
+        "calendar": config.calendar,
         "dataset_id": run["dataset_id"],
         "periods": payload["periods"],
         "initial_cash": config.initial_cash,
         "slippage_bps": payload["slippage_bps"],
+        "taker_fee_bps": config.taker_fee_bps,
         "commission": config.commission,
+        "risk_policy": payload["risk_policy"],
     }
 
 

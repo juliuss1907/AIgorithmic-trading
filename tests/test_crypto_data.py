@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -82,6 +83,28 @@ def test_binance_client_refuses_an_open_daily_candle():
 
     with pytest.raises(ValueError, match="closed UTC candles"):
         BinanceClient(fetch_json=lambda *_: pytest.fail("network must not be called")).history(request)
+
+
+def test_binance_client_accepts_dates_nested_in_an_experiment_contract():
+    today = date.today()
+    config = SimpleNamespace(
+        symbol="BTCUSDT", interval="1d",
+        data=btc_request(start=str(today - timedelta(days=1)), end_exclusive=str(today)),
+    )
+    rows = [kline(str(today - timedelta(days=1)), 40_000)]
+
+    def fetch_json(path, params):
+        if path.endswith("exchangeInfo"):
+            return {"timezone": "UTC", "symbols": [{
+                "symbol": "BTCUSDT", "status": "TRADING", "baseAsset": "BTC",
+                "quoteAsset": "USDT", "filters": [
+                    {"filterType": "LOT_SIZE", "stepSize": "0.00001000"},
+                    {"filterType": "MIN_NOTIONAL", "minNotional": "5.00000000"},
+                ],
+            }]}
+        return rows
+
+    assert len(BinanceClient(fetch_json=fetch_json).history(config).frame) == 1
 
 
 def test_binance_book_ticker_accepts_public_btc_quote_only():

@@ -145,10 +145,11 @@ class BinanceClient:
     def history(self, config):
         if config.symbol != "BTCUSDT" or config.interval != "1d":
             raise ValueError("Binance client only supports BTCUSDT daily candles")
-        if config.end_exclusive > datetime.now(timezone.utc).date():
+        dates = _date_spec(config)
+        if dates.end_exclusive > datetime.now(timezone.utc).date():
             raise ValueError("Binance downloads may include closed UTC candles only")
-        start_ms = int(pd.Timestamp(config.start, tz="UTC").timestamp() * 1000)
-        end_ms = int(pd.Timestamp(config.end_exclusive, tz="UTC").timestamp() * 1000)
+        start_ms = int(pd.Timestamp(dates.start, tz="UTC").timestamp() * 1000)
+        end_ms = int(pd.Timestamp(dates.end_exclusive, tz="UTC").timestamp() * 1000)
         cursor = start_ms
         rows = []
         while cursor < end_ms:

@@ -9,11 +9,85 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
+def _crypto_strategy_label(strategy):
+    if strategy["family"] == "sma_crossover":
+        return f"SMA {strategy['fast_window']}/{strategy['slow_window']}"
+    if strategy["family"] == "rsi_bollinger":
+        return (
+            f"RSI {strategy['rsi_window']} + Bollinger "
+            f"{strategy['bollinger_window']}/{strategy['bollinger_stddev']:g}"
+        )
+    return (
+        f"Donchian {strategy['entry_window']}/{strategy['exit_window']} "
+        f"+ ATR {strategy['atr_window']}"
+    )
+
+
+def _generate_crypto(output, summary, provenance):
+    config = provenance["experiment"]
+    periods = list(config["periods"])
+    base_cost = 5 if 5 in config["slippage_bps"] else config["slippage_bps"][0]
+    cost_label = f"{base_cost:g}bps"
+    label = _crypto_strategy_label(config["strategy"])
+    fig, axes = plt.subplots(len(periods), 1, figsize=(10, 4 * len(periods)), squeeze=False)
+    comparisons = (
+        ("rule", "#176b87", label), ("buy-hold-50", "#ad5b27", "BTC hold 50%"),
+        ("buy-hold-100", "#6b706f", "BTC hold 100% (reference)"),
+    )
+    for period, ax in zip(periods, axes[:, 0]):
+        for case, color, case_label in comparisons:
+            curve = pd.read_csv(
+                output / f"{period}/{cost_label}/{case}/equity.csv",
+                index_col="date", parse_dates=True,
+            )
+            ax.plot(curve.index, curve["equity"], color=color, label=case_label, linewidth=1.4)
+        ax.set_title(f"{period} · BTCUSDT · {base_cost:g} bps slippage + 10 bps fee", loc="left")
+        ax.set_ylabel("USDT")
+        ax.grid(alpha=.18)
+        ax.legend(frameon=False)
+    fig.suptitle("BTC strategy and allocation-matched benchmarks", fontsize=15)
+    fig.tight_layout()
+    fig.savefig(output / "equity.png", dpi=160)
+    plt.close(fig)
+    lines = [
+        f"# {config['title']}", "", f"**Giả thuyết:** {config['hypothesis']}", "",
+        f"Chiến lược: **{label}**. Tài sản: Binance spot BTCUSDT, nến ngày UTC 24/7. "
+        "Target long tối đa 50%; nếu không có tín hiệu thì giữ USDT.", "",
+        "Tín hiệu được tính sau khi nến đóng và chỉ khớp ở open kế tiếp. Mỗi fill chịu "
+        f"10 bps taker fee; các kịch bản slippage là {config['slippage_bps']} bps mỗi chiều. "
+        "Không bán khống, không đòn bẩy, không tối ưu tham số tự động.", "",
+        "## Kết quả", "",
+        "| Fold | Chi phí | Phương án | Lợi nhuận | CAGR 365 | Drawdown | Vòng giao dịch | Exposure |",
+        "|---|---:|---|---:|---:|---:|---:|---:|",
+    ]
+    for key, row in summary.items():
+        period, cost, case = key.split("/")
+        lines.append(
+            f"| {period} | {cost} + 10bps fee | {case} | {row['total_return']:.2%} | "
+            f"{row['cagr_annualized']:.2%} | {row['max_drawdown']:.2%} | "
+            f"{row['round_trips']} | {row['time_in_market']:.1%} |"
+        )
+    lines.extend([
+        "", "![Đường vốn](equity.png)", "", "## Cách dùng kết quả", "",
+        "Promotion gate đọc tám fold 2018–2025: ít nhất 5 fold có lãi ở 5 bps, "
+        "lợi nhuận gộp dương ở stress 10 bps và drawdown tệ nhất không quá 20%. "
+        "Nếu nhiều chiến lược qua, ưu tiên drawdown thấp hơn, rồi median return cao hơn, rồi turnover thấp hơn. "
+        "Không chiến lược nào qua thì quyết định đúng là giữ tiền mặt.", "",
+        "Holdout 2026-01-01 đến 2026-08-31 chỉ được mở sau khi gate đã khóa. "
+        "Artifact `signal-evidence.csv`, `fills-exact.csv` và `audit.json` cho phép truy ngược từng quyết định. "
+        "Đây là mô phỏng nghiên cứu, không phải khuyến nghị đầu tư hay kết nối đặt lệnh thật.", "",
+    ])
+    (output / "report.md").write_text("\n".join(lines), encoding="utf-8")
+
+
 def generate(output):
     output = Path(output)
     summary = json.loads((output / "summary.json").read_text())
     provenance = json.loads((output / "provenance.json").read_text())
     config = provenance["experiment"]
+    if config.get("market") == "crypto_spot":
+        _generate_crypto(output, summary, provenance)
+        return
     periods = list(config["periods"])
     base_cost = 5 if 5 in config["slippage_bps"] else config["slippage_bps"][0]
     cost_label = f"{base_cost:g}bps"
