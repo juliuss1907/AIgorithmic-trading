@@ -53,7 +53,8 @@ class PaperTradingService:
                 );
                 CREATE TABLE IF NOT EXISTS paper_cycles (
                     id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES paper_accounts(id),
-                    candle_date TEXT NOT NULL, entry_point TEXT NOT NULL,
+                    candle_date TEXT NOT NULL, dataset_snapshot_id TEXT NOT NULL,
+                    entry_point TEXT NOT NULL,
                     status TEXT NOT NULL, signal REAL NOT NULL, evidence_json TEXT NOT NULL,
                     reconciliation_ok INTEGER NOT NULL, created_at TEXT NOT NULL,
                     UNIQUE(account_id,candle_date)
@@ -91,6 +92,14 @@ class PaperTradingService:
             if "dataset_snapshot_id" not in columns:
                 connection.execute(
                     "ALTER TABLE paper_accounts ADD COLUMN dataset_snapshot_id TEXT NOT NULL "
+                    "DEFAULT 'legacy-untracked'"
+                )
+            cycle_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(paper_cycles)")
+            }
+            if "dataset_snapshot_id" not in cycle_columns:
+                connection.execute(
+                    "ALTER TABLE paper_cycles ADD COLUMN dataset_snapshot_id TEXT NOT NULL "
                     "DEFAULT 'legacy-untracked'"
                 )
 
@@ -224,7 +233,10 @@ class PaperTradingService:
         quantity = (Decimal(str(raw)) / step).to_integral_value(rounding=ROUND_DOWN) * step
         return Decimal(0) if quantity * price < minimum else quantity
 
-    def run_cycle(self, account_id, frame, *, bid, ask, exchange_rules=None, entry_point="scheduler"):
+    def run_cycle(
+        self, account_id, frame, *, bid, ask, exchange_rules=None,
+        dataset_snapshot_id=None, entry_point="scheduler",
+    ):
         try:
             self._validate_bars(frame)
         except ValueError:
@@ -235,6 +247,10 @@ class PaperTradingService:
             raise ValueError("Expected positive bid not above ask")
         candle = str(frame.index[-1].date())
         account_before = self.get_account(account_id)
+        dataset_snapshot_id = dataset_snapshot_id or account_before["dataset_snapshot_id"]
+        if len(dataset_snapshot_id) != 64 or any(c not in "0123456789abcdef" for c in dataset_snapshot_id):
+            self.halt_account(account_id, "dataset_snapshot_invalid")
+            raise ValueError("Paper cycle requires a frozen dataset snapshot id")
         strategy_json = json.dumps(account_before["strategy"], sort_keys=True, separators=(",", ":"))
         cycle_id = self._cycle_id(account_id, strategy_json, candle)
         engine = RuleSignalEngine(account_before["strategy"], account_before["max_target_weight"])
@@ -260,8 +276,10 @@ class PaperTradingService:
             account = dict(row)
             now = utc_now()
             connection.execute(
-                "INSERT INTO paper_cycles VALUES (?,?,?,?,?,?,?,?,?)",
-                (cycle_id, account_id, candle, entry_point, "running", target,
+                "INSERT INTO paper_cycles "
+                "(id,account_id,candle_date,dataset_snapshot_id,entry_point,status,signal,evidence_json,"
+                "reconciliation_ok,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (cycle_id, account_id, candle, dataset_snapshot_id, entry_point, "running", target,
                  evidence_json, 0, now),
             )
             connection.execute(

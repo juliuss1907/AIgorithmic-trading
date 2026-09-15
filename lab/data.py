@@ -130,6 +130,18 @@ class BinanceClient:
             "exchange_rules": {"quantity_step": step, "min_notional": minimum},
         }
 
+    def book_ticker(self, symbol="BTCUSDT"):
+        if symbol != "BTCUSDT":
+            raise ValueError("Binance client only supports BTCUSDT")
+        payload = self.fetch_json("/api/v3/ticker/bookTicker", {"symbol": symbol})
+        if not isinstance(payload, dict) or payload.get("symbol") != symbol:
+            raise ValueError("Invalid Binance book ticker response")
+        bid = float(payload.get("bidPrice", 0))
+        ask = float(payload.get("askPrice", 0))
+        if not 0 < bid <= ask:
+            raise ValueError("Invalid BTCUSDT bid/ask")
+        return {"bid": bid, "ask": ask}
+
     def history(self, config):
         if config.symbol != "BTCUSDT" or config.interval != "1d":
             raise ValueError("Binance client only supports BTCUSDT daily candles")

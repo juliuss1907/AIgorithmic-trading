@@ -84,6 +84,15 @@ def test_binance_client_refuses_an_open_daily_candle():
         BinanceClient(fetch_json=lambda *_: pytest.fail("network must not be called")).history(request)
 
 
+def test_binance_book_ticker_accepts_public_btc_quote_only():
+    client = BinanceClient(fetch_json=lambda path, params: {
+        "symbol": "BTCUSDT", "bidPrice": "60000.10", "askPrice": "60001.20"
+    })
+    assert client.book_ticker() == {"bid": 60000.1, "ask": 60001.2}
+    with pytest.raises(ValueError):
+        client.book_ticker("ETHUSDT")
+
+
 def test_crypto_snapshot_records_24_7_semantics_and_replays_without_network(tmp_path):
     request = btc_request()
     index = pd.date_range("2017-08-17", "2017-08-19")
