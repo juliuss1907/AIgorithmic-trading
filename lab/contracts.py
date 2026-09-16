@@ -171,6 +171,29 @@ class CandidateLock(BaseModel):
     provenance_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
+class HoldoutResult(BaseModel):
+    """Verified evidence recorded by the one-shot holdout pipeline."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate: Literal["donchian_breakout"]
+    period: Literal["2026-01-01/2026-08-31"]
+    run_id: str = Field(pattern=r"^[a-f0-9]{20}$")
+    dataset_id: str = Field(pattern=r"^[a-f0-9]{64}$")
+    summary_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    provenance_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    total_return: float = Field(allow_inf_nan=False)
+    max_drawdown: float = Field(allow_inf_nan=False)
+    passed: bool
+
+    @model_validator(mode="after")
+    def pass_flag_matches_metrics(self):
+        expected = self.total_return > 0 and self.max_drawdown >= -0.20
+        if self.passed != expected:
+            raise ValueError("holdout pass flag differs from registered thresholds")
+        return self
+
+
 class ExperimentSpec(BaseModel):
     """User-visible research question and all assumptions needed to run it."""
 

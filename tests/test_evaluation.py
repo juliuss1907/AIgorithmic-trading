@@ -51,7 +51,7 @@ def test_no_candidate_means_cash_not_a_forced_winner():
     assert decision.status == "stay_cash"
 
 
-def test_promotion_store_freezes_gate_and_opens_selected_holdout_once(tmp_path):
+def test_promotion_store_freezes_gate_once(tmp_path):
     decision = select_candidate({"steady": summaries([.05] * 8, drawdown=-.1)})
     store = PromotionStore(tmp_path / "promotion.sqlite3")
 
@@ -59,16 +59,9 @@ def test_promotion_store_freezes_gate_and_opens_selected_holdout_once(tmp_path):
     assert frozen["selected"] == "steady"
     with pytest.raises(ValueError, match="already frozen"):
         store.freeze(select_candidate({"other": summaries([.1] * 8)}))
-    with pytest.raises(ValueError, match="selected candidate"):
-        store.open_holdout("other", {"total_return": .1, "max_drawdown": -.1})
-
-    opened = store.open_holdout("steady", {"total_return": .02, "max_drawdown": -.12})
-    assert opened["passed"] is True
-    with pytest.raises(ValueError, match="already opened"):
-        store.open_holdout("steady", {"total_return": .03, "max_drawdown": -.1})
-
     restarted = PromotionStore(tmp_path / "promotion.sqlite3")
-    assert restarted.get()["holdout"]["total_return"] == .02
+    assert restarted.get()["selected"] == "steady"
+    assert restarted.get()["holdout"] is None
 
 
 def candidate_run(tmp_path, *, returns=None):

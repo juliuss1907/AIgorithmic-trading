@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lab.contracts import CandidateLock, ExperimentSpec
+from lab.contracts import CandidateLock, ExperimentSpec, HoldoutResult
 
 
 LEARNING_FOLDS = tuple(str(year) for year in range(2018, 2026))
@@ -180,23 +180,19 @@ class PromotionStore:
             connection.execute("COMMIT")
         return json.loads(payload)
 
-    def open_holdout(self, candidate, metrics):
+    def open_holdout(self, evidence):
+        evidence = HoldoutResult.model_validate(evidence)
+        payload = evidence.model_dump(mode="json")
         state = self.get()
-        if state["selected"] is None:
-            raise ValueError("No selected candidate; account must stay cash")
-        if candidate != state["selected"]:
-            raise ValueError("Holdout must use the selected candidate")
+        lock = state.get("candidate_lock")
+        if lock is None:
+            raise ValueError("Holdout requires a locked candidate")
+        if evidence.candidate != state["selected"] or evidence.candidate != lock["candidate"]:
+            raise ValueError("Holdout must use the locked selected candidate")
         if state["holdout"] is not None:
-            raise ValueError("Holdout was already opened")
-        total_return = float(metrics["total_return"])
-        max_drawdown = float(metrics["max_drawdown"])
-        payload = {
-            "candidate": candidate,
-            "period": "2026-01-01/2026-08-31",
-            "total_return": total_return,
-            "max_drawdown": max_drawdown,
-            "passed": total_return > 0 and max_drawdown >= -0.20,
-        }
+            if state["holdout"] == payload:
+                return payload
+            raise ValueError("Holdout was already opened with different evidence")
         with self._connect() as connection:
             cursor = connection.execute(
                 "UPDATE promotion_gate SET holdout_json=?,holdout_opened_at=? "
