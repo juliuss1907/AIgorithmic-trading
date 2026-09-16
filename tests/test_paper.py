@@ -212,6 +212,51 @@ def test_campaign_progress_excludes_bootstrap_and_tracks_incidents(service):
     assert service.list_incidents(account["id"])[0]["operator_note"] == "Network recovered"
 
 
+def test_notification_outbox_is_immutable_idempotent_and_retryable(service):
+    account = service.create_promoted_account(promoted_gate(), exchange_rules=RULES)
+
+    first = service.enqueue_notification(
+        account["id"], "cycle:2025-01-01:summary", "daily_summary", "Cycle completed"
+    )
+    repeated = service.enqueue_notification(
+        account["id"], "cycle:2025-01-01:summary", "daily_summary", "Cycle completed"
+    )
+
+    assert repeated == first
+    assert service.list_pending_notifications() == [first]
+
+    failed = service.mark_notification_failed(first["id"], "telegram_delivery_error")
+    assert failed["status"] == "failed"
+    assert failed["attempts"] == 1
+    assert failed["last_error"] == "telegram_delivery_error"
+    assert service.list_pending_notifications() == [failed]
+
+    sent = service.mark_notification_sent(first["id"])
+    sent_again = service.mark_notification_sent(first["id"])
+    assert sent["status"] == "sent"
+    assert sent["attempts"] == 2
+    assert sent_again == sent
+    assert service.list_pending_notifications() == []
+
+    with pytest.raises(ValueError, match="immutable"):
+        service.enqueue_notification(
+            account["id"], "cycle:2025-01-01:summary", "daily_summary", "Changed payload"
+        )
+
+
+def test_notification_outbox_persists_across_service_restart(tmp_path):
+    database = tmp_path / "paper.sqlite3"
+    service = PaperTradingService(database, log_dir=tmp_path / "logs")
+    account = service.create_promoted_account(promoted_gate(), exchange_rules=RULES)
+    queued = service.enqueue_notification(
+        account["id"], "incident:abc:open", "critical", "Data fetch failed"
+    )
+
+    restarted = PaperTradingService(database, log_dir=tmp_path / "logs")
+
+    assert restarted.list_pending_notifications() == [queued]
+
+
 def test_final_campaign_review_is_gated_and_immutable(service, monkeypatch):
     account = service.create_promoted_account(promoted_gate(), exchange_rules=RULES)
 

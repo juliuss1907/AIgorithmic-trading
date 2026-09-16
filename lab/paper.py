@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -112,6 +113,21 @@ class PaperTradingService:
                     updated_at TEXT NOT NULL,
                     acknowledged_at TEXT,
                     UNIQUE(account_id,candle_date,kind)
+                );
+                CREATE TABLE IF NOT EXISTS paper_notifications (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES paper_accounts(id),
+                    event_key TEXT NOT NULL,
+                    channel TEXT NOT NULL CHECK(channel IN ('telegram')),
+                    kind TEXT NOT NULL CHECK(kind IN ('daily_summary','critical')),
+                    message TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('pending','failed','sent')),
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    sent_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(account_id,event_key,channel)
                 );
                 """
             )
@@ -366,6 +382,96 @@ class PaperTradingService:
                 "SELECT * FROM paper_incidents WHERE account_id=? "
                 "ORDER BY candle_date DESC,first_seen_at DESC", (account_id,)
             )]
+
+    def enqueue_notification(self, account_id, event_key, kind, message, channel="telegram"):
+        self.get_account(account_id)
+        if channel != "telegram":
+            raise ValueError("Unsupported notification channel")
+        if kind not in {"daily_summary", "critical"}:
+            raise ValueError("Unsupported notification kind")
+        if not isinstance(event_key, str) or not 1 <= len(event_key) <= 200 or "\n" in event_key:
+            raise ValueError("Notification event key must contain 1 to 200 characters")
+        if not isinstance(message, str) or not 1 <= len(message) <= 4096:
+            raise ValueError("Notification message must contain 1 to 4096 characters")
+        notification_id = hashlib.sha256(
+            f"{account_id}|{channel}|{event_key}".encode()
+        ).hexdigest()[:24]
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO paper_notifications "
+                "(id,account_id,event_key,channel,kind,message,status,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,'pending',?,?) "
+                "ON CONFLICT(account_id,event_key,channel) DO NOTHING",
+                (notification_id, account_id, event_key, channel, kind, message, now, now),
+            )
+            row = connection.execute(
+                "SELECT * FROM paper_notifications WHERE account_id=? AND event_key=? AND channel=?",
+                (account_id, event_key, channel),
+            ).fetchone()
+        result = dict(row)
+        if result["kind"] != kind or result["message"] != message:
+            raise ValueError("Notification event payload is immutable")
+        return result
+
+    def list_pending_notifications(self, channel="telegram"):
+        if channel != "telegram":
+            raise ValueError("Unsupported notification channel")
+        with self._connect() as connection:
+            return [dict(row) for row in connection.execute(
+                "SELECT * FROM paper_notifications WHERE channel=? AND status!='sent' "
+                "ORDER BY created_at,id", (channel,)
+            )]
+
+    def _get_notification(self, notification_id):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM paper_notifications WHERE id=?", (notification_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Unknown paper notification: {notification_id}")
+        return dict(row)
+
+    def mark_notification_sent(self, notification_id):
+        notification = self._get_notification(notification_id)
+        if notification["status"] == "sent":
+            return notification
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE paper_notifications SET status='sent',attempts=attempts+1,last_error=NULL,"
+                "sent_at=?,updated_at=? WHERE id=? AND status!='sent'",
+                (now, now, notification_id),
+            )
+        result = self._get_notification(notification_id)
+        self._event(
+            result["account_id"], "notification_sent", entry_point="paper_worker",
+            notification_id=result["id"], notification_kind=result["kind"],
+            channel=result["channel"], attempts=result["attempts"],
+        )
+        return result
+
+    def mark_notification_failed(self, notification_id, error_code):
+        notification = self._get_notification(notification_id)
+        if notification["status"] == "sent":
+            return notification
+        if not isinstance(error_code, str) or not re.fullmatch(r"[a-z0-9_.-]{1,64}", error_code):
+            raise ValueError("Notification error code is invalid")
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE paper_notifications SET status='failed',attempts=attempts+1,last_error=?,"
+                "updated_at=? WHERE id=? AND status!='sent'",
+                (error_code, now, notification_id),
+            )
+        result = self._get_notification(notification_id)
+        self._event(
+            result["account_id"], "notification_failed", entry_point="paper_worker",
+            notification_id=result["id"], notification_kind=result["kind"],
+            channel=result["channel"], attempts=result["attempts"],
+            error_code=error_code, level="warn",
+        )
+        return result
 
     def campaign_status(self, account_id, now=None):
         campaign = self.get_campaign(account_id)
