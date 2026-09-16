@@ -3,14 +3,18 @@
 ## Trạng thái hiện tại
 
 Snapshot learning: `c225bc7732a0cc1d347adc7925a923b41fb3b12150db1b0ac137b9cf0cf775a2`,
-3.059 nến từ 2017-08-17 đến 2025-12-31. Promotion gate đã khóa `stay_cash`.
-Không mở holdout, không tạo paper account và không có giao dịch thật.
+3.059 nến từ 2017-08-17 đến 2025-12-31. Gate baseline vẫn khóa `stay_cash`; gate entry-volatility v1
+đã khóa chọn Donchian với worst drawdown −18,06%. Holdout chưa mở, chưa tạo paper account và không có
+giao dịch thật.
 
 ## Khởi động
 
 ```bash
 make web
 # Nếu port 8000 đang bận: make web PORT=8765
+
+# Xem gate entry-volatility v1 thay vì gate baseline:
+LAB_PROMOTION_STATE=state/btc-promotion-entry-vol20-v1.sqlite3 make web
 ```
 
 Mở `http://127.0.0.1:8000/paper`. Dashboard hiện gate, tài khoản paper, fill, ledger và halt.
@@ -27,6 +31,9 @@ uv run --frozen python -m lab.paper_worker --once --account ACCOUNT_ID
 Worker thức lúc 00:02 UTC, tải nến đã đóng, lưu snapshot, lấy public bid/ask rồi mô phỏng fill.
 Không cần và không đọc Binance API key.
 
+Binance hiện là nguồn dữ liệu và bộ quy tắc thị trường spot. Paper broker chạy nội bộ; chưa chọn nơi
+đặt lệnh thật và code không có authenticated client hay endpoint `/order`.
+
 ## Tái lập nghiên cứu
 
 ```bash
@@ -34,10 +41,15 @@ uv run --frozen python -m lab fetch --config experiments/btc-sma-learning.json
 uv run --frozen python -m lab run --config experiments/btc-sma-learning.json --output runs/btc-sma-learning-new
 uv run --frozen python -m lab run --config experiments/btc-rsi-bollinger-learning.json --output runs/btc-rsi-bollinger-learning-new
 uv run --frozen python -m lab run --config experiments/btc-donchian-learning.json --output runs/btc-donchian-learning-new
+
+uv run --frozen python -m lab run --config experiments/btc-sma-entry-vol20-v1.json --output runs/btc-sma-entry-vol20-v1-new
+uv run --frozen python -m lab run --config experiments/btc-rsi-bollinger-entry-vol20-v1.json --output runs/btc-rsi-bollinger-entry-vol20-v1-new
+uv run --frozen python -m lab run --config experiments/btc-donchian-entry-vol20-v1.json --output runs/btc-donchian-entry-vol20-v1-new
 ```
 
-Không chạy lại lệnh `gate` lên state hiện tại: latch sẽ từ chối ghi đè. Muốn thử một giả thuyết mới,
-dùng database promotion mới và ghi rõ 2018–2025 đã được quan sát.
+Không chạy lại lệnh `gate` lên bất kỳ state đã khóa nào: latch sẽ từ chối ghi đè. Gate volatility v1
+nằm tại `state/btc-promotion-entry-vol20-v1.sqlite3`; gate baseline vẫn nằm tại
+`state/btc-promotion.sqlite3`. Muốn thử giả thuyết khác, dùng database mới và ghi rõ 2018–2025 đã được quan sát.
 
 ## Chẩn đoán
 

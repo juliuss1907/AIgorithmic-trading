@@ -1,6 +1,6 @@
 # Kế hoạch BTC-first: bot thuật toán + AI copilot
 
-Ngày chốt: 2026-09-15. Trạng thái: **đã triển khai MVP nghiên cứu và paper infrastructure**.
+Ngày cập nhật: 2026-09-16. Trạng thái: **risk overlay v1 đã qua gate; đang dừng để review trước holdout**.
 
 ## Mục tiêu
 
@@ -23,8 +23,10 @@ AI chỉ nhận evidence packet bất biến và trả văn bản giải thích.
 và drawdown tệ nhất không quá 20%. Nếu nhiều ứng viên qua: drawdown thấp hơn → median return cao hơn
 → turnover thấp hơn. Không ai qua thì giữ cash.
 
-Kết quả dữ liệu thật đã khóa ngày 2026-09-15: cả ba ứng viên đều trượt điều kiện drawdown.
-Quyết định hiện tại là `stay_cash`; holdout chưa mở và paper account không được tạo.
+Gate baseline đã khóa ngày 2026-09-15: cả ba ứng viên trượt điều kiện drawdown và quyết định là
+`stay_cash`. Gate risk overlay v1 được đăng ký trước rồi khóa riêng ngày 2026-09-16: Donchian qua với
+5/8 fold có lãi, stress return gộp +373,03% và worst drawdown −18,06%; RSI/Bollinger và SMA vẫn trượt
+drawdown. Holdout chưa mở và paper account không được tạo.
 
 ## Thành phần đã triển khai
 
@@ -36,10 +38,10 @@ Quyết định hiện tại là `stay_cash`; holdout chưa mở và paper accou
 6. Worker 00:02 UTC chỉ dùng public market-data API; không có secret hay live-order transport.
 7. AI provider interface read-only; khi chưa có provider, API/UI hiện `disabled`.
 8. Dashboard `/paper` và API audit cho account/cycle/signal/intent/fill/ledger.
+9. Entry-volatility sizing 20 ngày/20% năm, khóa size tới exit; ba run mới và gate versioned.
 
 ## Việc tiếp theo hợp lệ
 
-Không nới gate sau khi xem kết quả. Bước tiếp theo là viết giả thuyết rủi ro mới trước khi chạy,
-ví dụ sizing theo volatility hoặc stop/risk budget có lý do kinh tế. Mọi biến thể phải dùng run mới và
-2018–2025 là dữ liệu đã quan sát. Chỉ khi một rule mới qua gate mới tạo config holdout, mở holdout đúng một lần,
-rồi shadow-paper tối thiểu tám tuần trước khi thảo luận broker thật.
+Không đổi tham số sau khi xem kết quả risk overlay. Bước tiếp theo là review gate đã khóa và lập kế hoạch
+riêng cho holdout Donchian 2026-01-01 → 2026-08-31. Holdout chỉ được mở đúng một lần. Chỉ khi holdout qua
+mới tạo paper account, rồi shadow-paper tối thiểu tám tuần trước khi thảo luận broker thật.

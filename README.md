@@ -16,14 +16,30 @@ và stress-return, nhưng trượt trần drawdown 20%:
 | RSI14 + Bollinger20/2 | 6/8 | +56,95% | −23,83% | Không qua |
 | SMA 20/50 | 6/8 | +222,73% | −42,18% | Không qua |
 
-Quyết định đã khóa là **giữ cash**. Holdout 2026 chưa mở và chưa tạo paper account. Đây là kết quả
-an toàn mong đợi của promotion gate, không phải lỗi. Xem [runbook BTC](docs/btc-paper-runbook.md)
+Gate baseline ngày 2026-09-15 vẫn được giữ nguyên làm bằng chứng `stay_cash`. Một giả thuyết mới đã
+được đăng ký trước và chạy ngày 2026-09-16: size chỉ được tính lúc vào lệnh theo volatility 20 ngày,
+risk target 20%/năm, trần 50%, rồi giữ nguyên tới lúc thoát.
+
+| Chiến lược + risk overlay | Năm có lãi | Stress return gộp | Drawdown tệ nhất | Gate |
+|---|---:|---:|---:|---|
+| Donchian 20/10 + ATR14 | 5/8 | +373,03% | −18,06% | **Qua** |
+| RSI14 + Bollinger20/2 | 6/8 | +20,34% | −23,55% | Không qua |
+| SMA 20/50 | 6/8 | +337,20% | −27,78% | Không qua |
+
+Gate mới đã khóa chọn **Donchian**, nhưng holdout 2026 chưa mở và chưa tạo paper account. Đây là điểm
+dừng review đã định trước, không phải quyền đặt lệnh thật. Xem [runbook BTC](docs/btc-paper-runbook.md)
 và [kế hoạch hiện tại](tasks/plan.md).
 
 Mở dashboard bằng một lệnh:
 
 ```bash
 make web
+```
+
+Lệnh mặc định hiện gate baseline. Để xem gate volatility v1:
+
+```bash
+LAB_PROMOTION_STATE=state/btc-promotion-entry-vol20-v1.sqlite3 make web
 ```
 
 Sau đó vào `http://127.0.0.1:8000/paper`. Chạy toàn bộ kiểm tra bằng `make test`.

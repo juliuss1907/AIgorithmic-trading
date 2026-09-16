@@ -14,8 +14,11 @@
 - [x] EvidencePacket và AIProvider read-only; provider mặc định disabled.
 - [x] Dashboard/API paper; kiểm tra Chromium desktop/mobile, accessibility tree và console.
 - [x] Full automated suite và runbook.
+- [x] Đăng ký trước giả thuyết entry-volatility 20 ngày/20% năm trên cả ba strategy.
+- [x] Thêm typed sizing contract, causal/golden tests và replay fixed-sizing không đổi.
+- [x] Chạy ba run mới; gate versioned chọn Donchian với worst drawdown −18,06%.
 
-## Chưa được phép vì gate hiện tại không qua
+## Đang dừng để review trước holdout
 
 - [ ] Mở holdout 2026.
 - [ ] Tạo tài khoản paper cho chiến lược được promote.
@@ -24,8 +27,5 @@
 
 ## Backlog có điều kiện
 
-- [ ] Viết trước một giả thuyết kiểm soát drawdown mới; không tune để khớp riêng các năm đã xem.
-- [ ] Thêm sizing volatility/ATR như một experiment family có typed contract và golden tests.
-- [ ] Chạy lại cùng gate trên run mới; giữ toàn bộ thất bại làm bằng chứng.
 - [ ] Chỉ sau khi holdout qua: tạo paper account từ snapshot/strategy đã khóa.
 - [ ] Chọn AI provider/model/ngân sách; thêm adapter thật mà không thay quyền hạn read-only.
