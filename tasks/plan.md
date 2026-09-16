@@ -1,6 +1,6 @@
 # Kế hoạch BTC-first: bot thuật toán + AI copilot
 
-Ngày cập nhật: 2026-09-16. Trạng thái: **holdout đã qua; đang dừng review trước promoted paper**.
+Ngày cập nhật: 2026-09-16. Trạng thái: **promoted paper đang chạy; bắt đầu shadow 8 tuần**.
 
 ## Mục tiêu
 
@@ -26,8 +26,8 @@ và drawdown tệ nhất không quá 20%. Nếu nhiều ứng viên qua: drawdow
 Gate baseline đã khóa ngày 2026-09-15: cả ba ứng viên trượt điều kiện drawdown và quyết định là
 `stay_cash`. Gate risk overlay v1 được đăng ký trước rồi khóa riêng ngày 2026-09-16: Donchian qua với
 5/8 fold có lãi, stress return gộp +373,03% và worst drawdown −18,06%; RSI/Bollinger và SMA vẫn trượt
-drawdown. Holdout sau đó qua với return +7,67% và max drawdown −7,98% ở base cost 5 bps; paper account
-chưa được tạo.
+drawdown. Holdout sau đó qua với return +7,67% và max drawdown −7,98% ở base cost 5 bps. Promoted
+account `e573cbe236d74c8d83912c602cb041fb` đã bootstrap flat và đang giữ cash.
 
 ## Thành phần đã triển khai
 
@@ -36,16 +36,17 @@ chưa được tạo.
 3. Crypto execution adapter có quantity step, min-notional, fee, slippage, next-open và CAGR 365.
 4. Walk-forward gate + SQLite latch ngăn ghi đè quyết định và mở holdout lần hai.
 5. Paper broker SQLite có cycle → signal → intent → fill → ledger → reconciliation và kill switch.
-6. Worker 00:02 UTC chỉ dùng public market-data API; không có secret hay live-order transport.
+6. Worker 09:00 Việt Nam chỉ dùng public market-data API; systemd timer retry có giới hạn và ghi incident.
 7. AI provider interface read-only; khi chưa có provider, API/UI hiện `disabled`.
 8. Dashboard `/paper` và API audit cho account/cycle/signal/intent/fill/ledger.
 9. Entry-volatility sizing 20 ngày/20% năm, khóa size tới exit; ba run mới và gate versioned.
 10. Candidate lock gắn Donchian với run/dataset/config/checksum; holdout one-shot kiểm lịch sử và lineage.
 11. Paper account persist sizing, lấy contract từ candidate lock và chờ entry mới sau một chu kỳ flat.
 12. Holdout one-shot 2026 đã khóa run/dataset/checksum; 72 learning cases tái lập giống hệt.
+13. Promoted campaign idempotent lưu contract fingerprint, tiến độ 56 cycle và G6 review bất biến.
 
 ## Việc tiếp theo hợp lệ
 
-Không đổi tham số sau khi xem holdout. Bước tiếp theo là review kết quả đã khóa và tạo promoted paper
-account từ chính candidate contract, bắt đầu bằng cash và chờ entry mới. Sau đó shadow-paper tối thiểu
-tám tuần trước khi thảo luận broker thật.
+Không đổi tham số sau khi xem holdout. Timer chạy mỗi ngày lúc 09:00 Việt Nam; theo dõi reconciliation,
+incident, drawdown và ít nhất một vòng mua–bán. Chỉ finalize G6 sau tối thiểu 56 ngày và 56 cycle thành
+công; sau đó mới thảo luận broker thật.

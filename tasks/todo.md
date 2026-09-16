@@ -10,7 +10,7 @@
 - [x] Tám fold 2018–2025, promotion scoring và latch SQLite trước holdout.
 - [x] Chạy dữ liệu thật cho ba ứng viên; gate khóa `stay_cash` do cả ba vượt drawdown 20%.
 - [x] Paper ledger, idempotent cycle, reconciliation, drawdown halt, rule-change halt và kill switch.
-- [x] Worker public-data-only lúc 00:02 UTC.
+- [x] Worker public-data-only lúc 09:00 Việt Nam bằng systemd user timer.
 - [x] EvidencePacket và AIProvider read-only; provider mặc định disabled.
 - [x] Dashboard/API paper; kiểm tra Chromium desktop/mobile, accessibility tree và console.
 - [x] Full automated suite và runbook.
@@ -22,13 +22,12 @@
 - [x] Persist volatility sizing vào paper account và thêm chính sách chờ entry mới.
 - [x] Mở holdout 2026 một lần; Donchian qua với +7,67% return và −7,98% max drawdown.
 
-## Đang dừng để review trước promoted paper
+## Đang chạy shadow paper
 
-- [ ] Tạo tài khoản paper cho chiến lược được promote.
+- [x] Tạo tài khoản paper idempotent từ candidate/holdout contract đã verify.
 - [ ] Chạy shadow-paper tám tuần.
 - [ ] Chọn broker hoặc thêm endpoint giao dịch thật.
 
 ## Backlog có điều kiện
 
-- [ ] Tạo paper account từ snapshot/strategy đã khóa; bắt đầu cash và chờ entry mới.
 - [ ] Chọn AI provider/model/ngân sách; thêm adapter thật mà không thay quyền hạn read-only.

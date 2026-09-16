@@ -28,7 +28,8 @@ risk target 20%/năm, trần 50%, rồi giữ nguyên tới lúc thoát.
 
 Gate mới đã khóa chọn **Donchian** và candidate contract đã được gắn với run/checksum bất biến. Holdout
 2026-01-01 → 2026-08-31 sau đó đạt **+7,67% return** với **−7,98% max drawdown** ở mức 5 bps, nên qua
-cổng đã đăng ký trước. Chưa tạo paper account; kết quả này không phải quyền đặt lệnh thật. Xem
+cổng đã đăng ký trước. Promoted paper account đã được tạo từ đúng contract này và chạy một chu kỳ mỗi
+ngày lúc **09:00 Việt Nam**; account hiện giữ cash, không có quyền đặt lệnh thật. Xem
 [runbook BTC](docs/btc-paper-runbook.md)
 và [kế hoạch hiện tại](tasks/plan.md).
 
@@ -45,6 +46,7 @@ LAB_PROMOTION_STATE=state/btc-promotion-entry-vol20-v1.sqlite3 make web
 ```
 
 Sau đó vào `http://127.0.0.1:8000/paper`. Chạy toàn bộ kiểm tra bằng `make test`.
+Timer paper có thể kiểm tra bằng `make paper-timer-status`.
 
 ## Pilot SPY trước đây
 
