@@ -7,11 +7,13 @@
     <div class="run-labels"><span class="symbol">BTCUSDT</span><span class="status-pill {{ account.status }}">{{ 'Đang chạy' if account.status == 'active' else 'Đã dừng' }}</span></div>
     <h1>{{ account.strategy.family|replace('_', ' ')|title }}</h1>
     <p class="lede">Snapshot <code>{{ account.dataset_snapshot_id[:12] }}</code> · signal nến đóng UTC · fill mô phỏng ở bid/ask kế tiếp.</p>
+    <p class="muted-copy"><strong>Sizing:</strong> {{ 'Entry volatility · 20 ngày · risk target 20%/năm · cap 50%' if account.position_sizing.family == 'entry_volatility' else 'Fixed · cap 50%' }}</p>
   </div>
   {% if account.status == 'active' %}<button id="kill-switch" class="danger-button" type="button">Dừng bot</button>{% endif %}
 </section>
 
 {% if account.halt_reason %}<div class="halt-banner" role="alert"><strong>Bot đã dừng</strong><span>Lý do: {{ account.halt_reason }}</span></div>{% endif %}
+{% if account.start_policy == 'wait_for_new_entry' and not account.entry_armed %}<div class="ai-disabled" role="status"><strong>Đang chờ entry mới</strong><p>Tài khoản giữ tiền mặt cho đến khi Donchian trở về trạng thái flat rồi phát tín hiệu vào lệnh mới.</p></div>{% endif %}
 
 <section class="metric-strip" aria-label="Trạng thái tài khoản">
   <div><small>Equity</small><strong>{{ "{:,.2f}".format(account.equity) }} USDT</strong></div>

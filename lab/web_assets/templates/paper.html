@@ -20,6 +20,10 @@
     <tbody>{% for score in gate.scores %}<tr><td>{{ score.name }}</td><td>{{ score.profitable_folds }}/8</td><td>{{ "{:.2%}".format(score.aggregate_stress_return) }}</td><td class="negative">{{ "{:.2%}".format(score.worst_drawdown) }}</td><td>{{ 'Qua' if score.passed else 'Không qua' }}</td></tr>{% endfor %}</tbody>
   </table></div>
   {% if gate.status == 'stay_cash' %}<p class="muted-copy">Không chiến lược nào đạt trần drawdown 20%. Holdout chưa mở; bot không được tạo vị thế.</p>{% endif %}
+  {% if gate.candidate_lock %}<p class="muted-copy"><strong>Candidate đã khóa:</strong>
+    run <code>{{ gate.candidate_lock.run_id[:12] }}</code> · dataset <code>{{ gate.candidate_lock.dataset_id[:12] }}</code> ·
+    {{ 'Entry volatility · 20 ngày · risk target 20%/năm · cap 50%' if gate.candidate_lock.position_sizing.family == 'entry_volatility' else 'Fixed sizing' }}.
+  </p>{% endif %}
 </section>
 {% endif %}
 {% if accounts %}
@@ -27,7 +31,7 @@
   {% for account in accounts %}
   <a class="paper-row" href="/paper/{{ account.id }}">
     <span class="status-pill {{ account.status }}">{{ 'Đang chạy' if account.status == 'active' else 'Đã dừng' }}</span>
-    <span><strong>BTCUSDT</strong><small>{{ account.strategy.family }}</small></span>
+    <span><strong>BTCUSDT</strong><small>{{ account.strategy.family }} · {{ account.position_sizing.family }}</small></span>
     <span><small>Equity</small><strong>{{ "{:,.2f}".format(account.equity) }} USDT</strong></span>
     <span><small>Drawdown</small><strong>{{ "{:.2%}".format(account.drawdown) }}</strong></span>
     <b aria-hidden="true">→</b>

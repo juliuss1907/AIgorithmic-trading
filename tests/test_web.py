@@ -172,6 +172,8 @@ def test_paper_dashboard_and_audit_apis(tmp_path):
     account = paper.create_account(
         {"family": "sma_crossover", "fast_window": 1, "slow_window": 2},
         dataset_snapshot_id="a" * 64,
+        position_sizing={"family": "entry_volatility"},
+        start_policy="wait_for_new_entry",
     )
     client = TestClient(create_app(database=database, runs_dir=runs_dir, data_dir=data_dir))
 
@@ -182,6 +184,8 @@ def test_paper_dashboard_and_audit_apis(tmp_path):
     assert "Paper trading" in listing.text
     assert detail.status_code == 200
     assert "10,000.00 USDT" in detail.text
+    assert "Đang chờ entry mới" in detail.text
+    assert "Entry volatility · 20 ngày" in detail.text
     assert client.get("/api/paper/accounts").json()[0]["id"] == account["id"]
     assert client.get(f"/api/paper/accounts/{account['id']}/cycles").json() == []
     assert client.get("/api/ai/status").json()["status"] == "disabled"
@@ -205,3 +209,29 @@ def test_dashboard_can_select_a_versioned_promotion_database(tmp_path, monkeypat
 
     assert client.get("/api/promotion").json()["status"] == "stay_cash"
     assert client.app.state.promotion.database == promotion_database.resolve()
+
+
+def test_paper_dashboard_exposes_locked_candidate_contract(tmp_path):
+    promotion_database = tmp_path / "state/promotion.sqlite3"
+    promotion = PromotionStore(promotion_database)
+    promotion.freeze(PromotionDecision("candidate_selected", "donchian_breakout", ()))
+    promotion.lock_candidate({
+        "candidate": "donchian_breakout", "run_id": "b" * 20,
+        "dataset_id": "c" * 64, "parent_run_id": "a" * 20,
+        "strategy": {"family": "donchian_breakout", "entry_window": 20,
+                     "exit_window": 10, "atr_window": 14},
+        "position_sizing": {"family": "entry_volatility", "lookback": 20,
+                            "annual_target": .2, "annualization_days": 365},
+        "summary_sha256": "d" * 64, "provenance_sha256": "e" * 64,
+    })
+    client = TestClient(create_app(
+        database=tmp_path / "state/lab.sqlite3", runs_dir=tmp_path / "runs",
+        data_dir=tmp_path / "data", promotion_database=promotion_database,
+    ))
+
+    page = client.get("/paper")
+    api = client.get("/api/promotion").json()
+
+    assert "Candidate đã khóa" in page.text
+    assert "Entry volatility · 20 ngày" in page.text
+    assert api["candidate_lock"]["run_id"] == "b" * 20
