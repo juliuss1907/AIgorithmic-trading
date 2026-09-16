@@ -309,10 +309,8 @@ class PaperTradingService:
             raise KeyError(f"Paper account has no promoted campaign: {account_id}")
         result = dict(row)
         result["contract"] = json.loads(result.pop("contract_json"))
-        result["final_review"] = (
-            json.loads(result.pop("final_review_json"))
-            if result["final_review_json"] else None
-        )
+        final_review_json = result.pop("final_review_json")
+        result["final_review"] = json.loads(final_review_json) if final_review_json else None
         return result
 
     def record_incident(self, account_id, candle_date, kind, details):

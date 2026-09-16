@@ -180,6 +180,7 @@ def test_promoted_campaign_is_atomic_and_idempotent(service):
     assert campaign["account_id"] == first["id"]
     assert campaign["target_cycles"] == 56
     assert len(campaign["contract_sha256"]) == 64
+    assert "final_review_json" not in campaign
     assert len(service.list_accounts()) == 1
     assert len(service.list_ledger(first["id"])) == 1
 
