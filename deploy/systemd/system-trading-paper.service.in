@@ -8,6 +8,7 @@ StartLimitBurst=6
 [Service]
 Type=oneshot
 WorkingDirectory=@PROJECT_ROOT@
+EnvironmentFile=-%h/.config/system-trading/paper-alerts.env
 ExecStart=@UV_PATH@ run --frozen python -m lab.paper_worker --once
 Restart=on-failure
 RestartSec=10min

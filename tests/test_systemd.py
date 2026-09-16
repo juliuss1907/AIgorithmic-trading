@@ -14,6 +14,7 @@ def test_paper_timer_runs_at_nine_vietnam_and_retries_transient_failures():
     assert "RestartSec=10min" in service
     assert "StartLimitBurst=6" in service
     assert "python -m lab.paper_worker --once" in service
+    assert "EnvironmentFile=-%h/.config/system-trading/paper-alerts.env" in service
 
 
 def test_makefile_exposes_reversible_user_timer_commands():
@@ -22,3 +23,11 @@ def test_makefile_exposes_reversible_user_timer_commands():
     assert "install-paper-timer:" in makefile
     assert "paper-timer-status:" in makefile
     assert "uninstall-paper-timer:" in makefile
+    assert "paper-alert-test:" in makefile
+
+
+def test_timer_installer_protects_the_telegram_config_directory():
+    installer = (ROOT / "scripts/paper-timer.sh").read_text()
+
+    assert 'install -d -m 0700 "${alert_dir}"' in installer
+    assert 'paper-alerts.env' in installer

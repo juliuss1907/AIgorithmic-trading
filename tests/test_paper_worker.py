@@ -1,10 +1,11 @@
 import pytest
+import sys
 from datetime import datetime, timezone
 
 import pandas as pd
 
 from lab.paper import PaperTradingService
-from lab.paper_worker import PaperWorker, seconds_until_utc_cycle
+from lab.paper_worker import PaperWorker, main, seconds_until_utc_cycle
 from lab.notifications import TelegramDeliveryError
 
 
@@ -204,3 +205,29 @@ def test_telegram_failure_does_not_fail_or_duplicate_the_paper_cycle(tmp_path):
     assert len(pending) == 1
     assert pending[0]["status"] == "failed"
     assert pending[0]["last_error"] == "telegram_delivery_error"
+
+
+def test_worker_main_loads_optional_telegram_notifier(monkeypatch, tmp_path):
+    configured = object()
+    captured = {}
+
+    class Worker:
+        def __init__(self, service, gateway, notifier):
+            captured["arguments"] = (service, gateway, notifier)
+
+        def run_once(self, _account):
+            return []
+
+    monkeypatch.setattr("lab.paper_worker.telegram_from_environment", lambda: configured)
+    monkeypatch.setattr("lab.paper_worker.PaperTradingService", lambda path: ("paper", path))
+    monkeypatch.setattr("lab.paper_worker.DatasetCatalog", lambda path: ("catalog", path))
+    monkeypatch.setattr("lab.paper_worker.BinancePaperGateway", lambda catalog: ("gateway", catalog))
+    monkeypatch.setattr("lab.paper_worker.PaperWorker", Worker)
+    monkeypatch.setattr(sys, "argv", [
+        "paper-worker", "--once", "--database", str(tmp_path / "lab.sqlite3"),
+        "--data-dir", str(tmp_path / "data"),
+    ])
+
+    main()
+
+    assert captured["arguments"][2] is configured

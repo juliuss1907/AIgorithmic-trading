@@ -57,3 +57,19 @@ def test_paper_review_can_read_status_or_finalize(monkeypatch, capsys, tmp_path)
     ])
     main()
     assert json.loads(capsys.readouterr().out)["status"] == "eligible"
+
+
+def test_paper_alert_test_sends_a_realistic_test_message(monkeypatch, capsys):
+    class Notifier:
+        def send(self, message):
+            assert "System Trading Lab" in message
+            return {"message_id": 42}
+
+    monkeypatch.setattr("lab.notifications.telegram_from_environment", lambda: Notifier())
+    monkeypatch.setattr(sys, "argv", ["lab", "paper-alert-test"])
+
+    main()
+
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "delivered", "channel": "telegram", "message_id": 42,
+    }

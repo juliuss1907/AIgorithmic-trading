@@ -1,6 +1,8 @@
 """09:00 Vietnam paper worker backed only by Binance public market-data APIs."""
 
 import argparse
+import json
+import sys
 import time
 from datetime import date, datetime, time as clock_time, timedelta, timezone
 from pathlib import Path
@@ -8,7 +10,7 @@ from pathlib import Path
 from lab.contracts import DatasetRequest
 from lab.data import DATA, ROOT, BinanceClient, save_snapshot
 from lab.datasets import DatasetCatalog
-from lab.notifications import TelegramDeliveryError
+from lab.notifications import TelegramDeliveryError, telegram_from_environment
 from lab.paper import PaperTradingService
 
 
@@ -200,8 +202,17 @@ def main():
     parser.add_argument("--database", type=Path, default=ROOT / "state/lab.sqlite3")
     parser.add_argument("--data-dir", type=Path, default=DATA)
     args = parser.parse_args()
+    try:
+        notifier = telegram_from_environment()
+    except ValueError as exc:
+        print(json.dumps({
+            "level": "warn", "event": "telegram_config_invalid",
+            "entry_point": "paper_worker", "error": str(exc),
+        }, ensure_ascii=False, separators=(",", ":")), file=sys.stderr)
+        notifier = None
     worker = PaperWorker(
-        PaperTradingService(args.database), BinancePaperGateway(DatasetCatalog(args.data_dir))
+        PaperTradingService(args.database), BinancePaperGateway(DatasetCatalog(args.data_dir)),
+        notifier,
     )
     if args.once:
         for cycle in worker.run_once(args.account):

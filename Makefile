@@ -1,4 +1,4 @@
-.PHONY: test web research-worker paper-worker install-paper-timer paper-timer-status uninstall-paper-timer
+.PHONY: test web research-worker paper-worker install-paper-timer paper-timer-status paper-alert-test uninstall-paper-timer
 
 PORT ?= 8000
 
@@ -19,6 +19,9 @@ install-paper-timer:
 
 paper-timer-status:
 	./scripts/paper-timer.sh status
+
+paper-alert-test:
+	./scripts/paper-timer.sh alert-test
 
 uninstall-paper-timer:
 	./scripts/paper-timer.sh uninstall
