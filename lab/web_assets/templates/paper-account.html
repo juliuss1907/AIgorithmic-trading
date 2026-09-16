@@ -22,6 +22,26 @@
   <div><small>Drawdown</small><strong>{{ "{:.2%}".format(account.drawdown) }}</strong></div>
 </section>
 
+{% if campaign %}
+<section class="campaign-panel" aria-labelledby="campaign-heading">
+  <div class="campaign-copy">
+    <p class="eyebrow">Shadow campaign · {{ campaign.status }}</p>
+    <h2 id="campaign-heading">{{ campaign.successful_cycles }} / {{ campaign.target_cycles }} chu kỳ đạt chuẩn</h2>
+    <p class="muted-copy">Bot chạy lúc 09:00 Việt Nam mỗi ngày. Bootstrap không được tính; ngày lỗi sẽ kéo dài chiến dịch.</p>
+  </div>
+  <div class="campaign-progress">
+    <progress value="{{ campaign.successful_cycles }}" max="{{ campaign.target_cycles }}" aria-label="Tiến độ shadow paper"></progress>
+    <span>Còn {{ campaign.remaining_cycles }} chu kỳ · {{ campaign.elapsed_days }} ngày đã trôi qua</span>
+  </div>
+  {% if campaign.blockers %}
+  <div class="campaign-blockers"><strong>Điều kiện chưa đạt</strong><ul>{% for blocker in campaign.blockers %}<li>{{ blocker|replace('_', ' ') }}</li>{% endfor %}</ul></div>
+  {% endif %}
+  {% if campaign.incidents %}
+  <div class="campaign-incidents"><strong>Incident</strong><ul>{% for incident in campaign.incidents %}<li><time>{{ incident.candle_date }}</time><span>{{ incident.kind|replace('_', ' ') }} · {{ incident.status }}</span></li>{% endfor %}</ul></div>
+  {% endif %}
+</section>
+{% endif %}
+
 <div class="two-column paper-columns">
   <section class="panel"><p class="eyebrow">Decision ledger</p><h2>Chu kỳ gần đây</h2>
     {% if cycles %}<ol class="cycle-list">{% for cycle in cycles %}<li>

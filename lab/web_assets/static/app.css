@@ -155,6 +155,16 @@ input:focus, select:focus { outline: 3px solid rgba(15, 107, 79, .16); border-co
 .metric-strip { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--line); }
 .metric-strip div { padding: 28px 20px 28px 0; display: grid; gap: 5px; }
 .metric-strip strong { font-size: clamp(18px, 2vw, 25px); font-variant-numeric: tabular-nums; }
+.campaign-panel { margin-top: 32px; padding: 28px; display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr); gap: 24px 40px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+.campaign-copy h2 { margin-bottom: 10px; }
+.campaign-copy p:last-child { margin-bottom: 0; }
+.campaign-progress { align-self: center; display: grid; gap: 10px; color: var(--muted); font-size: 13px; }
+.campaign-progress progress { width: 100%; height: 12px; accent-color: var(--green); }
+.campaign-blockers, .campaign-incidents { padding-top: 20px; border-top: 1px solid var(--line); }
+.campaign-blockers ul, .campaign-incidents ul { margin: 10px 0 0; padding-left: 20px; color: var(--muted); }
+.campaign-incidents ul { padding: 0; list-style: none; }
+.campaign-incidents li { padding: 8px 0; display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); }
+.campaign-incidents time { font-variant-numeric: tabular-nums; }
 .paper-columns { margin-top: 32px; }
 .cycle-list { margin: 22px 0 0; padding: 0; list-style: none; }
 .cycle-list li { padding: 12px 0; display: flex; justify-content: space-between; gap: 16px; border-top: 1px solid var(--line); }
@@ -169,7 +179,7 @@ footer { padding: 28px 20px; color: var(--muted); border-top: 1px solid var(--li
   .research-badge { display: none; }
   main { width: min(100% - 28px, 1180px); }
   .hero { padding: 64px 0 42px; }
-  .run-grid, .run-hero, .two-column, .experiment-layout, .input-grid, .compare-picker, .compare-identities { grid-template-columns: 1fr; }
+  .run-grid, .run-hero, .two-column, .experiment-layout, .input-grid, .compare-picker, .compare-identities, .campaign-panel { grid-template-columns: 1fr; }
   .period-row { grid-template-columns: 1fr 1fr; }
   .period-row strong { grid-column: 1 / -1; }
   .review-card { position: static; }

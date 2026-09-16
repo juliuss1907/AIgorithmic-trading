@@ -244,3 +244,41 @@ def test_paper_dashboard_exposes_locked_candidate_contract(tmp_path):
     assert "7.67%" in page.text and "−7.98%" in page.text
     assert api["candidate_lock"]["run_id"] == "b" * 20
     assert api["holdout"]["passed"] is True
+
+
+def test_promoted_paper_page_exposes_read_only_campaign_progress(tmp_path):
+    database = tmp_path / "state/lab.sqlite3"
+    paper = PaperTradingService(database, log_dir=tmp_path / "logs")
+
+    class Gate:
+        def get(self):
+            return {
+                "status": "candidate_selected", "selected": "donchian_breakout",
+                "candidate_lock": {
+                    "candidate": "donchian_breakout", "run_id": "b" * 20,
+                    "dataset_id": "c" * 64,
+                    "strategy": {"family": "donchian_breakout", "entry_window": 20,
+                                 "exit_window": 10, "atr_window": 14},
+                    "position_sizing": {"family": "entry_volatility", "lookback": 20,
+                                        "annual_target": .2, "annualization_days": 365},
+                },
+                "holdout": {"candidate": "donchian_breakout", "passed": True,
+                            "run_id": "f" * 20, "dataset_id": "a" * 64},
+            }
+
+    account = paper.create_promoted_account(Gate())
+    client = TestClient(create_app(
+        database=database, runs_dir=tmp_path / "runs", data_dir=tmp_path / "data",
+    ))
+
+    page = client.get(f"/paper/{account['id']}")
+    campaign = client.get(f"/api/paper/accounts/{account['id']}/campaign")
+    incidents = client.get(f"/api/paper/accounts/{account['id']}/incidents")
+
+    assert page.status_code == 200
+    assert "0 / 56" in page.text
+    assert "09:00 Việt Nam" in page.text
+    assert campaign.json()["status"] == "pending"
+    assert campaign.json()["remaining_cycles"] == 56
+    assert incidents.json() == []
+    assert client.post("/api/paper/accounts", json={}).status_code == 405

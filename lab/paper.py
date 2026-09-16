@@ -309,6 +309,10 @@ class PaperTradingService:
             raise KeyError(f"Paper account has no promoted campaign: {account_id}")
         result = dict(row)
         result["contract"] = json.loads(result.pop("contract_json"))
+        result["final_review"] = (
+            json.loads(result.pop("final_review_json"))
+            if result["final_review_json"] else None
+        )
         return result
 
     def record_incident(self, account_id, candle_date, kind, details):
@@ -403,6 +407,41 @@ class PaperTradingService:
             "remaining_cycles": max(0, campaign["target_cycles"] - successful),
             "incidents": incidents, "round_trips": round_trips, "blockers": blockers,
         }
+
+    def finalize_campaign(self, account_id):
+        campaign = self.get_campaign(account_id)
+        if campaign["final_review"] is not None:
+            return campaign["final_review"]
+        status = self.campaign_status(account_id)
+        if status["status"] != "eligible" or status["blockers"]:
+            raise ValueError("Paper campaign is not eligible for final review")
+        contract = status["contract"]
+        review = {
+            "account_id": account_id,
+            "status": "eligible",
+            "contract_sha256": status["contract_sha256"],
+            "candidate_run_id": contract["candidate_lock"].get("run_id"),
+            "holdout_run_id": contract["holdout"].get("run_id"),
+            "successful_cycles": status["successful_cycles"],
+            "elapsed_days": status["elapsed_days"],
+            "round_trips": status["round_trips"],
+            "incident_count": len(status["incidents"]),
+            "finalized_at": utc_now(),
+        }
+        review["review_sha256"] = hashlib.sha256(
+            json.dumps(review, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        payload = json.dumps(review, sort_keys=True, separators=(",", ":"))
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE paper_campaigns SET final_review_json=?,finalized_at=? "
+                "WHERE account_id=? AND final_review_json IS NULL",
+                (payload, review["finalized_at"], account_id),
+            )
+        if cursor.rowcount != 1:
+            return self.get_campaign(account_id)["final_review"]
+        self._event(account_id, "campaign_finalized", entry_point="paper-review")
+        return review
 
     def get_account(self, account_id):
         with self._connect() as connection:

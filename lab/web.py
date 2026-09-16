@@ -110,10 +110,15 @@ def create_app(database=None, runs_dir=None, data_dir=None, promotion_database=N
             account = paper.get_account(account_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            campaign = paper.campaign_status(account_id)
+        except KeyError:
+            campaign = None
         return templates.TemplateResponse(request, "paper-account.html", {
             "account": account, "cycles": paper.list_cycles(account_id),
             "fills": paper.list_fills(account_id), "ledger": paper.list_ledger(account_id),
-            "halts": paper.list_halts(account_id), "ai_status": "disabled",
+            "halts": paper.list_halts(account_id), "campaign": campaign,
+            "ai_status": "disabled",
         })
 
     @app.get("/compare")
@@ -214,6 +219,20 @@ def create_app(database=None, runs_dir=None, data_dir=None, promotion_database=N
     def paper_account_api(account_id: str):
         try:
             return paper.get_account(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/paper/accounts/{account_id}/campaign")
+    def paper_campaign_api(account_id: str):
+        try:
+            return paper.campaign_status(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/paper/accounts/{account_id}/incidents")
+    def paper_incidents_api(account_id: str):
+        try:
+            return paper.list_incidents(account_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

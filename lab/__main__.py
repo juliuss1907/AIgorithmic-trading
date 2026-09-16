@@ -48,6 +48,17 @@ def main():
     promoter.add_argument("--database", type=Path, default=Path("state/lab.sqlite3"))
     promoter.add_argument("--runs-dir", type=Path, default=Path("runs"))
     promoter.add_argument("--data-dir", type=Path, default=Path("data"))
+    reviewer = commands.add_parser("paper-review", help="Inspect or finalize the G6 paper gate")
+    reviewer.add_argument("--account", required=True)
+    reviewer.add_argument("--finalize", action="store_true")
+    reviewer.add_argument("--database", type=Path, default=Path("state/lab.sqlite3"))
+    acknowledger = commands.add_parser(
+        "paper-ack-incident", help="Attach an immutable operator note to a paper incident"
+    )
+    acknowledger.add_argument("--account", required=True)
+    acknowledger.add_argument("--incident", required=True)
+    acknowledger.add_argument("--note", required=True)
+    acknowledger.add_argument("--database", type=Path, default=Path("state/lab.sqlite3"))
     args = parser.parse_args()
     if args.command == "fetch":
         print(json.dumps(fetch(read_config(args.config)).model_dump(mode="json"), indent=2))
@@ -91,6 +102,22 @@ def main():
             args.config,
             args.output,
         ).execute()
+        print(json.dumps(result, indent=2))
+    elif args.command == "paper-review":
+        from lab.paper import PaperTradingService
+
+        paper = PaperTradingService(args.database)
+        result = (
+            paper.finalize_campaign(args.account)
+            if args.finalize else paper.campaign_status(args.account)
+        )
+        print(json.dumps(result, indent=2))
+    elif args.command == "paper-ack-incident":
+        from lab.paper import PaperTradingService
+
+        result = PaperTradingService(args.database).acknowledge_incident(
+            args.account, args.incident, args.note
+        )
         print(json.dumps(result, indent=2))
     else:
         from lab.datasets import DatasetCatalog

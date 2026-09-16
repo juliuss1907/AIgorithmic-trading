@@ -211,6 +211,27 @@ def test_campaign_progress_excludes_bootstrap_and_tracks_incidents(service):
     assert service.list_incidents(account["id"])[0]["operator_note"] == "Network recovered"
 
 
+def test_final_campaign_review_is_gated_and_immutable(service, monkeypatch):
+    account = service.create_promoted_account(promoted_gate(), exchange_rules=RULES)
+
+    with pytest.raises(ValueError, match="not eligible"):
+        service.finalize_campaign(account["id"])
+
+    eligible = service.campaign_status(account["id"]) | {
+        "status": "eligible", "blockers": [], "successful_cycles": 56,
+        "remaining_cycles": 0, "elapsed_days": 56, "round_trips": 1,
+    }
+    monkeypatch.setattr(service, "campaign_status", lambda *_args, **_kwargs: eligible)
+
+    first = service.finalize_campaign(account["id"])
+    repeated = service.finalize_campaign(account["id"])
+
+    assert first == repeated
+    assert first["status"] == "eligible"
+    assert first["successful_cycles"] == 56
+    assert len(first["review_sha256"]) == 64
+
+
 def test_position_sizing_persists_across_restart_and_drives_cycle_target(tmp_path):
     database = tmp_path / "paper.sqlite3"
     service = PaperTradingService(database, log_dir=tmp_path / "logs")
