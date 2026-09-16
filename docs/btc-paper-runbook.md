@@ -43,6 +43,40 @@ Không cần và không đọc Binance API key.
 Binance hiện là nguồn dữ liệu và bộ quy tắc thị trường spot. Paper broker chạy nội bộ; chưa chọn nơi
 đặt lệnh thật và code không có authenticated client hay endpoint `/order`.
 
+## Telegram alerts
+
+Telegram là lớp quan sát fail-open: cycle và ledger không bị thay đổi khi Telegram lỗi. Summary hằng
+ngày gồm signal/fill, equity, cash/BTC, drawdown, reconciliation, incident và tiến độ campaign. Fetch
+failure hoặc account halt tạo cảnh báo ngay; outbox SQLite chống gửi trùng khi systemd retry.
+
+Tạo bot bằng BotFather, nhắn `/start` cho bot và lấy numeric chat ID qua phương thức `getUpdates` trong
+tài liệu Telegram Bot API. Sau đó tạo file chỉ owner đọc được, **không đặt file này trong repository**:
+
+```bash
+mkdir -p ~/.config/system-trading
+chmod 700 ~/.config/system-trading
+$EDITOR ~/.config/system-trading/paper-alerts.env
+chmod 600 ~/.config/system-trading/paper-alerts.env
+```
+
+Nội dung file:
+
+```text
+TELEGRAM_BOT_TOKEN=<token do BotFather cấp>
+TELEGRAM_CHAT_ID=<numeric chat id>
+```
+
+Cài lại unit để nhận `EnvironmentFile`, gửi tin thử rồi kiểm tra timer:
+
+```bash
+make install-paper-timer
+make paper-alert-test
+make paper-timer-status
+```
+
+Không dán token vào issue, commit, log hoặc câu lệnh có thể lưu shell history. Nếu token từng vào Git,
+phải revoke và tạo token mới; xóa dòng khỏi commit là chưa đủ.
+
 ## Tái lập nghiên cứu
 
 ```bash
@@ -91,6 +125,8 @@ Promoted account đã được tạo từ contract này; strategy và sizing kh�
 - Worker lỗi tải: account không được tạo fill; sửa kết nối/dữ liệu rồi kiểm tra halt trước khi chạy lại.
 - Timer/log: `systemctl --user status system-trading-paper.timer` và
   `journalctl --user -u system-trading-paper.service`.
+- Không nhận Telegram: xem [runbook cảnh báo](runbooks/paper-alerts.md), kiểm quyền file `0600`, rồi
+  chạy `make paper-alert-test`.
 - Rule sàn thay đổi hoặc ledger lệch: bot tự halt. Không tự sửa SQLite để chạy tiếp.
 
 ## Sao lưu và phục hồi

@@ -47,6 +47,8 @@ LAB_PROMOTION_STATE=state/btc-promotion-entry-vol20-v1.sqlite3 make web
 
 Sau đó vào `http://127.0.0.1:8000/paper`. Chạy toàn bộ kiểm tra bằng `make test`.
 Timer paper có thể kiểm tra bằng `make paper-timer-status`.
+Telegram summary được hỗ trợ nhưng mặc định tắt cho tới khi có secret file ngoài repository; xem
+[runbook BTC](docs/btc-paper-runbook.md#telegram-alerts).
 
 ## Pilot SPY trước đây
 
