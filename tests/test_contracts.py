@@ -102,6 +102,44 @@ def test_crypto_contract_freezes_market_cost_and_risk_semantics():
     assert config.bars_per_year == 365
     assert config.taker_fee_bps == 10
     assert config.risk_policy.max_target_weight == 0.5
+    assert config.risk_policy.position_sizing.family == "fixed"
+
+
+def test_crypto_contract_accepts_the_frozen_entry_volatility_profile():
+    value = btc_payload()
+    value["risk_policy"]["position_sizing"] = {
+        "family": "entry_volatility",
+        "lookback": 20,
+        "annual_target": 0.20,
+        "annualization_days": 365,
+    }
+
+    config = ExperimentSpec.model_validate(value)
+
+    assert config.risk_policy.position_sizing.family == "entry_volatility"
+    assert config.risk_policy.position_sizing.lookback == 20
+    assert config.risk_policy.position_sizing.annual_target == 0.20
+    assert config.risk_policy.position_sizing.annualization_days == 365
+
+
+@pytest.mark.parametrize(
+    "position_sizing",
+    [
+        {"family": "entry_volatility", "lookback": 10,
+         "annual_target": 0.20, "annualization_days": 365},
+        {"family": "entry_volatility", "lookback": 20,
+         "annual_target": 0.25, "annualization_days": 365},
+        {"family": "entry_volatility", "lookback": 20,
+         "annual_target": 0.20, "annualization_days": 252},
+        {"family": "unknown"},
+    ],
+)
+def test_crypto_contract_rejects_unregistered_position_sizing_profiles(position_sizing):
+    value = btc_payload()
+    value["risk_policy"]["position_sizing"] = position_sizing
+
+    with pytest.raises(ValidationError):
+        ExperimentSpec.model_validate(value)
 
 
 def test_dataset_request_allows_only_the_supported_binance_daily_pair():

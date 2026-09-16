@@ -1,7 +1,7 @@
 """Typed contracts shared by the CLI, worker, and future web application."""
 
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -112,11 +112,35 @@ class DonchianStrategySpec(BaseModel):
 StrategySpec = SmaStrategySpec | RsiBollingerStrategySpec | DonchianStrategySpec
 
 
+class FixedPositionSizingSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    family: Literal["fixed"] = "fixed"
+
+
+class EntryVolatilityPositionSizingSpec(BaseModel):
+    """Pre-registered BTC risk budget; values are intentionally not tunable."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    family: Literal["entry_volatility"] = "entry_volatility"
+    lookback: Literal[20] = 20
+    annual_target: Literal[0.2] = 0.2
+    annualization_days: Literal[365] = 365
+
+
+PositionSizingSpec = Annotated[
+    FixedPositionSizingSpec | EntryVolatilityPositionSizingSpec,
+    Field(discriminator="family"),
+]
+
+
 class RiskPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_target_weight: float = Field(default=1.0, gt=0, le=1, allow_inf_nan=False)
     halt_drawdown: float = Field(default=0.3, gt=0, lt=1, allow_inf_nan=False)
+    position_sizing: PositionSizingSpec = Field(default_factory=FixedPositionSizingSpec)
 
 
 class ExperimentSpec(BaseModel):
@@ -197,6 +221,8 @@ class ExperimentSpec(BaseModel):
                 raise ValueError("BTC MVP freezes taker_fee_bps at 10")
             if self.risk_policy.max_target_weight != 0.5:
                 raise ValueError("BTC MVP freezes max_target_weight at 0.5")
+        elif self.risk_policy.position_sizing.family != "fixed":
+            raise ValueError("entry volatility sizing is only registered for BTC spot")
         if not self.periods:
             raise ValueError("at least one evaluation period is required")
         windows = []
