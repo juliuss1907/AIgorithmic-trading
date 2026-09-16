@@ -24,10 +24,20 @@ def main():
     gate = commands.add_parser("gate", help="Freeze a BTC promotion decision before holdout")
     gate.add_argument("--candidate", action="append", required=True, metavar="NAME=RUN_DIR")
     gate.add_argument("--state", type=Path, default=Path("state/btc-promotion.sqlite3"))
-    holdout = commands.add_parser("holdout", help="Open the selected BTC holdout exactly once")
-    holdout.add_argument("--candidate", required=True)
-    holdout.add_argument("--run", type=Path, required=True)
+    locker = commands.add_parser("lock-candidate", help="Bind the selected gate to verified evidence")
+    locker.add_argument("--run-id", required=True)
+    locker.add_argument("--state", type=Path, default=Path("state/btc-promotion.sqlite3"))
+    locker.add_argument("--database", type=Path, default=Path("state/lab.sqlite3"))
+    locker.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    holdout = commands.add_parser("holdout", help="Fetch, run, verify, and latch BTC holdout once")
+    holdout.add_argument(
+        "--config", type=Path, default=Path("experiments/btc-donchian-holdout-v1.json")
+    )
+    holdout.add_argument("--output", type=Path, default=Path("runs/btc-donchian-holdout-v1"))
     holdout.add_argument("--state", type=Path, default=Path("state/btc-promotion.sqlite3"))
+    holdout.add_argument("--database", type=Path, default=Path("state/lab.sqlite3"))
+    holdout.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    holdout.add_argument("--data-dir", type=Path, default=Path("data"))
     args = parser.parse_args()
     if args.command == "fetch":
         print(json.dumps(fetch(read_config(args.config)).model_dump(mode="json"), indent=2))
@@ -50,12 +60,27 @@ def main():
             candidates[name] = json.loads((Path(directory) / "summary.json").read_text())
         decision = PromotionStore(args.state).freeze(select_candidate(candidates))
         print(json.dumps(decision, indent=2))
-    else:
-        from lab.evaluation import PromotionStore
+    elif args.command == "lock-candidate":
+        from lab.evaluation import PromotionStore, lock_selected_candidate
+        from lab.store import RunStore
 
-        summary = json.loads((args.run / "summary.json").read_text())
-        metrics = summary["holdout/5bps/rule"]
-        result = PromotionStore(args.state).open_holdout(args.candidate, metrics)
+        result = lock_selected_candidate(
+            PromotionStore(args.state), RunStore(args.database, args.runs_dir), args.run_id
+        )
+        print(json.dumps(result, indent=2))
+    else:
+        from lab.datasets import DatasetCatalog
+        from lab.evaluation import PromotionStore
+        from lab.holdout import HoldoutPipeline
+        from lab.store import RunStore
+
+        result = HoldoutPipeline(
+            PromotionStore(args.state),
+            RunStore(args.database, args.runs_dir),
+            DatasetCatalog(args.data_dir),
+            args.config,
+            args.output,
+        ).execute()
         print(json.dumps(result, indent=2))
 
 
