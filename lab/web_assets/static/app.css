@@ -150,7 +150,7 @@ input:focus, select:focus { outline: 3px solid rgba(15, 107, 79, .16); border-co
 .paper-account-head { padding: 42px 0 48px; display: flex; align-items: end; justify-content: space-between; gap: 30px; border-bottom: 1px solid var(--line); }
 .paper-account-head h1 { margin-bottom: 18px; font-size: clamp(42px, 6vw, 72px); }
 .danger-button { flex: 0 0 auto; color: #fff; background: var(--red); }
-.halt-banner { margin: 24px 0 0; padding: 16px 18px; display: flex; gap: 12px; background: #f3dfdc; border-left: 4px solid var(--red); }
+.halt-banner { margin: 24px 0 0; padding: 16px 18px; display: flex; gap: 12px; background: #f3dfdc; border: 1px solid #ddb9b4; border-radius: 10px; }
 .halt-banner span { color: var(--muted); }
 .metric-strip { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--line); }
 .metric-strip div { padding: 28px 20px 28px 0; display: grid; gap: 5px; }
@@ -160,7 +160,7 @@ input:focus, select:focus { outline: 3px solid rgba(15, 107, 79, .16); border-co
 .cycle-list li { padding: 12px 0; display: flex; justify-content: space-between; gap: 16px; border-top: 1px solid var(--line); }
 .cycle-list li span { display: grid; gap: 2px; }
 .cycle-list li > span:last-child { color: var(--green); font-size: 13px; }
-.ai-disabled { margin-top: 22px; padding-left: 16px; border-left: 3px solid var(--orange); }
+.ai-disabled { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
 .ai-disabled p, .muted-copy { color: var(--muted); }
 .empty-cell { padding: 32px; color: var(--muted); text-align: center !important; }
 footer { padding: 28px 20px; color: var(--muted); border-top: 1px solid var(--line); text-align: center; font-size: 13px; }
