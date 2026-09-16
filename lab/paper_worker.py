@@ -1,4 +1,4 @@
-"""UTC-scheduled paper worker backed only by Binance public market-data APIs."""
+"""09:00 Vietnam paper worker backed only by Binance public market-data APIs."""
 
 import argparse
 import time
@@ -35,7 +35,7 @@ class BinancePaperGateway:
 
 def seconds_until_utc_cycle(now=None):
     now = now or datetime.now(timezone.utc)
-    target = datetime.combine(now.date(), clock_time(0, 2), tzinfo=timezone.utc)
+    target = datetime.combine(now.date(), clock_time(2, 0), tzinfo=timezone.utc)
     if target <= now:
         target += timedelta(days=1)
     return (target - now).total_seconds()
@@ -53,12 +53,40 @@ class PaperWorker:
         )
         if not accounts:
             return []
-        market = self.gateway.snapshot()
-        return [self.service.run_cycle(
-            account["id"], market["frame"], bid=market["bid"], ask=market["ask"],
-            exchange_rules=market["exchange_rules"],
-            dataset_snapshot_id=market["dataset_snapshot_id"], entry_point="scheduler",
-        ) for account in accounts]
+        expected_candle = datetime.now(timezone.utc).date() - timedelta(days=1)
+        try:
+            market = self.gateway.snapshot()
+        except Exception as exc:
+            for account in accounts:
+                try:
+                    self.service.record_incident(
+                        account["id"], expected_candle, "data_fetch_failed",
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                except KeyError:
+                    pass
+            raise
+        latest_candle = market["frame"].index[-1].date()
+        results = []
+        for account in accounts:
+            try:
+                self.service.recover_incident(account["id"], expected_candle)
+                if account["last_candle"]:
+                    missing = date.fromisoformat(account["last_candle"]) + timedelta(days=1)
+                    while missing < latest_candle:
+                        self.service.record_incident(
+                            account["id"], missing, "missed_cycle",
+                            "No completed paper cycle exists for this closed UTC candle",
+                        )
+                        missing += timedelta(days=1)
+            except KeyError:
+                pass
+            results.append(self.service.run_cycle(
+                account["id"], market["frame"], bid=market["bid"], ask=market["ask"],
+                exchange_rules=market["exchange_rules"],
+                dataset_snapshot_id=market["dataset_snapshot_id"], entry_point="scheduler",
+            ))
+        return results
 
     def run_forever(self):
         while True:
@@ -71,7 +99,9 @@ class PaperWorker:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="BTCUSDT paper worker at 00:02 UTC")
+    parser = argparse.ArgumentParser(
+        description="BTCUSDT paper worker at 09:00 Asia/Ho_Chi_Minh (02:00 UTC)"
+    )
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--account")
     parser.add_argument("--database", type=Path, default=ROOT / "state/lab.sqlite3")

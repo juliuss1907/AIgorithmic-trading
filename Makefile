@@ -1,4 +1,4 @@
-.PHONY: test web research-worker paper-worker
+.PHONY: test web research-worker paper-worker install-paper-timer paper-timer-status uninstall-paper-timer
 
 PORT ?= 8000
 
@@ -13,3 +13,12 @@ research-worker:
 
 paper-worker:
 	uv run --frozen python -m lab.paper_worker
+
+install-paper-timer:
+	./scripts/paper-timer.sh install
+
+paper-timer-status:
+	./scripts/paper-timer.sh status
+
+uninstall-paper-timer:
+	./scripts/paper-timer.sh uninstall
