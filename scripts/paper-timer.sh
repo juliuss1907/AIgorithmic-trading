@@ -31,11 +31,7 @@ case "${1:-status}" in
       echo "Telegram config must have mode 600: ${alert_file}" >&2
       exit 1
     fi
-    set -a
-    # shellcheck disable=SC1090
-    source "${alert_file}"
-    set +a
-    exec uv run --frozen python -m lab paper-alert-test
+    exec uv run --frozen python -m lab paper-alert-test --env-file "${alert_file}"
     ;;
   status)
     systemctl --user status "${timer_name}" --no-pager

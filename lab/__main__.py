@@ -59,9 +59,10 @@ def main():
     acknowledger.add_argument("--incident", required=True)
     acknowledger.add_argument("--note", required=True)
     acknowledger.add_argument("--database", type=Path, default=Path("state/lab.sqlite3"))
-    commands.add_parser(
+    alert_test = commands.add_parser(
         "paper-alert-test", help="Send one Telegram message using environment credentials"
     )
+    alert_test.add_argument("--env-file", type=Path)
     args = parser.parse_args()
     if args.command == "fetch":
         print(json.dumps(fetch(read_config(args.config)).model_dump(mode="json"), indent=2))
@@ -123,9 +124,12 @@ def main():
         )
         print(json.dumps(result, indent=2))
     elif args.command == "paper-alert-test":
-        from lab.notifications import telegram_from_environment
+        from lab.notifications import telegram_from_environment, telegram_from_file
 
-        notifier = telegram_from_environment()
+        notifier = (
+            telegram_from_file(args.env_file) if args.env_file
+            else telegram_from_environment()
+        )
         if notifier is None:
             parser.error("Telegram alerts are not configured")
         result = notifier.send("✅ System Trading Lab · Telegram alerts are configured")

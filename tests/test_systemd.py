@@ -31,3 +31,5 @@ def test_timer_installer_protects_the_telegram_config_directory():
 
     assert 'install -d -m 0700 "${alert_dir}"' in installer
     assert 'paper-alerts.env' in installer
+    assert 'source "${alert_file}"' not in installer
+    assert 'paper-alert-test --env-file "${alert_file}"' in installer

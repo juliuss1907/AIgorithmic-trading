@@ -3,7 +3,9 @@
 import json
 import os
 import re
+import stat
 import time
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -86,3 +88,44 @@ def telegram_from_environment(environ=None):
     if not token or not chat_id:
         raise ValueError("Telegram alert configuration is incomplete")
     return TelegramNotifier(token, chat_id)
+
+
+def telegram_from_file(path):
+    path = Path(path)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise ValueError("Telegram config must be a readable regular file") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("Telegram config must be a readable regular file")
+        if metadata.st_uid != os.getuid():
+            raise ValueError("Telegram config must be owned by the current user")
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise ValueError("Telegram config must have mode 600")
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = None
+            raw = stream.read(4097)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if len(raw) > 4096:
+        raise ValueError("Telegram config is too large")
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Telegram config must be UTF-8") from exc
+    values = {}
+    allowed = {"TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"}
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            raise ValueError("Telegram config contains an invalid line")
+        key, value = stripped.split("=", 1)
+        if key not in allowed or key in values:
+            raise ValueError("Telegram config contains an invalid key")
+        values[key] = value
+    return telegram_from_environment(values)

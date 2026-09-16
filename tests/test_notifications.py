@@ -1,9 +1,15 @@
 import json
+import os
 from urllib.error import HTTPError
 
 import pytest
 
-from lab.notifications import TelegramDeliveryError, TelegramNotifier, telegram_from_environment
+from lab.notifications import (
+    TelegramDeliveryError,
+    TelegramNotifier,
+    telegram_from_environment,
+    telegram_from_file,
+)
 
 
 def test_telegram_notifier_posts_plain_text_to_fixed_bot_api():
@@ -83,3 +89,38 @@ def test_telegram_notifier_rejects_unsuccessful_json_without_echoing_description
 
     assert token not in str(caught.value)
     assert str(caught.value) == "Telegram rejected the request"
+
+
+def test_telegram_config_file_requires_owner_only_mode_and_exact_keys(tmp_path):
+    config = tmp_path / "paper-alerts.env"
+    config.write_text(
+        "TELEGRAM_BOT_TOKEN=123456:secret-token_value\nTELEGRAM_CHAT_ID=-100123\n"
+    )
+    config.chmod(0o600)
+
+    notifier = telegram_from_file(config)
+
+    assert notifier.chat_id == "-100123"
+
+    config.chmod(0o644)
+    with pytest.raises(ValueError, match="mode 600"):
+        telegram_from_file(config)
+
+
+def test_telegram_config_file_rejects_symlinks_and_shell_syntax(tmp_path):
+    config = tmp_path / "paper-alerts.env"
+    marker = tmp_path / "should-not-run"
+    config.write_text(
+        "TELEGRAM_BOT_TOKEN=123456:secret-token_value\n"
+        f"TELEGRAM_CHAT_ID=$(touch {marker})\n"
+    )
+    config.chmod(0o600)
+
+    with pytest.raises(ValueError, match="invalid chat id"):
+        telegram_from_file(config)
+    assert not os.path.exists(marker)
+
+    link = tmp_path / "linked.env"
+    link.symlink_to(config)
+    with pytest.raises(ValueError, match="regular file"):
+        telegram_from_file(link)
