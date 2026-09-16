@@ -38,6 +38,16 @@ def main():
     holdout.add_argument("--database", type=Path, default=Path("state/lab.sqlite3"))
     holdout.add_argument("--runs-dir", type=Path, default=Path("runs"))
     holdout.add_argument("--data-dir", type=Path, default=Path("data"))
+    promoter = commands.add_parser(
+        "promote-paper", help="Verify the frozen contract and create one promoted paper account"
+    )
+    promoter.add_argument("--check", action="store_true", help="Verify without creating an account")
+    promoter.add_argument(
+        "--state", type=Path, default=Path("state/btc-promotion-entry-vol20-v1.sqlite3")
+    )
+    promoter.add_argument("--database", type=Path, default=Path("state/lab.sqlite3"))
+    promoter.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    promoter.add_argument("--data-dir", type=Path, default=Path("data"))
     args = parser.parse_args()
     if args.command == "fetch":
         print(json.dumps(fetch(read_config(args.config)).model_dump(mode="json"), indent=2))
@@ -68,7 +78,7 @@ def main():
             PromotionStore(args.state), RunStore(args.database, args.runs_dir), args.run_id
         )
         print(json.dumps(result, indent=2))
-    else:
+    elif args.command == "holdout":
         from lab.datasets import DatasetCatalog
         from lab.evaluation import PromotionStore
         from lab.holdout import HoldoutPipeline
@@ -81,6 +91,28 @@ def main():
             args.config,
             args.output,
         ).execute()
+        print(json.dumps(result, indent=2))
+    else:
+        from lab.datasets import DatasetCatalog
+        from lab.evaluation import PromotionStore
+        from lab.paper_promotion import activate_promoted_account
+        from lab.store import RunStore
+
+        promotion = PromotionStore(args.state)
+        runs = RunStore(args.database, args.runs_dir)
+        catalog = DatasetCatalog(args.data_dir)
+        if args.check:
+            result = activate_promoted_account(
+                promotion, runs, catalog, check=True,
+            )
+        else:
+            from lab.paper import PaperTradingService
+            from lab.paper_worker import BinancePaperGateway
+
+            result = activate_promoted_account(
+                promotion, runs, catalog, PaperTradingService(args.database),
+                BinancePaperGateway(catalog),
+            )
         print(json.dumps(result, indent=2))
 
 

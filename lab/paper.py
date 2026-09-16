@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from lab.paper_promotion import build_campaign_contract, contract_sha256
 from lab.strategy import RuleSignalEngine, position_sizing_from_dict, strategy_from_dict
 
 
@@ -256,21 +257,21 @@ class PaperTradingService:
             execution["fee_bps"], execution["slippage_bps"],
             lock["position_sizing"], "wait_for_new_entry",
         )
-        contract = {
-            "selected": state["selected"], "candidate_lock": lock,
-            "holdout": state["holdout"],
-            "execution": {
-                "initial_cash": execution["initial_cash"],
-                "max_target_weight": execution["max_target_weight"],
-                "halt_drawdown": execution["halt_drawdown"],
-                "fee_bps": execution["fee_bps"],
-                "slippage_bps": execution["slippage_bps"],
-                "exchange_rules": rules,
-                "start_policy": "wait_for_new_entry",
-            },
+        contract = build_campaign_contract(state, rules)
+        expected_execution = contract["execution"]
+        actual_execution = {
+            "initial_cash": execution["initial_cash"],
+            "max_target_weight": execution["max_target_weight"],
+            "halt_drawdown": execution["halt_drawdown"],
+            "fee_bps": execution["fee_bps"],
+            "slippage_bps": execution["slippage_bps"],
+            "exchange_rules": rules,
+            "start_policy": "wait_for_new_entry",
         }
+        if actual_execution != expected_execution:
+            raise ValueError("Promoted account execution contract cannot be overridden")
         contract_json = json.dumps(contract, sort_keys=True, separators=(",", ":"))
-        fingerprint = hashlib.sha256(contract_json.encode()).hexdigest()
+        fingerprint = contract_sha256(contract)
         account_id = uuid.uuid4().hex
         now = utc_now()
         with self._connect() as connection:
