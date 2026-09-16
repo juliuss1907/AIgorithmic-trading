@@ -26,8 +26,9 @@ risk target 20%/năm, trần 50%, rồi giữ nguyên tới lúc thoát.
 | RSI14 + Bollinger20/2 | 6/8 | +20,34% | −23,55% | Không qua |
 | SMA 20/50 | 6/8 | +337,20% | −27,78% | Không qua |
 
-Gate mới đã khóa chọn **Donchian**, nhưng holdout 2026 chưa mở và chưa tạo paper account. Đây là điểm
-dừng review đã định trước, không phải quyền đặt lệnh thật. Xem [runbook BTC](docs/btc-paper-runbook.md)
+Gate mới đã khóa chọn **Donchian** và candidate contract đã được gắn với run/checksum bất biến, nhưng
+holdout 2026 chưa mở và chưa tạo paper account. Đây là điểm dừng review đã định trước, không phải quyền
+đặt lệnh thật. Xem [runbook BTC](docs/btc-paper-runbook.md)
 và [kế hoạch hiện tại](tasks/plan.md).
 
 Mở dashboard bằng một lệnh:

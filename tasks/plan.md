@@ -1,6 +1,6 @@
 # Kế hoạch BTC-first: bot thuật toán + AI copilot
 
-Ngày cập nhật: 2026-09-16. Trạng thái: **risk overlay v1 đã qua gate; đang dừng để review trước holdout**.
+Ngày cập nhật: 2026-09-16. Trạng thái: **candidate đã khóa; pipeline sẵn sàng, vẫn dừng trước holdout**.
 
 ## Mục tiêu
 
@@ -39,9 +39,11 @@ drawdown. Holdout chưa mở và paper account không được tạo.
 7. AI provider interface read-only; khi chưa có provider, API/UI hiện `disabled`.
 8. Dashboard `/paper` và API audit cho account/cycle/signal/intent/fill/ledger.
 9. Entry-volatility sizing 20 ngày/20% năm, khóa size tới exit; ba run mới và gate versioned.
+10. Candidate lock gắn Donchian với run/dataset/config/checksum; holdout one-shot kiểm lịch sử và lineage.
+11. Paper account persist sizing, lấy contract từ candidate lock và chờ entry mới sau một chu kỳ flat.
 
 ## Việc tiếp theo hợp lệ
 
-Không đổi tham số sau khi xem kết quả risk overlay. Bước tiếp theo là review gate đã khóa và lập kế hoạch
-riêng cho holdout Donchian 2026-01-01 → 2026-08-31. Holdout chỉ được mở đúng một lần. Chỉ khi holdout qua
-mới tạo paper account, rồi shadow-paper tối thiểu tám tuần trước khi thảo luận broker thật.
+Không đổi tham số sau khi xem kết quả risk overlay. Bước tiếp theo là review candidate lock và lệnh
+holdout đã chuẩn bị. Chưa tải snapshot 2026 và chưa chạy config holdout. Holdout chỉ được mở đúng một lần.
+Chỉ khi holdout qua mới tạo paper account, rồi shadow-paper tối thiểu tám tuần trước khi thảo luận broker thật.

@@ -17,6 +17,9 @@
 - [x] Đăng ký trước giả thuyết entry-volatility 20 ngày/20% năm trên cả ba strategy.
 - [x] Thêm typed sizing contract, causal/golden tests và replay fixed-sizing không đổi.
 - [x] Chạy ba run mới; gate versioned chọn Donchian với worst drawdown −18,06%.
+- [x] Khóa candidate Donchian vào run/dataset/config/checksum đã verify.
+- [x] Harden pipeline holdout one-shot; chưa tải hoặc chạy dữ liệu 2026.
+- [x] Persist volatility sizing vào paper account và thêm chính sách chờ entry mới.
 
 ## Đang dừng để review trước holdout
 

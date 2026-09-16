@@ -1,8 +1,8 @@
 # Roadmap tổng thể: Hệ thống nghiên cứu và giao dịch thuật toán
 
-> Cập nhật 2026-09-15: hướng triển khai hiện tại là BTCUSDT spot trước. Hạ tầng strategy,
-> walk-forward, paper ledger và AI read-only đã có. Gate dữ liệu thật chọn `stay_cash` vì cả ba
-> ứng viên vượt drawdown 20%; do đó holdout/paper/live đang bị chặn có chủ đích. Xem
+> Cập nhật 2026-09-16: hướng triển khai hiện tại là BTCUSDT spot trước. Hạ tầng strategy,
+> walk-forward, paper ledger và AI read-only đã có. Risk overlay v1 đã chọn và khóa Donchian;
+> pipeline holdout đã harden nhưng dữ liệu 2026 chưa được tải/chạy. Paper/live vẫn bị chặn có chủ đích. Xem
 > [plan.md](plan.md) và [todo.md](todo.md) để biết trạng thái chuẩn.
 
 Ngày chốt: 2026-09-14. Nền hiện có: pilot SPY SMA 20/50 đã chạy,
