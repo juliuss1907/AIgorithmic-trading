@@ -1,6 +1,7 @@
 """Local Vietnamese web workbench for inspecting completed experiments."""
 
 import json
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -29,7 +30,7 @@ class NoteRequest(BaseModel):
     body: str = Field(min_length=1, max_length=2000)
 
 
-def create_app(database=None, runs_dir=None, data_dir=None):
+def create_app(database=None, runs_dir=None, data_dir=None, promotion_database=None):
     app = FastAPI(title="Phòng thử nghiệm trading", version="0.1.0")
     store = RunStore(database=database, runs_dir=runs_dir)
     catalog = DatasetCatalog(data_dir or DATA)
@@ -43,7 +44,12 @@ def create_app(database=None, runs_dir=None, data_dir=None):
     )
     dataset_queue = DatasetJobQueue(store.database, catalog)
     paper = PaperTradingService(store.database)
-    promotion = PromotionStore(store.database.parent / "btc-promotion.sqlite3")
+    promotion_path = (
+        promotion_database
+        or os.environ.get("LAB_PROMOTION_STATE")
+        or store.database.parent / "btc-promotion.sqlite3"
+    )
+    promotion = PromotionStore(promotion_path)
     app.state.store = store
     app.state.queue = queue
     app.state.dataset_queue = dataset_queue

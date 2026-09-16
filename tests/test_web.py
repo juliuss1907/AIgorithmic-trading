@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from lab.evaluation import PromotionDecision, PromotionStore
 from lab.paper import PaperTradingService
 from lab.store import RunStore
 from lab.web import create_app
@@ -189,3 +190,18 @@ def test_paper_dashboard_and_audit_apis(tmp_path):
     stopped = client.post(f"/api/paper/accounts/{account['id']}/halt")
     assert stopped.status_code == 200
     assert stopped.json()["halt_reason"] == "manual_kill_switch"
+
+
+def test_dashboard_can_select_a_versioned_promotion_database(tmp_path, monkeypatch):
+    promotion_database = tmp_path / "state/btc-promotion-entry-vol20-v1.sqlite3"
+    PromotionStore(promotion_database).freeze(PromotionDecision("stay_cash", None, ()))
+    monkeypatch.setenv("LAB_PROMOTION_STATE", str(promotion_database))
+
+    client = TestClient(create_app(
+        database=tmp_path / "state/lab.sqlite3",
+        runs_dir=tmp_path / "runs",
+        data_dir=tmp_path / "data",
+    ))
+
+    assert client.get("/api/promotion").json()["status"] == "stay_cash"
+    assert client.app.state.promotion.database == promotion_database.resolve()

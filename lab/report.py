@@ -25,13 +25,19 @@ def _crypto_strategy_label(strategy):
 
 def _generate_crypto(output, summary, provenance):
     config = provenance["experiment"]
+    sizing = config["risk_policy"].get("position_sizing", {"family": "fixed"})
     periods = list(config["periods"])
     base_cost = 5 if 5 in config["slippage_bps"] else config["slippage_bps"][0]
     cost_label = f"{base_cost:g}bps"
     label = _crypto_strategy_label(config["strategy"])
+    rule_label = (
+        f"{label} + vol {sizing['lookback']}d/{sizing['annual_target']:.0%}"
+        if sizing["family"] == "entry_volatility"
+        else label
+    )
     fig, axes = plt.subplots(len(periods), 1, figsize=(10, 4 * len(periods)), squeeze=False)
     comparisons = (
-        ("rule", "#176b87", label), ("buy-hold-50", "#ad5b27", "BTC hold 50%"),
+        ("rule", "#176b87", rule_label), ("buy-hold-50", "#ad5b27", "BTC hold 50%"),
         ("buy-hold-100", "#6b706f", "BTC hold 100% (reference)"),
     )
     for period, ax in zip(periods, axes[:, 0]):
@@ -49,10 +55,17 @@ def _generate_crypto(output, summary, provenance):
     fig.tight_layout()
     fig.savefig(output / "equity.png", dpi=160)
     plt.close(fig)
+    risk_description = (
+        f"Khi có tín hiệu vào lệnh, vị thế được khóa ở min(50%, "
+        f"{sizing['annual_target']:.0%}/volatility {sizing['lookback']} ngày); "
+        "không tái cân bằng cho đến khi thoát."
+        if sizing["family"] == "entry_volatility"
+        else "Target long cố định tối đa 50%; nếu không có tín hiệu thì giữ USDT."
+    )
     lines = [
         f"# {config['title']}", "", f"**Giả thuyết:** {config['hypothesis']}", "",
         f"Chiến lược: **{label}**. Tài sản: Binance spot BTCUSDT, nến ngày UTC 24/7. "
-        "Target long tối đa 50%; nếu không có tín hiệu thì giữ USDT.", "",
+        f"{risk_description}", "",
         "Tín hiệu được tính sau khi nến đóng và chỉ khớp ở open kế tiếp. Mỗi fill chịu "
         f"10 bps taker fee; các kịch bản slippage là {config['slippage_bps']} bps mỗi chiều. "
         "Không bán khống, không đòn bẩy, không tối ưu tham số tự động.", "",
