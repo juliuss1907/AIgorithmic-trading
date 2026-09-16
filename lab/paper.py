@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from lab.strategy import RuleSignalEngine, strategy_from_dict
+from lab.strategy import RuleSignalEngine, position_sizing_from_dict, strategy_from_dict
 
 
 DEFAULT_RULES = {"quantity_step": "0.00001000", "min_notional": "5.00000000"}
@@ -41,6 +41,9 @@ class PaperTradingService:
                 """
                 CREATE TABLE IF NOT EXISTS paper_accounts (
                     id TEXT PRIMARY KEY, strategy_json TEXT NOT NULL,
+                    position_sizing_json TEXT NOT NULL DEFAULT '{"family":"fixed"}',
+                    start_policy TEXT NOT NULL DEFAULT 'immediate',
+                    entry_armed INTEGER NOT NULL DEFAULT 1,
                     dataset_snapshot_id TEXT NOT NULL,
                     initial_cash REAL NOT NULL, cash REAL NOT NULL,
                     btc_quantity REAL NOT NULL, average_cost REAL NOT NULL,
@@ -94,6 +97,19 @@ class PaperTradingService:
                     "ALTER TABLE paper_accounts ADD COLUMN dataset_snapshot_id TEXT NOT NULL "
                     "DEFAULT 'legacy-untracked'"
                 )
+            if "position_sizing_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE paper_accounts ADD COLUMN position_sizing_json TEXT NOT NULL "
+                    "DEFAULT '{\"family\":\"fixed\"}'"
+                )
+            if "start_policy" not in columns:
+                connection.execute(
+                    "ALTER TABLE paper_accounts ADD COLUMN start_policy TEXT NOT NULL DEFAULT 'immediate'"
+                )
+            if "entry_armed" not in columns:
+                connection.execute(
+                    "ALTER TABLE paper_accounts ADD COLUMN entry_armed INTEGER NOT NULL DEFAULT 1"
+                )
             cycle_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(paper_cycles)")
             }
@@ -116,13 +132,19 @@ class PaperTradingService:
     def _account(row):
         result = dict(row)
         result["strategy"] = json.loads(result.pop("strategy_json"))
+        result["position_sizing"] = json.loads(result.pop("position_sizing_json"))
+        result["entry_armed"] = bool(result["entry_armed"])
         return result
 
     def create_account(
         self, strategy, *, dataset_snapshot_id, initial_cash=10_000, exchange_rules=None,
         max_target_weight=.5, halt_drawdown=.20, fee_bps=10, slippage_bps=5,
+        position_sizing=None, start_policy="immediate",
     ):
         strategy = strategy_from_dict(strategy)
+        position_sizing = position_sizing_from_dict(position_sizing)
+        if start_policy not in {"immediate", "wait_for_new_entry"}:
+            raise ValueError("Unsupported paper account start policy")
         if len(dataset_snapshot_id) != 64 or any(c not in "0123456789abcdef" for c in dataset_snapshot_id):
             raise ValueError("Paper account requires a frozen dataset snapshot id")
         rules = exchange_rules or DEFAULT_RULES
@@ -135,14 +157,20 @@ class PaperTradingService:
         account_id = uuid.uuid4().hex
         now = utc_now()
         strategy_json = json.dumps(strategy.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        sizing_json = json.dumps(
+            position_sizing.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        )
+        entry_armed = start_policy == "immediate"
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO paper_accounts "
-                "(id,strategy_json,dataset_snapshot_id,initial_cash,cash,btc_quantity,average_cost,"
+                "(id,strategy_json,position_sizing_json,start_policy,entry_armed,dataset_snapshot_id,"
+                "initial_cash,cash,btc_quantity,average_cost,"
                 "equity,peak_equity,drawdown,max_target_weight,halt_drawdown,quantity_step,min_notional,"
                 "fee_bps,slippage_bps,status,halt_reason,last_candle,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (account_id, strategy_json, dataset_snapshot_id, initial_cash, initial_cash, 0, 0,
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (account_id, strategy_json, sizing_json, start_policy, int(entry_armed),
+                 dataset_snapshot_id, initial_cash, initial_cash, 0, 0,
                  initial_cash, initial_cash, 0, max_target_weight, halt_drawdown,
                  str(rules["quantity_step"]), str(rules["min_notional"]), fee_bps,
                  slippage_bps, "active", None, None, now, now),
@@ -154,14 +182,23 @@ class PaperTradingService:
         self._event(account_id, "account_created", entry_point="manual")
         return self.get_account(account_id)
 
-    def create_promoted_account(self, promotion_store, strategy, **kwargs):
-        strategy = strategy_from_dict(strategy)
+    def create_promoted_account(self, promotion_store, **kwargs):
         state = promotion_store.get()
         if not state.get("holdout") or not state["holdout"].get("passed"):
             raise ValueError("Paper account requires a passing holdout")
-        if state.get("selected") != strategy.family:
-            raise ValueError("Paper account must use the selected strategy")
-        return self.create_account(strategy, **kwargs)
+        lock = state.get("candidate_lock")
+        if not lock or lock.get("candidate") != state.get("selected"):
+            raise ValueError("Paper account requires a valid candidate lock")
+        reserved = {"dataset_snapshot_id", "position_sizing", "start_policy"}.intersection(kwargs)
+        if reserved:
+            raise ValueError("Promoted account contract cannot be overridden")
+        return self.create_account(
+            lock["strategy"],
+            dataset_snapshot_id=state["holdout"]["dataset_id"],
+            position_sizing=lock["position_sizing"],
+            start_policy="wait_for_new_entry",
+            **kwargs,
+        )
 
     def get_account(self, account_id):
         with self._connect() as connection:
@@ -262,9 +299,12 @@ class PaperTradingService:
             raise ValueError("Paper cycle requires a frozen dataset snapshot id")
         strategy_json = json.dumps(account_before["strategy"], sort_keys=True, separators=(",", ":"))
         cycle_id = self._cycle_id(account_id, strategy_json, candle)
-        engine = RuleSignalEngine(account_before["strategy"], account_before["max_target_weight"])
+        engine = RuleSignalEngine(
+            account_before["strategy"], account_before["max_target_weight"],
+            position_sizing=account_before["position_sizing"],
+        )
         evidence = engine.evidence(frame).iloc[-1]
-        target = float(evidence["target"])
+        raw_target = float(evidence["target"])
         evidence_json = json.dumps(
             {key: (None if pd.isna(value) else value.item() if hasattr(value, "item") else value)
              for key, value in evidence.items()},
@@ -283,6 +323,14 @@ class PaperTradingService:
                 connection.execute("ROLLBACK")
                 raise KeyError(f"Unknown paper account: {account_id}")
             account = dict(row)
+            target = raw_target
+            if account["start_policy"] == "wait_for_new_entry" and not account["entry_armed"]:
+                target = 0.0
+                if raw_target == 0:
+                    account["entry_armed"] = 1
+                    connection.execute(
+                        "UPDATE paper_accounts SET entry_armed=1 WHERE id=?", (account_id,)
+                    )
             now = utc_now()
             connection.execute(
                 "INSERT INTO paper_cycles "
