@@ -5,8 +5,8 @@
 Snapshot learning: `c225bc7732a0cc1d347adc7925a923b41fb3b12150db1b0ac137b9cf0cf775a2`,
 3.059 nến từ 2017-08-17 đến 2025-12-31. Gate baseline vẫn khóa `stay_cash`; gate entry-volatility v1
 đã khóa chọn Donchian với worst drawdown −18,06%. Candidate contract đã khóa run
-`e1bb13fe60817ce83d85`, strategy, entry-volatility sizing, chi phí và checksum. Holdout chưa mở,
-chưa tạo paper account và không có giao dịch thật.
+`e1bb13fe60817ce83d85`, strategy, entry-volatility sizing, chi phí và checksum. Holdout 2026 đã qua
+với return +7,67% và max drawdown −7,98% ở mức 5 bps. Chưa tạo paper account và không có giao dịch thật.
 
 ## Khởi động
 
@@ -52,22 +52,19 @@ Không chạy lại lệnh `gate` lên bất kỳ state đã khóa nào: latch s
 nằm tại `state/btc-promotion-entry-vol20-v1.sqlite3`; gate baseline vẫn nằm tại
 `state/btc-promotion.sqlite3`. Muốn thử giả thuyết khác, dùng database mới và ghi rõ 2018–2025 đã được quan sát.
 
-## Holdout đã chuẩn bị nhưng chưa chạy
+## Holdout đã chạy và khóa kết quả
 
-Config `experiments/btc-donchian-holdout-v1.json` và lệnh `holdout` đã được đăng ký trước. Lệnh sẽ tự
-tải snapshot đến 2026-08-31, so byte lịch sử 2017–2025 với snapshot learning, chạy/import artifact,
-kiểm tra lineage/checksum rồi mới latch metrics. Không truyền strategy hoặc metrics thủ công.
+Pipeline đã mở holdout đúng một lần bằng config `experiments/btc-donchian-holdout-v1.json`:
 
-Không chạy lệnh dưới đây trong giai đoạn hardening hiện tại; đây là thao tác mở holdout một lần cần
-review riêng:
+- Dataset: `e3f4d26e3662d03aa3f4221bec6f8f7b79d56e1a86a4679b7f1774203be9d042`, 3.302 nến đến 2026-08-31.
+- Run: `686cad171d0ae4d547ab`.
+- Summary SHA-256: `44111a6bd706cd916495ac3550fc8deef0347c6004e861d9060facd3547e76bc`.
+- Provenance SHA-256: `fed1447e4d648da9becf9fa14df22b14c63d972b6cf68a0e5ca20d3e11080e29`.
+- Base cost 5 bps: return `+7,67%`, max drawdown `−7,98%`, kết quả **qua**.
 
-```bash
-uv run --frozen python -m lab holdout \
-  --state state/btc-promotion-entry-vol20-v1.sqlite3
-```
-
-Nếu tiến trình dừng sau khi artifact đã hoàn chỉnh nhưng trước latch, chạy lại cùng lệnh sẽ verify và
-tiếp tục. Artifact thiếu, bị đổi, sai parent/config hoặc lịch sử Binance bị revise đều làm lệnh dừng.
+Raw/adjusted prefix 2017–2025 khớp snapshot learning; 72 learning cases và 216 artifact số liệu cũng
+giống byte-for-byte run đã khóa. Latch hiện chỉ trả lại cùng evidence khi retry; không thể thay kết quả.
+Giai đoạn tiếp theo là review rồi tạo promoted paper account riêng, không chỉnh strategy từ holdout.
 
 ## Chẩn đoán
 

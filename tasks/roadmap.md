@@ -2,7 +2,8 @@
 
 > Cập nhật 2026-09-16: hướng triển khai hiện tại là BTCUSDT spot trước. Hạ tầng strategy,
 > walk-forward, paper ledger và AI read-only đã có. Risk overlay v1 đã chọn và khóa Donchian;
-> pipeline holdout đã harden nhưng dữ liệu 2026 chưa được tải/chạy. Paper/live vẫn bị chặn có chủ đích. Xem
+> holdout 2026 đã qua với +7,67% return và −7,98% max drawdown. Paper account chưa được tạo;
+> live vẫn bị chặn có chủ đích. Xem
 > [plan.md](plan.md) và [todo.md](todo.md) để biết trạng thái chuẩn.
 
 Ngày chốt: 2026-09-14. Nền hiện có: pilot SPY SMA 20/50 đã chạy,

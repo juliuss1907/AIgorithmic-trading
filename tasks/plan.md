@@ -1,6 +1,6 @@
 # Kế hoạch BTC-first: bot thuật toán + AI copilot
 
-Ngày cập nhật: 2026-09-16. Trạng thái: **candidate đã khóa; pipeline sẵn sàng, vẫn dừng trước holdout**.
+Ngày cập nhật: 2026-09-16. Trạng thái: **holdout đã qua; đang dừng review trước promoted paper**.
 
 ## Mục tiêu
 
@@ -26,7 +26,8 @@ và drawdown tệ nhất không quá 20%. Nếu nhiều ứng viên qua: drawdow
 Gate baseline đã khóa ngày 2026-09-15: cả ba ứng viên trượt điều kiện drawdown và quyết định là
 `stay_cash`. Gate risk overlay v1 được đăng ký trước rồi khóa riêng ngày 2026-09-16: Donchian qua với
 5/8 fold có lãi, stress return gộp +373,03% và worst drawdown −18,06%; RSI/Bollinger và SMA vẫn trượt
-drawdown. Holdout chưa mở và paper account không được tạo.
+drawdown. Holdout sau đó qua với return +7,67% và max drawdown −7,98% ở base cost 5 bps; paper account
+chưa được tạo.
 
 ## Thành phần đã triển khai
 
@@ -41,9 +42,10 @@ drawdown. Holdout chưa mở và paper account không được tạo.
 9. Entry-volatility sizing 20 ngày/20% năm, khóa size tới exit; ba run mới và gate versioned.
 10. Candidate lock gắn Donchian với run/dataset/config/checksum; holdout one-shot kiểm lịch sử và lineage.
 11. Paper account persist sizing, lấy contract từ candidate lock và chờ entry mới sau một chu kỳ flat.
+12. Holdout one-shot 2026 đã khóa run/dataset/checksum; 72 learning cases tái lập giống hệt.
 
 ## Việc tiếp theo hợp lệ
 
-Không đổi tham số sau khi xem kết quả risk overlay. Bước tiếp theo là review candidate lock và lệnh
-holdout đã chuẩn bị. Chưa tải snapshot 2026 và chưa chạy config holdout. Holdout chỉ được mở đúng một lần.
-Chỉ khi holdout qua mới tạo paper account, rồi shadow-paper tối thiểu tám tuần trước khi thảo luận broker thật.
+Không đổi tham số sau khi xem holdout. Bước tiếp theo là review kết quả đã khóa và tạo promoted paper
+account từ chính candidate contract, bắt đầu bằng cash và chờ entry mới. Sau đó shadow-paper tối thiểu
+tám tuần trước khi thảo luận broker thật.

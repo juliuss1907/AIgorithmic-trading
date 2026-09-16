@@ -224,6 +224,12 @@ def test_paper_dashboard_exposes_locked_candidate_contract(tmp_path):
                             "annual_target": .2, "annualization_days": 365},
         "summary_sha256": "d" * 64, "provenance_sha256": "e" * 64,
     })
+    promotion.open_holdout({
+        "candidate": "donchian_breakout", "period": "2026-01-01/2026-08-31",
+        "run_id": "f" * 20, "dataset_id": "1" * 64,
+        "summary_sha256": "2" * 64, "provenance_sha256": "3" * 64,
+        "total_return": .076660987, "max_drawdown": -.079827666, "passed": True,
+    })
     client = TestClient(create_app(
         database=tmp_path / "state/lab.sqlite3", runs_dir=tmp_path / "runs",
         data_dir=tmp_path / "data", promotion_database=promotion_database,
@@ -234,4 +240,7 @@ def test_paper_dashboard_exposes_locked_candidate_contract(tmp_path):
 
     assert "Candidate đã khóa" in page.text
     assert "Entry volatility · 20 ngày" in page.text
+    assert "Holdout đã qua" in page.text
+    assert "7.67%" in page.text and "−7.98%" in page.text
     assert api["candidate_lock"]["run_id"] == "b" * 20
+    assert api["holdout"]["passed"] is True

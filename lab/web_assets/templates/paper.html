@@ -24,6 +24,9 @@
     run <code>{{ gate.candidate_lock.run_id[:12] }}</code> · dataset <code>{{ gate.candidate_lock.dataset_id[:12] }}</code> ·
     {{ 'Entry volatility · 20 ngày · risk target 20%/năm · cap 50%' if gate.candidate_lock.position_sizing.family == 'entry_volatility' else 'Fixed sizing' }}.
   </p>{% endif %}
+  {% if gate.holdout %}<p class="muted-copy" role="status"><strong>{{ 'Holdout đã qua' if gate.holdout.passed else 'Holdout không qua' }}:</strong>
+    {{ gate.holdout.period }} · return {{ "{:.2%}".format(gate.holdout.total_return) }} · max drawdown {{ "{:.2%}".format(gate.holdout.max_drawdown).replace('-', '−') }} · run <code>{{ gate.holdout.run_id[:12] }}</code>.
+  </p>{% endif %}
 </section>
 {% endif %}
 {% if accounts %}

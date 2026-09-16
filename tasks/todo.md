@@ -20,15 +20,15 @@
 - [x] Khóa candidate Donchian vào run/dataset/config/checksum đã verify.
 - [x] Harden pipeline holdout one-shot; chưa tải hoặc chạy dữ liệu 2026.
 - [x] Persist volatility sizing vào paper account và thêm chính sách chờ entry mới.
+- [x] Mở holdout 2026 một lần; Donchian qua với +7,67% return và −7,98% max drawdown.
 
-## Đang dừng để review trước holdout
+## Đang dừng để review trước promoted paper
 
-- [ ] Mở holdout 2026.
 - [ ] Tạo tài khoản paper cho chiến lược được promote.
 - [ ] Chạy shadow-paper tám tuần.
 - [ ] Chọn broker hoặc thêm endpoint giao dịch thật.
 
 ## Backlog có điều kiện
 
-- [ ] Chỉ sau khi holdout qua: tạo paper account từ snapshot/strategy đã khóa.
+- [ ] Tạo paper account từ snapshot/strategy đã khóa; bắt đầu cash và chờ entry mới.
 - [ ] Chọn AI provider/model/ngân sách; thêm adapter thật mà không thay quyền hạn read-only.
