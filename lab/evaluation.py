@@ -1,5 +1,6 @@
 """Deterministic walk-forward promotion gate and one-shot holdout registry."""
 
+import hashlib
 import json
 import math
 import sqlite3
@@ -7,6 +8,8 @@ import statistics
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+from lab.contracts import CandidateLock, ExperimentSpec
 
 
 LEARNING_FOLDS = tuple(str(year) for year in range(2018, 2026))
@@ -100,10 +103,17 @@ class PromotionStore:
                     decision_json TEXT NOT NULL,
                     frozen_at TEXT NOT NULL,
                     holdout_json TEXT,
-                    holdout_opened_at TEXT
+                    holdout_opened_at TEXT,
+                    candidate_lock_json TEXT,
+                    candidate_locked_at TEXT
                 )
                 """
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(promotion_gate)")}
+            if "candidate_lock_json" not in columns:
+                connection.execute("ALTER TABLE promotion_gate ADD COLUMN candidate_lock_json TEXT")
+            if "candidate_locked_at" not in columns:
+                connection.execute("ALTER TABLE promotion_gate ADD COLUMN candidate_locked_at TEXT")
 
     def _connect(self):
         connection = sqlite3.connect(self.database)
@@ -139,7 +149,36 @@ class PromotionStore:
         result["frozen_at"] = row["frozen_at"]
         result["holdout_opened_at"] = row["holdout_opened_at"]
         result["holdout"] = json.loads(row["holdout_json"]) if row["holdout_json"] else None
+        result["candidate_locked_at"] = row["candidate_locked_at"]
+        result["candidate_lock"] = (
+            json.loads(row["candidate_lock_json"]) if row["candidate_lock_json"] else None
+        )
         return result
+
+    def lock_candidate(self, candidate_lock):
+        lock = CandidateLock.model_validate(candidate_lock)
+        payload = json.dumps(lock.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        with self._connect() as connection:
+            connection.isolation_level = None
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT candidate_lock_json FROM promotion_gate WHERE singleton=1"
+            ).fetchone()
+            if row is None:
+                connection.execute("ROLLBACK")
+                raise KeyError("Promotion gate is not frozen")
+            if row["candidate_lock_json"] is not None:
+                connection.execute("COMMIT")
+                if row["candidate_lock_json"] != payload:
+                    raise ValueError("Candidate is already locked with a different payload")
+                return json.loads(payload)
+            connection.execute(
+                "UPDATE promotion_gate SET candidate_lock_json=?,candidate_locked_at=? "
+                "WHERE singleton=1 AND candidate_lock_json IS NULL",
+                (payload, _now()),
+            )
+            connection.execute("COMMIT")
+        return json.loads(payload)
 
     def open_holdout(self, candidate, metrics):
         state = self.get()
@@ -167,3 +206,63 @@ class PromotionStore:
         if cursor.rowcount != 1:
             raise ValueError("Holdout was already opened")
         return payload
+
+
+def _verified_artifact(run_store, run_id, relative_path):
+    artifact = next(
+        (item for item in run_store.list_artifacts(run_id) if item["relative_path"] == relative_path),
+        None,
+    )
+    if artifact is None:
+        raise ValueError(f"Registered run is missing {relative_path}")
+    return run_store.artifact(run_id, artifact["id"])[0]
+
+
+def lock_selected_candidate(promotion_store, run_store, run_id):
+    """Verify the selected learning run, then durably bind it to the frozen gate."""
+    state = promotion_store.get()
+    candidate = state.get("selected")
+    if candidate is None:
+        raise ValueError("No selected candidate; account must stay cash")
+    run = run_store.get_run(run_id)
+    summary_path = _verified_artifact(run_store, run_id, "summary.json")
+    provenance_path = _verified_artifact(run_store, run_id, "provenance.json")
+    summary = json.loads(summary_path.read_text())
+    actual_score = asdict(score_candidate(candidate, summary))
+    frozen_score = next(
+        (score for score in state["scores"] if score["name"] == candidate), None
+    )
+    if frozen_score is None or json.dumps(actual_score, sort_keys=True) != json.dumps(
+        frozen_score, sort_keys=True
+    ):
+        raise ValueError("Candidate run score differs from the frozen gate score")
+    provenance = json.loads(provenance_path.read_text())
+    config = ExperimentSpec.model_validate(provenance["experiment"])
+    if config.strategy.family != candidate or run["dataset_id"] != config.dataset_id:
+        raise ValueError("Candidate run contract differs from the frozen selection")
+    if tuple(config.periods) != LEARNING_FOLDS or tuple(config.prior_observed_periods) != LEARNING_FOLDS:
+        raise ValueError("Candidate run does not contain the registered learning folds")
+    lock = CandidateLock(
+        candidate=candidate,
+        run_id=run_id,
+        dataset_id=config.dataset_id,
+        parent_run_id=config.parent_run_id,
+        strategy=config.strategy,
+        position_sizing=config.risk_policy.position_sizing,
+        market=config.market,
+        venue=config.venue,
+        symbol=config.symbol,
+        interval=config.interval,
+        calendar=config.calendar,
+        data_start=str(config.data.start),
+        learning_end_exclusive=str(config.data.end_exclusive),
+        initial_cash=config.initial_cash,
+        slippage_bps=config.slippage_bps,
+        taker_fee_bps=config.taker_fee_bps,
+        commission=config.commission,
+        max_target_weight=config.risk_policy.max_target_weight,
+        halt_drawdown=config.risk_policy.halt_drawdown,
+        summary_sha256=hashlib.sha256(summary_path.read_bytes()).hexdigest(),
+        provenance_sha256=hashlib.sha256(provenance_path.read_bytes()).hexdigest(),
+    )
+    return promotion_store.lock_candidate(lock)

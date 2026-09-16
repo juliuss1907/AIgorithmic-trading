@@ -143,6 +143,34 @@ class RiskPolicy(BaseModel):
     position_sizing: PositionSizingSpec = Field(default_factory=FixedPositionSizingSpec)
 
 
+class CandidateLock(BaseModel):
+    """Immutable contract joining a selected gate candidate to verified run evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate: Literal["donchian_breakout"]
+    run_id: str = Field(pattern=r"^[a-f0-9]{20}$")
+    dataset_id: str = Field(pattern=r"^[a-f0-9]{64}$")
+    parent_run_id: str = Field(pattern=r"^[a-f0-9]{20}$")
+    strategy: DonchianStrategySpec
+    position_sizing: EntryVolatilityPositionSizingSpec
+    market: Literal["crypto_spot"] = "crypto_spot"
+    venue: Literal["binance"] = "binance"
+    symbol: Literal["BTCUSDT"] = "BTCUSDT"
+    interval: Literal["1d"] = "1d"
+    calendar: Literal["UTC_24_7"] = "UTC_24_7"
+    data_start: Literal["2017-08-17"] = "2017-08-17"
+    learning_end_exclusive: Literal["2026-01-01"] = "2026-01-01"
+    initial_cash: Literal[10000.0] = 10000.0
+    slippage_bps: tuple[Literal[0.0], Literal[5.0], Literal[10.0]] = (0.0, 5.0, 10.0)
+    taker_fee_bps: Literal[10.0] = 10.0
+    commission: Literal[0.0] = 0.0
+    max_target_weight: Literal[0.5] = 0.5
+    halt_drawdown: Literal[0.2] = 0.2
+    summary_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    provenance_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class ExperimentSpec(BaseModel):
     """User-visible research question and all assumptions needed to run it."""
 
