@@ -8,6 +8,7 @@ from pathlib import Path
 from lab.contracts import DatasetRequest
 from lab.data import DATA, ROOT, BinanceClient, save_snapshot
 from lab.datasets import DatasetCatalog
+from lab.notifications import TelegramDeliveryError
 from lab.paper import PaperTradingService
 
 
@@ -42,9 +43,82 @@ def seconds_until_utc_cycle(now=None):
 
 
 class PaperWorker:
-    def __init__(self, service=None, gateway=None):
+    def __init__(self, service=None, gateway=None, notifier=None):
         self.service = service or PaperTradingService(ROOT / "state/lab.sqlite3")
         self.gateway = gateway or BinancePaperGateway()
+        self.notifier = notifier
+
+    def _deliver_pending(self):
+        if self.notifier is None:
+            return
+        for notification in self.service.list_pending_notifications():
+            try:
+                self.notifier.send(notification["message"])
+            except TelegramDeliveryError:
+                self.service.mark_notification_failed(
+                    notification["id"], "telegram_delivery_error"
+                )
+            else:
+                self.service.mark_notification_sent(notification["id"])
+
+    def _queue_fetch_failure(self, accounts, expected_candle, error):
+        details = f"{type(error).__name__}: {error}"[:500]
+        for account in accounts:
+            try:
+                incident = self.service.record_incident(
+                    account["id"], expected_candle, "data_fetch_failed",
+                    details,
+                )
+                if self.notifier is not None:
+                    self.service.enqueue_notification(
+                        account["id"], f"incident:{incident['id']}:open", "critical",
+                        "\n".join([
+                            f"🚨 BTC PAPER · KHÔNG TẢI ĐƯỢC DỮ LIỆU",
+                            f"Ngày nến: {expected_candle}",
+                            f"Tài khoản: {account['id'][:8]}",
+                            "Worker sẽ thử lại theo lịch systemd sau 10 phút.",
+                        ]),
+                    )
+            except KeyError:
+                pass
+
+    def _summary(self, account_id, cycle):
+        account = self.service.get_account(account_id)
+        fill = cycle["fill"]
+        fill_text = "Không"
+        if fill:
+            fill_text = (
+                f"{fill['side'].upper()} {fill['quantity']:.8f} BTC @ {fill['price']:,.2f} USDT"
+            )
+        try:
+            campaign = self.service.campaign_status(account_id)
+            campaign_text = (
+                f"{campaign['successful_cycles']}/{campaign['target_cycles']} "
+                f"· còn {campaign['remaining_cycles']}"
+            )
+            open_incidents = sum(
+                incident["status"] == "open" for incident in campaign["incidents"]
+            )
+        except KeyError:
+            campaign_text = "Không áp dụng"
+            open_incidents = 0
+        halted = account["status"] == "halted"
+        heading = "🚨 BTC PAPER ĐÃ DỪNG" if halted else "✅ BTC PAPER"
+        lines = [
+            f"{heading} · {cycle['candle_date']}",
+            f"Tài khoản: {account_id[:8]}",
+            f"Signal: {cycle['signal']:.2%}",
+            f"Fill: {fill_text}",
+            f"Equity: {account['equity']:,.2f} USDT",
+            f"Cash: {account['cash']:,.2f} USDT · BTC: {account['btc_quantity']:.8f}",
+            f"Drawdown: {account['drawdown']:.2%}",
+            f"Đối soát: {'OK' if cycle['reconciliation_ok'] else 'LỖI'}",
+            f"Campaign: {campaign_text}",
+            f"Incident mở: {open_incidents}",
+        ]
+        if halted:
+            lines.append(f"Lý do dừng: {account['halt_reason'] or 'không xác định'}")
+        return "\n".join(lines)
 
     def run_once(self, account_id=None):
         accounts = (
@@ -53,18 +127,13 @@ class PaperWorker:
         )
         if not accounts:
             return []
+        self._deliver_pending()
         expected_candle = datetime.now(timezone.utc).date() - timedelta(days=1)
         try:
             market = self.gateway.snapshot()
         except Exception as exc:
-            for account in accounts:
-                try:
-                    self.service.record_incident(
-                        account["id"], expected_candle, "data_fetch_failed",
-                        f"{type(exc).__name__}: {exc}",
-                    )
-                except KeyError:
-                    pass
+            self._queue_fetch_failure(accounts, expected_candle, exc)
+            self._deliver_pending()
             raise
         latest_candle = market["frame"].index[-1].date()
         results = []
@@ -81,11 +150,35 @@ class PaperWorker:
                         missing += timedelta(days=1)
             except KeyError:
                 pass
-            results.append(self.service.run_cycle(
-                account["id"], market["frame"], bid=market["bid"], ask=market["ask"],
-                exchange_rules=market["exchange_rules"],
-                dataset_snapshot_id=market["dataset_snapshot_id"], entry_point="scheduler",
-            ))
+            try:
+                cycle = self.service.run_cycle(
+                    account["id"], market["frame"], bid=market["bid"], ask=market["ask"],
+                    exchange_rules=market["exchange_rules"],
+                    dataset_snapshot_id=market["dataset_snapshot_id"], entry_point="scheduler",
+                )
+            except Exception:
+                refreshed = self.service.get_account(account["id"])
+                if self.notifier is not None and refreshed["status"] == "halted":
+                    self.service.enqueue_notification(
+                        account["id"], f"halt:{expected_candle}:{refreshed['halt_reason']}",
+                        "critical", "\n".join([
+                            "🚨 BTC PAPER ĐÃ DỪNG",
+                            f"Ngày nến: {expected_candle}",
+                            f"Tài khoản: {account['id'][:8]}",
+                            f"Lý do: {refreshed['halt_reason'] or 'không xác định'}",
+                        ]),
+                    )
+                    self._deliver_pending()
+                raise
+            results.append(cycle)
+            if self.notifier is not None:
+                refreshed = self.service.get_account(account["id"])
+                self.service.enqueue_notification(
+                    account["id"], f"cycle:{cycle['id']}:summary",
+                    "critical" if refreshed["status"] == "halted" else "daily_summary",
+                    self._summary(account["id"], cycle),
+                )
+        self._deliver_pending()
         return results
 
     def run_forever(self):
