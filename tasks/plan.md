@@ -45,10 +45,10 @@ account `e573cbe236d74c8d83912c602cb041fb` đã bootstrap flat và đang giữ c
 12. Holdout one-shot 2026 đã khóa run/dataset/checksum; 72 learning cases tái lập giống hệt.
 13. Promoted campaign idempotent lưu contract fingerprint, tiến độ 56 cycle và G6 review bất biến.
 14. Telegram notifier fail-open có outbox idempotent, daily summary và cảnh báo fetch/halt; secret nằm
-    ngoài repository và chưa được cấu hình.
+    ngoài repository, đã được cấu hình cục bộ và test delivery thành công.
 
 ## Việc tiếp theo hợp lệ
 
-Không đổi tham số sau khi xem holdout. Tiếp theo cấu hình Telegram secret, test delivery và xác nhận
-cycle systemd đầu tiên sau 09:00. Sau đó theo dõi reconciliation, incident, drawdown và ít nhất một vòng
+Không đổi tham số sau khi xem holdout. Tiếp theo xác nhận cycle systemd đầu tiên sau 09:00 cùng daily
+summary Telegram. Sau đó theo dõi reconciliation, incident, drawdown và ít nhất một vòng
 mua–bán. Chỉ finalize G6 sau tối thiểu 56 ngày và 56 cycle thành công; sau đó mới thảo luận broker thật.

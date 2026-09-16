@@ -26,7 +26,7 @@
 
 - [x] Tạo tài khoản paper idempotent từ candidate/holdout contract đã verify.
 - [x] Thêm Telegram notifier fail-open và outbox chống gửi trùng.
-- [ ] Cấu hình Telegram secret ngoài repo và nhận test message thật.
+- [x] Cấu hình Telegram secret ngoài repo và nhận test message thật.
 - [ ] Xác nhận scheduler cycle đầu tiên sau 09:00 cùng daily summary.
 - [ ] Chạy shadow-paper tám tuần.
 - [ ] Chọn broker hoặc thêm endpoint giao dịch thật.
