@@ -89,6 +89,29 @@ class PaperTradingService:
                     account_id TEXT NOT NULL REFERENCES paper_accounts(id),
                     cycle_id TEXT, reason TEXT NOT NULL, created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS paper_campaigns (
+                    account_id TEXT PRIMARY KEY REFERENCES paper_accounts(id),
+                    contract_json TEXT NOT NULL,
+                    contract_sha256 TEXT NOT NULL UNIQUE,
+                    target_cycles INTEGER NOT NULL DEFAULT 56,
+                    started_at TEXT,
+                    finalized_at TEXT,
+                    final_review_json TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS paper_incidents (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES paper_accounts(id),
+                    candle_date TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    details TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('open','recovered','acknowledged')),
+                    operator_note TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    acknowledged_at TEXT,
+                    UNIQUE(account_id,candle_date,kind)
+                );
                 """
             )
             columns = {row[1] for row in connection.execute("PRAGMA table_info(paper_accounts)")}
@@ -136,10 +159,10 @@ class PaperTradingService:
         result["entry_armed"] = bool(result["entry_armed"])
         return result
 
-    def create_account(
-        self, strategy, *, dataset_snapshot_id, initial_cash=10_000, exchange_rules=None,
-        max_target_weight=.5, halt_drawdown=.20, fee_bps=10, slippage_bps=5,
-        position_sizing=None, start_policy="immediate",
+    def _prepare_account(
+        self, strategy, dataset_snapshot_id, initial_cash, exchange_rules,
+        max_target_weight, halt_drawdown, fee_bps, slippage_bps,
+        position_sizing, start_policy,
     ):
         strategy = strategy_from_dict(strategy)
         position_sizing = position_sizing_from_dict(position_sizing)
@@ -154,30 +177,54 @@ class PaperTradingService:
         minimum = Decimal(str(rules["min_notional"]))
         if step <= 0 or minimum <= 0 or fee_bps != 10 or slippage_bps != 5:
             raise ValueError("Invalid or unfrozen BTC paper execution assumptions")
-        account_id = uuid.uuid4().hex
-        now = utc_now()
         strategy_json = json.dumps(strategy.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
         sizing_json = json.dumps(
             position_sizing.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
         )
+        return strategy_json, sizing_json, rules
+
+    @staticmethod
+    def _insert_account(
+        connection, account_id, now, strategy_json, sizing_json, start_policy,
+        dataset_snapshot_id, initial_cash, rules, max_target_weight,
+        halt_drawdown, fee_bps, slippage_bps,
+    ):
         entry_armed = start_policy == "immediate"
+        connection.execute(
+            "INSERT INTO paper_accounts "
+            "(id,strategy_json,position_sizing_json,start_policy,entry_armed,dataset_snapshot_id,"
+            "initial_cash,cash,btc_quantity,average_cost,"
+            "equity,peak_equity,drawdown,max_target_weight,halt_drawdown,quantity_step,min_notional,"
+            "fee_bps,slippage_bps,status,halt_reason,last_candle,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (account_id, strategy_json, sizing_json, start_policy, int(entry_armed),
+             dataset_snapshot_id, initial_cash, initial_cash, 0, 0,
+             initial_cash, initial_cash, 0, max_target_weight, halt_drawdown,
+             str(rules["quantity_step"]), str(rules["min_notional"]), fee_bps,
+             slippage_bps, "active", None, None, now, now),
+        )
+        connection.execute(
+            "INSERT INTO paper_ledger (account_id,cycle_id,kind,cash_delta,btc_delta,created_at) "
+            "VALUES (?,NULL,'deposit',?,0,?)", (account_id, initial_cash, now),
+        )
+
+    def create_account(
+        self, strategy, *, dataset_snapshot_id, initial_cash=10_000, exchange_rules=None,
+        max_target_weight=.5, halt_drawdown=.20, fee_bps=10, slippage_bps=5,
+        position_sizing=None, start_policy="immediate",
+    ):
+        strategy_json, sizing_json, rules = self._prepare_account(
+            strategy, dataset_snapshot_id, initial_cash, exchange_rules,
+            max_target_weight, halt_drawdown, fee_bps, slippage_bps,
+            position_sizing, start_policy,
+        )
+        account_id = uuid.uuid4().hex
+        now = utc_now()
         with self._connect() as connection:
-            connection.execute(
-                "INSERT INTO paper_accounts "
-                "(id,strategy_json,position_sizing_json,start_policy,entry_armed,dataset_snapshot_id,"
-                "initial_cash,cash,btc_quantity,average_cost,"
-                "equity,peak_equity,drawdown,max_target_weight,halt_drawdown,quantity_step,min_notional,"
-                "fee_bps,slippage_bps,status,halt_reason,last_candle,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (account_id, strategy_json, sizing_json, start_policy, int(entry_armed),
-                 dataset_snapshot_id, initial_cash, initial_cash, 0, 0,
-                 initial_cash, initial_cash, 0, max_target_weight, halt_drawdown,
-                 str(rules["quantity_step"]), str(rules["min_notional"]), fee_bps,
-                 slippage_bps, "active", None, None, now, now),
-            )
-            connection.execute(
-                "INSERT INTO paper_ledger (account_id,cycle_id,kind,cash_delta,btc_delta,created_at) "
-                "VALUES (?,NULL,'deposit',?,0,?)", (account_id, initial_cash, now),
+            self._insert_account(
+                connection, account_id, now, strategy_json, sizing_json, start_policy,
+                dataset_snapshot_id, initial_cash, rules, max_target_weight,
+                halt_drawdown, fee_bps, slippage_bps,
             )
         self._event(account_id, "account_created", entry_point="manual")
         return self.get_account(account_id)
@@ -192,13 +239,169 @@ class PaperTradingService:
         reserved = {"dataset_snapshot_id", "position_sizing", "start_policy"}.intersection(kwargs)
         if reserved:
             raise ValueError("Promoted account contract cannot be overridden")
-        return self.create_account(
-            lock["strategy"],
-            dataset_snapshot_id=state["holdout"]["dataset_id"],
-            position_sizing=lock["position_sizing"],
-            start_policy="wait_for_new_entry",
-            **kwargs,
+        execution = {
+            "initial_cash": kwargs.pop("initial_cash", 10_000),
+            "exchange_rules": kwargs.pop("exchange_rules", None),
+            "max_target_weight": kwargs.pop("max_target_weight", .5),
+            "halt_drawdown": kwargs.pop("halt_drawdown", .20),
+            "fee_bps": kwargs.pop("fee_bps", 10),
+            "slippage_bps": kwargs.pop("slippage_bps", 5),
+        }
+        if kwargs:
+            raise TypeError(f"Unsupported promoted account options: {', '.join(sorted(kwargs))}")
+        strategy_json, sizing_json, rules = self._prepare_account(
+            lock["strategy"], state["holdout"]["dataset_id"],
+            execution["initial_cash"], execution["exchange_rules"],
+            execution["max_target_weight"], execution["halt_drawdown"],
+            execution["fee_bps"], execution["slippage_bps"],
+            lock["position_sizing"], "wait_for_new_entry",
         )
+        contract = {
+            "selected": state["selected"], "candidate_lock": lock,
+            "holdout": state["holdout"],
+            "execution": {
+                "initial_cash": execution["initial_cash"],
+                "max_target_weight": execution["max_target_weight"],
+                "halt_drawdown": execution["halt_drawdown"],
+                "fee_bps": execution["fee_bps"],
+                "slippage_bps": execution["slippage_bps"],
+                "exchange_rules": rules,
+                "start_policy": "wait_for_new_entry",
+            },
+        }
+        contract_json = json.dumps(contract, sort_keys=True, separators=(",", ":"))
+        fingerprint = hashlib.sha256(contract_json.encode()).hexdigest()
+        account_id = uuid.uuid4().hex
+        now = utc_now()
+        with self._connect() as connection:
+            connection.isolation_level = None
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT account_id FROM paper_campaigns WHERE contract_sha256=?", (fingerprint,)
+            ).fetchone()
+            if existing:
+                connection.execute("COMMIT")
+                return self.get_account(existing["account_id"])
+            self._insert_account(
+                connection, account_id, now, strategy_json, sizing_json, "wait_for_new_entry",
+                state["holdout"]["dataset_id"], execution["initial_cash"], rules,
+                execution["max_target_weight"], execution["halt_drawdown"],
+                execution["fee_bps"], execution["slippage_bps"],
+            )
+            connection.execute(
+                "INSERT INTO paper_campaigns "
+                "(account_id,contract_json,contract_sha256,target_cycles,created_at) "
+                "VALUES (?,?,?,56,?)",
+                (account_id, contract_json, fingerprint, now),
+            )
+            connection.execute("COMMIT")
+        self._event(account_id, "promoted_account_created", entry_point="promote-paper")
+        return self.get_account(account_id)
+
+    def get_campaign(self, account_id):
+        self.get_account(account_id)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM paper_campaigns WHERE account_id=?", (account_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Paper account has no promoted campaign: {account_id}")
+        result = dict(row)
+        result["contract"] = json.loads(result.pop("contract_json"))
+        return result
+
+    def record_incident(self, account_id, candle_date, kind, details):
+        self.get_campaign(account_id)
+        incident_id = hashlib.sha256(f"{account_id}|{candle_date}|{kind}".encode()).hexdigest()[:24]
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO paper_incidents "
+                "(id,account_id,candle_date,kind,details,status,first_seen_at,updated_at) "
+                "VALUES (?,?,?,?,?,'open',?,?) "
+                "ON CONFLICT(account_id,candle_date,kind) DO UPDATE SET "
+                "details=excluded.details,updated_at=excluded.updated_at",
+                (incident_id, account_id, str(candle_date), kind, str(details), now, now),
+            )
+        return next(item for item in self.list_incidents(account_id) if item["id"] == incident_id)
+
+    def recover_incident(self, account_id, candle_date, kind="data_fetch_failed"):
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE paper_incidents SET status='recovered',updated_at=? "
+                "WHERE account_id=? AND candle_date=? AND kind=? AND status='open'",
+                (utc_now(), account_id, str(candle_date), kind),
+            )
+
+    def acknowledge_incident(self, account_id, incident_id, note):
+        note = note.strip()
+        if not note:
+            raise ValueError("Incident acknowledgement requires a note")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM paper_incidents WHERE id=? AND account_id=?",
+                (incident_id, account_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown paper incident: {incident_id}")
+            if row["operator_note"] is not None:
+                if row["operator_note"] != note:
+                    raise ValueError("Incident acknowledgement is immutable")
+                return dict(row)
+            now = utc_now()
+            connection.execute(
+                "UPDATE paper_incidents SET status='acknowledged',operator_note=?,"
+                "acknowledged_at=?,updated_at=? WHERE id=?",
+                (note, now, now, incident_id),
+            )
+        return next(item for item in self.list_incidents(account_id) if item["id"] == incident_id)
+
+    def list_incidents(self, account_id):
+        self.get_campaign(account_id)
+        with self._connect() as connection:
+            return [dict(row) for row in connection.execute(
+                "SELECT * FROM paper_incidents WHERE account_id=? "
+                "ORDER BY candle_date DESC,first_seen_at DESC", (account_id,)
+            )]
+
+    def campaign_status(self, account_id, now=None):
+        campaign = self.get_campaign(account_id)
+        account = self.get_account(account_id)
+        incidents = self.list_incidents(account_id)
+        with self._connect() as connection:
+            successful = connection.execute(
+                "SELECT COUNT(*) FROM paper_cycles WHERE account_id=? AND entry_point='scheduler' "
+                "AND status='completed' AND reconciliation_ok=1", (account_id,)
+            ).fetchone()[0]
+            sides = [row[0] for row in connection.execute(
+                "SELECT side FROM paper_fills WHERE account_id=? ORDER BY created_at,id", (account_id,)
+            )]
+        current = now or datetime.now(timezone.utc)
+        started = datetime.fromisoformat(campaign["started_at"]) if campaign["started_at"] else None
+        elapsed_days = max(0, (current - started).days) if started else 0
+        round_trips = min(sides.count("buy"), sides.count("sell"))
+        blockers = []
+        if started is None:
+            blockers.append("bootstrap_pending")
+        elif elapsed_days < 56:
+            blockers.append("minimum_elapsed_days")
+        if successful < campaign["target_cycles"]:
+            blockers.append("successful_cycles")
+        if any(item["status"] == "open" for item in incidents):
+            blockers.append("unacknowledged_incidents")
+        if account["status"] == "halted":
+            blockers.append("account_halted")
+        if round_trips < 1:
+            blockers.append("completed_round_trip")
+        status = "pending" if started is None else "blocked" if account["status"] == "halted" else (
+            "eligible" if not blockers else "running"
+        )
+        return {
+            **campaign, "status": status, "elapsed_days": elapsed_days,
+            "successful_cycles": successful,
+            "remaining_cycles": max(0, campaign["target_cycles"] - successful),
+            "incidents": incidents, "round_trips": round_trips, "blockers": blockers,
+        }
 
     def get_account(self, account_id):
         with self._connect() as connection:
@@ -419,6 +622,11 @@ class PaperTradingService:
                 "UPDATE paper_cycles SET status=?,reconciliation_ok=? WHERE id=?",
                 (status, int(reconciled), cycle_id),
             )
+            if entry_point == "bootstrap" and reconciled:
+                connection.execute(
+                    "UPDATE paper_campaigns SET started_at=COALESCE(started_at,?) WHERE account_id=?",
+                    (now, account_id),
+                )
             connection.execute("COMMIT")
         result = self.get_cycle(cycle_id)
         self._event(
