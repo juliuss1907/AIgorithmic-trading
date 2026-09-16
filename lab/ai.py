@@ -13,7 +13,7 @@ class EvidencePacket(BaseModel):
     symbol: Literal["BTCUSDT"] = "BTCUSDT"
     strategy: dict
     dataset_snapshot_id: str = Field(pattern=r"^[a-f0-9]{64}$")
-    indicator_evidence: dict[str, float | bool | None]
+    indicator_evidence: dict[str, float | bool | str | None]
     target_weight: float = Field(ge=0, le=.5)
     account_status: Literal["active", "halted"]
     drawdown: float = Field(ge=-1, le=0)

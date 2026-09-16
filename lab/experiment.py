@@ -100,8 +100,9 @@ def run_case(frame, config, output, buy_and_hold=False):
             strategy_from_dict(config["strategy"]),
             config.get("target_weight", 1.0),
             buy_and_hold,
+            config.get("position_sizing"),
         )
-        warmup = strategy.strategy.warmup_sessions
+        warmup = strategy.warmup_sessions
     else:
         strategy = SignalEngine(config["fast_window"], config["slow_window"], buy_and_hold)
         warmup = config["slow_window"]
@@ -195,6 +196,11 @@ def run(config: ExperimentSpec, output, catalog=None):
                     "leverage": 1.0, "position_adjustment": "hold", "slippage_us": bps / 10000,
                     "strategy": config.strategy.model_dump(mode="json"),
                     "target_weight": target_weight, "buy_and_hold": buy_and_hold,
+                    "position_sizing": (
+                        {"family": "fixed"}
+                        if buy_and_hold
+                        else config.risk_policy.position_sizing.model_dump(mode="json")
+                    ),
                     "commission": 0.0, "market": config.market,
                     "bars_per_year": config.bars_per_year,
                 }

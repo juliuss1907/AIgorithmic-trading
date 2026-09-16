@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -95,3 +96,35 @@ def test_btc_case_uses_half_capital_next_open_and_365_day_cagr(tmp_path):
     assert result["annualization_days"] == 365
     assert "cagr_annualized" in result
     assert (tmp_path / "btc/signal-evidence.csv").exists()
+
+
+def test_btc_case_applies_entry_volatility_only_to_the_rule_strategy(tmp_path):
+    log_returns = [-.02, -.10] * 10 + [.02, .08, .01, -.10]
+    close = 100 * np.exp(np.r_[0, np.cumsum(log_returns)])
+    dates = pd.date_range("2024-01-01", periods=len(close), freq="D")
+    data = pd.DataFrame({
+        "open": close,
+        "high": close * 1.01,
+        "low": close * .99,
+        "close": close,
+        "volume": 1000,
+    }, index=dates)
+    config = case(5) | {
+        "codes": ["BTCUSDT"], "market": "crypto_spot",
+        "start_date": str(dates[0].date()), "end_date": str(dates[-1].date()),
+        "evaluation_start_date": str(dates[22].date()),
+        "strategy": {"family": "sma_crossover", "fast_window": 1, "slow_window": 2},
+        "target_weight": .5, "quantity_step": "0.00001000", "min_notional": "5",
+        "taker_fee_bps": 10, "bars_per_year": 365,
+        "position_sizing": {
+            "family": "entry_volatility", "lookback": 20,
+            "annual_target": .2, "annualization_days": 365,
+        },
+    }
+
+    run_case(data, config, tmp_path / "risk")
+    evidence = pd.read_csv(tmp_path / "risk/signal-evidence.csv")
+
+    assert evidence["position_sizing_family"].eq("entry_volatility").all()
+    assert 0 < evidence.loc[21, "target"] < .5
+    assert evidence.loc[21:23, "target"].nunique() == 1
