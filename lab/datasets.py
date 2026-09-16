@@ -238,6 +238,15 @@ class DatasetCatalog:
             raise ValueError("Dataset manifest differs from catalog")
         return frame, manifest
 
+    def artifact_bytes(self, snapshot_id):
+        """Return checksum-verified immutable price files for exact provenance comparisons."""
+        snapshot = self.get(snapshot_id)
+        self.load(snapshot_id)
+        return {
+            "raw.csv": self._resolve(snapshot.raw_path).read_bytes(),
+            "adjusted.csv": self._resolve(snapshot.adjusted_path).read_bytes(),
+        }
+
 
 def register_legacy_pilot(catalog=None):
     catalog = catalog or DatasetCatalog()

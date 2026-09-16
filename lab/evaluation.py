@@ -162,11 +162,18 @@ class PromotionStore:
             connection.isolation_level = None
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT candidate_lock_json FROM promotion_gate WHERE singleton=1"
+                "SELECT decision_json,candidate_lock_json,holdout_json "
+                "FROM promotion_gate WHERE singleton=1"
             ).fetchone()
             if row is None:
                 connection.execute("ROLLBACK")
                 raise KeyError("Promotion gate is not frozen")
+            if json.loads(row["decision_json"])["selected"] != lock.candidate:
+                connection.execute("ROLLBACK")
+                raise ValueError("Candidate lock must match the selected candidate")
+            if row["holdout_json"] is not None:
+                connection.execute("ROLLBACK")
+                raise ValueError("Candidate cannot be locked after holdout opens")
             if row["candidate_lock_json"] is not None:
                 connection.execute("COMMIT")
                 if row["candidate_lock_json"] != payload:

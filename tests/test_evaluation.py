@@ -3,7 +3,9 @@ import sqlite3
 
 import pytest
 
-from lab.evaluation import PromotionStore, lock_selected_candidate, score_candidate, select_candidate
+from lab.evaluation import (
+    PromotionDecision, PromotionStore, lock_selected_candidate, score_candidate, select_candidate,
+)
 from lab.store import ArtifactChanged, RunStore
 
 
@@ -148,6 +150,11 @@ def test_candidate_lock_rejects_conflicting_second_payload(tmp_path):
 
     with pytest.raises(ValueError, match="different payload"):
         promotion.lock_candidate(locked | {"dataset_id": "d" * 64})
+
+    stay_cash = PromotionStore(tmp_path / "state/stay-cash.sqlite3")
+    stay_cash.freeze(PromotionDecision("stay_cash", None, ()))
+    with pytest.raises(ValueError, match="selected candidate"):
+        stay_cash.lock_candidate(locked)
 
 
 def test_promotion_store_migrates_legacy_gate_without_losing_decision(tmp_path):

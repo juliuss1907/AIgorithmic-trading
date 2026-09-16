@@ -143,6 +143,15 @@ def test_pipeline_rejects_revised_learning_history(setup_pipeline):
     assert setup_pipeline[1].get()["holdout"] is None
 
 
+def test_pipeline_rejects_raw_history_change_even_when_adjusted_prices_match(setup_pipeline):
+    changed = frame()
+    learning = changed.index <= pd.Timestamp("2025-12-31")
+    changed.loc[learning, ["open", "high", "low", "close"]] *= 2
+
+    with pytest.raises(ValueError, match="learning history"):
+        pipeline(setup_pipeline, downloaded=changed).execute()
+
+
 @pytest.mark.parametrize("mutation, message", [
     (lambda value: value["periods"].update({"holdout": ["2026-02-01", "2026-08-31"]}), "period"),
     (lambda value: value["strategy"].update({"entry_window": 21}), "contract"),
@@ -182,3 +191,15 @@ def test_pipeline_recovers_complete_run_created_before_latch(setup_pipeline):
     assert result["passed"] is True
     assert promotion.get()["holdout"]["run_id"] == result["run_id"]
     assert pipeline(setup_pipeline).execute() == result
+
+
+def test_pipeline_rejects_recovery_with_learning_only_dataset(setup_pipeline):
+    _, promotion, _, config_path, output = setup_pipeline
+    learning_id = promotion.get()["candidate_lock"]["dataset_id"]
+    recovered_config = ExperimentSpec.model_validate(
+        json.loads(config_path.read_text()) | {"dataset_id": learning_id}
+    )
+    write_complete_run(recovered_config, output)
+
+    with pytest.raises(ValueError, match="snapshot contract"):
+        pipeline(setup_pipeline).execute()

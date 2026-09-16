@@ -2,10 +2,11 @@
 
 import hashlib
 import json
+from datetime import timedelta
 from pathlib import Path
 
 from lab.contracts import ExperimentSpec, HoldoutResult
-from lab.data import _csv_bytes, fetch
+from lab.data import fetch
 from lab.evaluation import LEARNING_FOLDS
 from lab.experiment import read_config, run
 from lab.report import generate
@@ -61,11 +62,26 @@ class HoldoutPipeline:
             raise ValueError("Holdout config contract differs from the candidate lock")
 
     def _validate_history(self, snapshot, lock):
-        learning, _ = self.catalog.load(lock["dataset_id"])
-        extended, _ = self.catalog.load(snapshot.id)
-        prefix = extended.loc[:"2025-12-31"]
-        if _csv_bytes(learning) != _csv_bytes(prefix):
-            raise ValueError("Downloaded snapshot revised the locked learning history")
+        learning = self.catalog.artifact_bytes(lock["dataset_id"])
+        extended = self.catalog.artifact_bytes(snapshot.id)
+        for name, expected in learning.items():
+            expected_lines = expected.splitlines(keepends=True)
+            actual_lines = extended[name].splitlines(keepends=True)
+            if actual_lines[:len(expected_lines)] != expected_lines:
+                raise ValueError("Downloaded snapshot revised the locked learning history")
+
+    @staticmethod
+    def _validate_snapshot(snapshot, config):
+        expected = (
+            config.market, config.venue, config.symbol, config.interval, config.calendar,
+            str(config.data.start), str(config.data.end_exclusive),
+        )
+        actual = (
+            snapshot.market, snapshot.venue, snapshot.symbol, snapshot.interval, snapshot.calendar,
+            str(snapshot.start), str(snapshot.end + timedelta(days=1)),
+        )
+        if actual != expected:
+            raise ValueError("Fetched dataset snapshot contract differs from the holdout config")
 
     @staticmethod
     def _with_dataset(config, dataset_id):
@@ -130,11 +146,13 @@ class HoldoutPipeline:
                 raise ValueError("Recorded holdout artifact is missing")
             snapshot = self.fetch_snapshot(config, self.catalog)
             expected_config = self._with_dataset(config, snapshot.id)
+            self._validate_snapshot(snapshot, config)
             self._validate_history(snapshot, lock)
             self.execute_run(expected_config, self.output, catalog=self.catalog)
             if not (self.output / "report.md").is_file() or not (self.output / "equity.png").is_file():
                 self.generate_report(self.output)
             run_record = self.run_store.import_run(self.output)
+        self._validate_snapshot(snapshot, config)
         self._validate_history(snapshot, lock)
         result = self._verify_run(run_record, expected_config)
         return self.promotion_store.open_holdout(result)
