@@ -175,8 +175,11 @@ def test_existing_v1_database_is_migrated_additively(tmp_path):
         }
 
     assert {"payload_json", "result_json", "error_code", "applied_at"} <= command_columns
-    assert {"provider_profiles", "provider_assignments", "model_calls"} <= provider_tables
-    assert version == "2"
+    assert {
+        "provider_profiles", "provider_assignments", "model_calls",
+        "analyst_reports", "market_theses",
+    } <= provider_tables
+    assert version == "3"
 
 
 def test_secret_store_writes_mode_0600_and_never_exposes_key_in_repr(tmp_path):

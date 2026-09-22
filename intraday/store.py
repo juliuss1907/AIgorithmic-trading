@@ -8,9 +8,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from intraday.contracts import (
+    AnalystReport,
     FeatureSnapshot,
     GateDecision,
     JevDecision,
+    MarketThesis,
     NewsEvent,
     NewsIngestResult,
     PaperFill,
@@ -176,6 +178,21 @@ class IntradayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_model_calls_started
                     ON model_calls(started_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS analyst_reports (
+                    id TEXT PRIMARY KEY,
+                    analyst TEXT NOT NULL CHECK (analyst IN ('market', 'news', 'sentiment')),
+                    generated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_analyst_reports_latest
+                    ON analyst_reports(analyst, generated_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS market_theses (
+                    id TEXT PRIMARY KEY,
+                    generated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_market_theses_latest
+                    ON market_theses(generated_at DESC, id DESC);
                 CREATE TABLE IF NOT EXISTS schema_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -195,7 +212,7 @@ class IntradayStore:
                 if name not in command_columns:
                     connection.execute(f"ALTER TABLE commands ADD COLUMN {name} {definition}")
             connection.execute(
-                "UPDATE schema_meta SET value='2' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='3' WHERE key='schema_version'"
             )
 
     def record_tick(
@@ -428,6 +445,61 @@ class IntradayStore:
                     rule.created_at.isoformat(),
                 ),
             )
+
+    def rule_status(self, rule_id: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT status FROM rules WHERE id=?", (rule_id,)
+            ).fetchone()
+        return None if row is None else row["status"]
+
+    def record_analysis(
+        self,
+        reports: tuple[AnalystReport, AnalystReport, AnalystReport],
+        thesis: MarketThesis,
+    ) -> None:
+        expected = {"market", "news", "sentiment"}
+        if {report.analyst for report in reports} != expected:
+            raise ValueError("analysis cycle requires market, news, and sentiment reports")
+        if set(thesis.source_report_ids) != {report.report_id for report in reports}:
+            raise ValueError("market thesis must reference the analysis cycle reports")
+        with self._connect() as connection:
+            for report in reports:
+                connection.execute(
+                    "INSERT INTO analyst_reports VALUES (?, ?, ?, ?)",
+                    (
+                        report.report_id,
+                        report.analyst,
+                        report.generated_at.isoformat(),
+                        _json(report),
+                    ),
+                )
+            connection.execute(
+                "INSERT INTO market_theses VALUES (?, ?, ?)",
+                (thesis.thesis_id, thesis.generated_at.isoformat(), _json(thesis)),
+            )
+
+    def latest_analyst_reports(self) -> dict[str, AnalystReport]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM analyst_reports current "
+                "WHERE NOT EXISTS (SELECT 1 FROM analyst_reports newer "
+                "WHERE newer.analyst=current.analyst AND "
+                "(newer.generated_at > current.generated_at OR "
+                "(newer.generated_at=current.generated_at AND newer.id > current.id)))"
+            ).fetchall()
+        reports = [
+            AnalystReport.model_validate_json(row["payload_json"]) for row in rows
+        ]
+        return {report.analyst: report for report in reports}
+
+    def latest_market_thesis(self) -> MarketThesis | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM market_theses "
+                "ORDER BY generated_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        return None if row is None else MarketThesis.model_validate_json(row["payload_json"])
 
     def activate_champion(self, rule_id: str, *, now: datetime) -> dict:
         with self._connect() as connection:

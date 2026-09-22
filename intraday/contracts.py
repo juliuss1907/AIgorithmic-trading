@@ -483,6 +483,67 @@ class ModelCallRecord(StrictContract):
         return self
 
 
+class AnalysisAssessment(StrictContract):
+    summary: str = Field(min_length=20, max_length=2000)
+    stance: Literal["bullish", "bearish", "neutral"]
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    key_findings: tuple[str, ...] = Field(min_length=1, max_length=8)
+    risk_factors: tuple[str, ...] = Field(min_length=1, max_length=8)
+
+    @field_validator("key_findings", "risk_factors")
+    @classmethod
+    def assessment_items_are_bounded(cls, values):
+        if any(not value.strip() or len(value) > 300 for value in values):
+            raise ValueError("assessment items must be nonempty and at most 300 characters")
+        return values
+
+
+class AnalystReport(StrictContract):
+    report_id: str = Field(min_length=1, max_length=128)
+    analyst: Literal["market", "news", "sentiment"]
+    assessment: AnalysisAssessment
+    generated_at: datetime
+    model_ref: str = Field(min_length=1, max_length=160)
+    prompt_version: str = Field(min_length=1, max_length=80)
+    input_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    _report_time_is_aware = field_validator("generated_at")(_aware)
+
+
+class ThesisAssessment(StrictContract):
+    summary: str = Field(min_length=20, max_length=3000)
+    stance: Literal["bullish", "bearish", "neutral"]
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    key_levels: dict[str, float]
+    risk_factors: tuple[str, ...] = Field(min_length=1, max_length=10)
+    horizon_minutes: int = Field(ge=30, le=1440)
+
+    @field_validator("key_levels")
+    @classmethod
+    def levels_are_positive_and_bounded(cls, values):
+        if not 1 <= len(values) <= 8:
+            raise ValueError("market thesis requires one to eight key levels")
+        if any(not name.strip() or value <= 0 for name, value in values.items()):
+            raise ValueError("market thesis key levels must be named and positive")
+        return values
+
+
+class MarketThesis(StrictContract):
+    thesis_id: str = Field(min_length=1, max_length=128)
+    summary: str = Field(min_length=20, max_length=3000)
+    stance: Literal["bullish", "bearish", "neutral"]
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    key_levels: dict[str, float]
+    risk_factors: tuple[str, ...] = Field(min_length=1, max_length=10)
+    horizon_minutes: int = Field(ge=30, le=1440)
+    source_report_ids: tuple[str, str, str]
+    generated_at: datetime
+    model_ref: str = Field(min_length=1, max_length=160)
+    prompt_version: str = Field(min_length=1, max_length=80)
+
+    _thesis_time_is_aware = field_validator("generated_at")(_aware)
+
+
 class RuleParameters(StrictContract):
     """Only model-tunable filters; hard risk limits deliberately do not appear here."""
 
@@ -505,6 +566,11 @@ class RuleParameters(StrictContract):
         return value
 
 
+class RuleProposal(StrictContract):
+    parameters: RuleParameters
+    rationale: str = Field(min_length=20, max_length=2000)
+
+
 class RuleCandidate(StrictContract):
     rule_id: str = Field(min_length=1, max_length=128)
     parent_rule_id: str = Field(min_length=1, max_length=128)
@@ -513,6 +579,7 @@ class RuleCandidate(StrictContract):
     created_at: datetime
     model_ref: str = Field(min_length=1, max_length=160)
     prompt_version: str = Field(min_length=1, max_length=80)
+    rationale: str | None = Field(default=None, max_length=2000)
     content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
     _candidate_time_is_aware = field_validator("created_at")(_aware)
