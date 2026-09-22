@@ -7,14 +7,20 @@ import getpass
 import json
 import os
 import secrets
+import sqlite3
 import sys
 import threading
 import time
+import uuid
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from intraday.config import IntradayConfig
+from intraday.config import (
+    IntradayConfig,
+    default_provider_secrets_path,
+    resolve_database_path,
+)
 from intraday.contracts import Direction, ProviderKind, ProviderProfile, ProviderRole
 from intraday.cross_venue import (
     CrossVenuePolicy,
@@ -54,6 +60,9 @@ def _parser() -> argparse.ArgumentParser:
     commands.choices["cross-venue-evaluate"].add_argument("--evidence", required=True)
     serve = commands.add_parser("serve")
     serve.add_argument("--database", default=None)
+    migrate_state = commands.add_parser("migrate-state")
+    migrate_state.add_argument("--from", dest="source", required=True)
+    migrate_state.add_argument("--database", default=None)
     provider = commands.add_parser("provider")
     provider_commands = provider.add_subparsers(dest="provider_command", required=True)
     for name in ("add", "list", "show", "remove", "test"):
@@ -83,18 +92,11 @@ def _parser() -> argparse.ArgumentParser:
 
 def _default_secrets_file() -> Path:
     configured = os.getenv("INTRADAY_PROVIDER_SECRETS_FILE")
-    if configured:
-        return Path(configured).expanduser()
-    config_home = os.getenv("XDG_CONFIG_HOME")
-    root = Path(config_home).expanduser() if config_home else Path.home() / ".config"
-    return root / "aigorithmic-trading" / "provider-secrets.toml"
+    return Path(configured).expanduser() if configured else default_provider_secrets_path()
 
 
 def _provider_cli(arguments) -> None:
-    database = Path(
-        arguments.database
-        or os.getenv("INTRADAY_DATABASE", "state/intraday/intraday.sqlite3")
-    )
+    database = resolve_database_path(arguments.database)
     secret_store = ProviderSecretStore(arguments.secrets_file or _default_secrets_file())
     store = IntradayStore(database)
     command = arguments.provider_command
@@ -208,6 +210,48 @@ def _provider_cli(arguments) -> None:
     print(json.dumps({"profile_id": arguments.profile_id, "removed": True}, indent=2))
 
 
+def _migrate_state(source_value: str, database_value: str | None) -> dict[str, str]:
+    source = Path(source_value).expanduser().resolve(strict=True)
+    database = resolve_database_path(database_value).resolve()
+    if source == database:
+        raise SystemExit("source and destination database must be different")
+    if database.exists():
+        raise SystemExit(f"destination database already exists: {database}")
+
+    database.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = database.with_name(f".{database.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as source_connection:
+            integrity = source_connection.execute("PRAGMA integrity_check").fetchone()[0]
+            if integrity != "ok":
+                raise SystemExit(f"source database integrity check failed: {integrity}")
+            with sqlite3.connect(temporary) as destination_connection:
+                source_connection.backup(destination_connection)
+                copied_integrity = destination_connection.execute(
+                    "PRAGMA integrity_check"
+                ).fetchone()[0]
+                if copied_integrity != "ok":
+                    raise SystemExit(
+                        f"copied database integrity check failed: {copied_integrity}"
+                    )
+        temporary.chmod(0o600)
+        try:
+            os.link(temporary, database)
+        except FileExistsError as error:
+            raise SystemExit(f"destination database already exists: {database}") from error
+    except sqlite3.DatabaseError as error:
+        raise SystemExit(f"database migration failed: {error}") from error
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    return {
+        "status": "copied",
+        "source": str(source),
+        "database": str(database),
+        "integrity": "ok",
+    }
+
+
 def _doctor(config: IntradayConfig) -> dict:
     store = IntradayStore(config.database)
     active_jev = store.provider_assignment(ProviderRole.JEV)
@@ -256,6 +300,9 @@ def _analysis_loop(config: IntradayConfig) -> None:
 
 def main() -> None:
     arguments = _parser().parse_args()
+    if arguments.command == "migrate-state":
+        print(json.dumps(_migrate_state(arguments.source, arguments.database), indent=2))
+        return
     if arguments.command == "provider":
         _provider_cli(arguments)
         return

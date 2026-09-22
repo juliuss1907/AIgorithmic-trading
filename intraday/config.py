@@ -3,8 +3,30 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+
+APP_DIRECTORY = "aigorithmic-trading"
+
+
+def default_database_path() -> Path:
+    root = os.getenv("XDG_STATE_HOME")
+    state_home = Path(root).expanduser() if root else Path.home() / ".local" / "state"
+    return state_home / APP_DIRECTORY / "intraday.sqlite3"
+
+
+def default_provider_secrets_path() -> Path:
+    root = os.getenv("XDG_CONFIG_HOME")
+    config_home = Path(root).expanduser() if root else Path.home() / ".config"
+    return config_home / APP_DIRECTORY / "provider-secrets.toml"
+
+
+def resolve_database_path(database: str | Path | None = None) -> Path:
+    if database is not None:
+        return Path(database).expanduser()
+    configured = os.getenv("INTRADAY_DATABASE")
+    return Path(configured).expanduser() if configured else default_database_path()
 
 
 def _boolean(name: str, default: bool) -> bool:
@@ -19,14 +41,12 @@ def _boolean(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class IntradayConfig:
-    database: Path = Path("state/intraday/intraday.sqlite3")
+    database: Path = field(default_factory=default_database_path)
     symbol: str = "BTCUSDT"
     initial_equity: float = 10_000.0
     interval_seconds: float = 5.0
     provider: str = "stub"
-    provider_secrets_file: Path = Path(
-        "~/.config/aigorithmic-trading/provider-secrets.toml"
-    ).expanduser()
+    provider_secrets_file: Path = field(default_factory=default_provider_secrets_path)
     llm_analysis_interval_seconds: float = 3600
     mode: str = "paper"
     dashboard_host: str = "127.0.0.1"
@@ -68,16 +88,14 @@ class IntradayConfig:
     @classmethod
     def from_environment(cls, *, database: str | Path | None = None) -> "IntradayConfig":
         return cls(
-            database=Path(database or os.getenv("INTRADAY_DATABASE", cls.database)),
+            database=resolve_database_path(database),
             symbol=os.getenv("INTRADAY_SYMBOL", "BTCUSDT"),
             initial_equity=float(os.getenv("INTRADAY_PAPER_BALANCE", "10000")),
             interval_seconds=float(os.getenv("INTRADAY_INTERVAL_SECONDS", "5")),
             provider=os.getenv("INTRADAY_PROVIDER", "stub"),
             provider_secrets_file=Path(
-                os.getenv(
-                    "INTRADAY_PROVIDER_SECRETS_FILE",
-                    "~/.config/aigorithmic-trading/provider-secrets.toml",
-                )
+                os.getenv("INTRADAY_PROVIDER_SECRETS_FILE")
+                or default_provider_secrets_path()
             ).expanduser(),
             llm_analysis_interval_seconds=float(
                 os.getenv("INTRADAY_LLM_ANALYSIS_INTERVAL", "3600")
