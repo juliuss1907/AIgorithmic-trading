@@ -2387,6 +2387,7 @@ dependencies = [
     { name = "pandas" },
     { name = "uvicorn" },
     { name = "vibe-trading-ai" },
+    { name = "websockets" },
     { name = "yfinance" },
 ]
 
@@ -2406,6 +2407,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.2,<3" },
     { name = "uvicorn", specifier = "==0.52.4" },
     { name = "vibe-trading-ai", specifier = "==0.1.15" },
+    { name = "websockets", specifier = "==16.1.1" },
     { name = "yfinance", specifier = ">=1,<2" },
 ]
 

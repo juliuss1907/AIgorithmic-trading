@@ -1,0 +1,32 @@
+services:
+  worker:
+    build:
+      context: ../..
+      dockerfile: deploy/intraday/Dockerfile
+    command: ["run"]
+    env_file:
+      - ../../.env.intraday
+    volumes:
+      - intraday-state:/app/state/intraday
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/intraday/Dockerfile
+    command: ["serve"]
+    env_file:
+      - ../../.env.intraday
+    volumes:
+      - intraday-state:/app/state/intraday
+    ports:
+      - "127.0.0.1:8081:8081"
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  intraday-state:

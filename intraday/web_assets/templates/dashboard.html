@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta http-equiv="refresh" content="10">
+    <title>Intraday control room</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Đi tới nội dung chính</a>
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">BTCUSDT · USD-M perpetual · isolated 3×</p>
+        <h1>Intraday control room</h1>
+      </div>
+      <p class="mode"><span aria-hidden="true"></span> Paper only</p>
+    </header>
+
+    <main id="main">
+      <section class="strip" aria-label="Tình trạng hệ thống">
+        <article>
+          <h2>Engine</h2>
+          <strong>{{ "Paused" if runtime.get("halted") else "Ready" }}</strong>
+          <small>{{ runtime.get("halt_reason") or "No active kill switch" }}</small>
+        </article>
+        <article>
+          <h2>Position</h2>
+          <strong>{{ portfolio.get("tranches", 0) }} / 2 tranches</strong>
+          <small>One-way mode</small>
+        </article>
+        <article>
+          <h2>Decisions</h2>
+          <strong>{{ counts.decisions }}</strong>
+          <small>{{ counts.fills }} simulated fills</small>
+        </article>
+        <article>
+          <h2>Hard limits</h2>
+          <strong>0.50% risk</strong>
+          <small>50% maximum notional</small>
+        </article>
+        <article>
+          <h2>Hyperliquid</h2>
+          <strong>{{ cross_venue_mode|capitalize }}</strong>
+          <small>
+            {% if cross_venue.last_received_at %}
+              <span>{{ "%.1f"|format(cross_venue.coverage * 100) }}% 14-day coverage</span>
+              <span>Funding {{ "%.3f"|format(cross_venue.latest.funding_bps_hour) }} bps/h</span>
+            {% else %}
+              <span>Waiting for first frame</span>
+            {% endif %}
+            <span>Gate {{ cross_evaluation.status if cross_evaluation else "not evaluated" }}</span>
+          </small>
+        </article>
+      </section>
+
+      <section class="ledger" aria-labelledby="decision-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Immutable audit trail</p>
+            <h2 id="decision-heading">Recent decisions</h2>
+          </div>
+          <small>Refreshes every 10 seconds</small>
+        </div>
+        {% if decisions %}
+        <div class="table-wrap" tabindex="0" aria-label="Bảng quyết định gần đây">
+          <table>
+            <thead><tr><th>Time (UTC)</th><th>Direction</th><th>Gate</th><th>Cross venue</th><th>Δ quality</th><th>Size</th><th>Tick</th></tr></thead>
+            <tbody>
+              {% for decision in decisions %}
+              <tr>
+                <td>{{ decision.created_at }}</td>
+                <td><span class="direction">{{ decision.direction }}</span></td>
+                <td>{{ decision.gate_outcome }}</td>
+                <td>{{ decision.cross_venue_status or "off" }}</td>
+                <td>{{ "%+.1f"|format(decision.entry_quality_adjustment) }}</td>
+                <td>{{ "%.0f"|format(decision.notional_multiplier * 100) }}%</td>
+                <td><code>{{ decision.tick_id }}</code></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty" role="status">
+          <strong>No decision recorded yet.</strong>
+          <p>Run one safe stub tick to verify the complete pipeline.</p>
+        </div>
+        {% endif %}
+      </section>
+    </main>
+
+    <footer>
+      <p>Execution is disabled. Every signal passes deterministic risk controls before paper simulation.</p>
+    </footer>
+  </body>
+</html>

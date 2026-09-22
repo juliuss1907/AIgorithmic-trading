@@ -1,0 +1,659 @@
+"""SQLite audit store for the standalone intraday system."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from intraday.contracts import (
+    FeatureSnapshot,
+    GateDecision,
+    JevDecision,
+    NewsEvent,
+    NewsIngestResult,
+    PaperFill,
+    RuleCandidate,
+    VenueMarketFrame,
+)
+from intraday.cross_venue_evaluation import CrossVenuePromotionEvaluation
+
+
+def _json(model) -> str:
+    return json.dumps(model.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+
+
+class IntradayStore:
+    def __init__(self, database: str | Path):
+        self.database = Path(database).resolve()
+        self.database.parent.mkdir(parents=True, exist_ok=True)
+        self._initialize()
+
+    def _connect(self):
+        connection = sqlite3.connect(self.database)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA busy_timeout = 5000")
+        return connection
+
+    def _initialize(self):
+        with self._connect() as connection:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS snapshots (
+                    id TEXT PRIMARY KEY,
+                    event_time TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS decisions (
+                    id TEXT PRIMARY KEY,
+                    tick_id TEXT NOT NULL UNIQUE,
+                    snapshot_id TEXT NOT NULL REFERENCES snapshots(id),
+                    direction TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS gates (
+                    id TEXT PRIMARY KEY,
+                    decision_id TEXT NOT NULL UNIQUE REFERENCES decisions(id),
+                    outcome TEXT NOT NULL,
+                    evaluated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS fills (
+                    id TEXT PRIMARY KEY,
+                    gate_id TEXT NOT NULL UNIQUE REFERENCES gates(id),
+                    filled_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS commands (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected')),
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS portfolio_state (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS runtime_state (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS rules (
+                    id TEXT PRIMARY KEY,
+                    parent_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN (
+                        'queued', 'replay_passed', 'challenger', 'champion',
+                        'hall_of_fame', 'rejected'
+                    )),
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS rule_registry (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    champion_id TEXT REFERENCES rules(id),
+                    challenger_id TEXT REFERENCES rules(id),
+                    rollback_id TEXT REFERENCES rules(id),
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS notification_outbox (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    delivery_key TEXT NOT NULL UNIQUE,
+                    kind TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('pending', 'delivered')),
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    delivered_at TEXT,
+                    last_error TEXT
+                );
+                CREATE TABLE IF NOT EXISTS news_events (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    received_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS news_clusters (
+                    id TEXT PRIMARY KEY,
+                    verified INTEGER NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS venue_market_frames (
+                    id TEXT PRIMARY KEY,
+                    venue TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    event_time TEXT NOT NULL,
+                    received_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_venue_frames_time
+                    ON venue_market_frames(venue, symbol, event_time);
+                CREATE TABLE IF NOT EXISTS cross_venue_evaluations (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL CHECK (status IN ('deferred', 'reject', 'promote')),
+                    evaluated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS schema_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO schema_meta VALUES ('schema_version', '1');
+                """
+            )
+
+    def record_tick(
+        self,
+        snapshot: FeatureSnapshot,
+        decision: JevDecision,
+        gate: GateDecision,
+        fill: PaperFill | None,
+        portfolio_state: dict | None = None,
+        runtime_state: dict | None = None,
+    ) -> dict:
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT id, tick_id FROM decisions WHERE tick_id = ?", (decision.tick_id,)
+            ).fetchone()
+            if existing:
+                return dict(existing)
+            connection.execute(
+                "INSERT OR IGNORE INTO snapshots VALUES (?, ?, ?)",
+                (snapshot.snapshot_id, snapshot.event_time.isoformat(), _json(snapshot)),
+            )
+            connection.execute(
+                "INSERT INTO decisions VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    decision.decision_id,
+                    decision.tick_id,
+                    snapshot.snapshot_id,
+                    decision.direction.value,
+                    decision.created_at.isoformat(),
+                    _json(decision),
+                ),
+            )
+            connection.execute(
+                "INSERT INTO gates VALUES (?, ?, ?, ?, ?)",
+                (
+                    gate.gate_id,
+                    gate.decision_id,
+                    gate.outcome,
+                    gate.evaluated_at.isoformat(),
+                    _json(gate),
+                ),
+            )
+            if fill is not None:
+                connection.execute(
+                    "INSERT INTO fills VALUES (?, ?, ?, ?)",
+                    (fill.fill_id, fill.gate_id, fill.filled_at.isoformat(), _json(fill)),
+                )
+                connection.execute(
+                    "INSERT OR IGNORE INTO notification_outbox "
+                    "(delivery_key, kind, message, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+                    (
+                        f"paper_fill:{fill.fill_id}",
+                        "paper_fill",
+                        (
+                            f"PAPER FILL | {fill.side.upper()} {fill.quantity:.8f} BTC "
+                            f"@ {fill.price:.2f} | fee {fill.fee:.4f} USDT"
+                        ),
+                        fill.filled_at.isoformat(),
+                    ),
+                )
+            if portfolio_state is not None:
+                connection.execute(
+                    "INSERT INTO portfolio_state VALUES (1, ?, ?) "
+                    "ON CONFLICT(singleton) DO UPDATE SET "
+                    "payload_json = excluded.payload_json, updated_at = excluded.updated_at",
+                    (
+                        json.dumps(portfolio_state, sort_keys=True, separators=(",", ":")),
+                        gate.evaluated_at.isoformat(),
+                    ),
+                )
+            if runtime_state is not None:
+                self._save_runtime_state(connection, runtime_state, gate.evaluated_at)
+        return {"id": decision.decision_id, "tick_id": decision.tick_id}
+
+    def get_tick(self, tick_id: str):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT d.payload_json AS decision_json, g.payload_json AS gate_json, "
+                "f.payload_json AS fill_json FROM decisions d "
+                "JOIN gates g ON g.decision_id = d.id "
+                "LEFT JOIN fills f ON f.gate_id = g.id WHERE d.tick_id = ?",
+                (tick_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "decision": JevDecision.model_validate_json(row["decision_json"]),
+            "gate": GateDecision.model_validate_json(row["gate_json"]),
+            "fill": (
+                PaperFill.model_validate_json(row["fill_json"])
+                if row["fill_json"] is not None else None
+            ),
+        }
+
+    def load_portfolio_state(self):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM portfolio_state WHERE singleton = 1"
+            ).fetchone()
+        return None if row is None else json.loads(row["payload_json"])
+
+    @staticmethod
+    def _save_runtime_state(connection, state: dict, updated_at: datetime) -> None:
+        connection.execute(
+            "INSERT INTO runtime_state VALUES (1, ?, ?) "
+            "ON CONFLICT(singleton) DO UPDATE SET "
+            "payload_json = excluded.payload_json, updated_at = excluded.updated_at",
+            (
+                json.dumps(state, sort_keys=True, separators=(",", ":")),
+                updated_at.isoformat(),
+            ),
+        )
+
+    def save_runtime_state(self, state: dict, *, updated_at: datetime) -> None:
+        with self._connect() as connection:
+            self._save_runtime_state(connection, state, updated_at)
+
+    def load_runtime_state(self) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM runtime_state WHERE singleton = 1"
+            ).fetchone()
+        return None if row is None else json.loads(row["payload_json"])
+
+    def counts(self) -> dict[str, int]:
+        with self._connect() as connection:
+            return {
+                name: connection.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+                for name in ("snapshots", "decisions", "gates", "fills")
+            }
+
+    def list_decisions(self, limit: int = 100) -> list[dict]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT d.id, d.tick_id, d.snapshot_id, d.direction, d.created_at, "
+                "g.payload_json AS gate_json FROM decisions d "
+                "JOIN gates g ON g.decision_id = d.id "
+                "ORDER BY d.created_at DESC, d.id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            gate = GateDecision.model_validate_json(item.pop("gate_json"))
+            item.update({
+                "gate_outcome": gate.outcome,
+                "cross_venue_mode": gate.cross_venue_mode,
+                "cross_venue_status": gate.cross_venue_status,
+                "entry_quality_adjustment": gate.entry_quality_adjustment,
+                "notional_multiplier": gate.notional_multiplier,
+            })
+            result.append(item)
+        return result
+
+    def list_snapshots(self, limit: int = 100_000) -> list[FeatureSnapshot]:
+        if not 1 <= limit <= 1_000_000:
+            raise ValueError("limit must be between 1 and 1000000")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM snapshots "
+                "ORDER BY event_time DESC, id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [
+            FeatureSnapshot.model_validate_json(row["payload_json"])
+            for row in reversed(rows)
+        ]
+
+    def list_recorded_decisions(self, limit: int = 100_000) -> list[JevDecision]:
+        if not 1 <= limit <= 1_000_000:
+            raise ValueError("limit must be between 1 and 1000000")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM decisions "
+                "ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [
+            JevDecision.model_validate_json(row["payload_json"])
+            for row in reversed(rows)
+        ]
+
+    def enqueue_command(self, command_id: str, kind: str, created_at: datetime, *, actor: str):
+        allowed = {"pause_entries", "resume_entries", "flatten", "rollback", "toggle_notifications"}
+        if kind not in allowed:
+            raise ValueError("unsupported operator command")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO commands VALUES (?, ?, ?, 'pending', ?)",
+                (command_id, kind, actor, created_at.isoformat()),
+            )
+            row = connection.execute("SELECT * FROM commands WHERE id = ?", (command_id,)).fetchone()
+        return dict(row)
+
+    def list_commands(self, *, status: str | None = None) -> list[dict]:
+        query = "SELECT * FROM commands"
+        parameters: tuple[str, ...] = ()
+        if status is not None:
+            query += " WHERE status = ?"
+            parameters = (status,)
+        query += " ORDER BY created_at, id"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [dict(row) for row in rows]
+
+    def finish_command(self, command_id: str, *, status: str) -> None:
+        if status not in {"applied", "rejected"}:
+            raise ValueError("command status must be applied or rejected")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE commands SET status = ? WHERE id = ? AND status = 'pending'",
+                (status, command_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("pending command not found")
+
+    def register_rule(self, rule: RuleCandidate, *, status: str = "queued") -> None:
+        allowed = {"queued", "replay_passed", "challenger", "champion", "hall_of_fame", "rejected"}
+        if status not in allowed:
+            raise ValueError("invalid rule status")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO rules VALUES (?, ?, ?, ?, ?)",
+                (
+                    rule.rule_id,
+                    rule.parent_rule_id,
+                    status,
+                    _json(rule),
+                    rule.created_at.isoformat(),
+                ),
+            )
+
+    def activate_champion(self, rule_id: str, *, now: datetime) -> dict:
+        with self._connect() as connection:
+            if connection.execute("SELECT 1 FROM rules WHERE id = ?", (rule_id,)).fetchone() is None:
+                raise ValueError("unknown rule")
+            connection.execute("UPDATE rules SET status = 'champion' WHERE id = ?", (rule_id,))
+            connection.execute(
+                "INSERT INTO rule_registry VALUES (1, ?, NULL, NULL, ?) "
+                "ON CONFLICT(singleton) DO UPDATE SET champion_id=excluded.champion_id, "
+                "challenger_id=NULL, rollback_id=NULL, updated_at=excluded.updated_at",
+                (rule_id, now.isoformat()),
+            )
+        return self.rule_registry()
+
+    def set_challenger(self, rule_id: str, *, now: datetime) -> dict:
+        with self._connect() as connection:
+            registry = connection.execute(
+                "SELECT champion_id, challenger_id FROM rule_registry WHERE singleton = 1"
+            ).fetchone()
+            rule = connection.execute(
+                "SELECT parent_id FROM rules WHERE id = ?", (rule_id,)
+            ).fetchone()
+            if registry is None or rule is None:
+                raise ValueError("champion and candidate must exist")
+            if registry["challenger_id"] is not None:
+                raise ValueError("a challenger is already active")
+            if rule["parent_id"] != registry["champion_id"]:
+                raise ValueError("challenger must descend from the active champion")
+            connection.execute("UPDATE rules SET status = 'challenger' WHERE id = ?", (rule_id,))
+            connection.execute(
+                "UPDATE rule_registry SET challenger_id = ?, updated_at = ? WHERE singleton = 1",
+                (rule_id, now.isoformat()),
+            )
+        return self.rule_registry()
+
+    def promote_challenger(self, *, now: datetime) -> dict:
+        with self._connect() as connection:
+            registry = connection.execute(
+                "SELECT champion_id, challenger_id FROM rule_registry WHERE singleton = 1"
+            ).fetchone()
+            if registry is None or registry["challenger_id"] is None:
+                raise ValueError("no active challenger")
+            old, new = registry["champion_id"], registry["challenger_id"]
+            connection.execute("UPDATE rules SET status = 'hall_of_fame' WHERE id = ?", (old,))
+            connection.execute("UPDATE rules SET status = 'champion' WHERE id = ?", (new,))
+            connection.execute(
+                "UPDATE rule_registry SET champion_id = ?, challenger_id = NULL, "
+                "rollback_id = ?, updated_at = ? WHERE singleton = 1",
+                (new, old, now.isoformat()),
+            )
+        return self.rule_registry()
+
+    def rollback_champion(self, *, now: datetime) -> dict:
+        with self._connect() as connection:
+            registry = connection.execute(
+                "SELECT champion_id, rollback_id FROM rule_registry WHERE singleton = 1"
+            ).fetchone()
+            if registry is None or registry["rollback_id"] is None:
+                raise ValueError("no rollback target")
+            current, previous = registry["champion_id"], registry["rollback_id"]
+            connection.execute("UPDATE rules SET status = 'hall_of_fame' WHERE id = ?", (current,))
+            connection.execute("UPDATE rules SET status = 'champion' WHERE id = ?", (previous,))
+            connection.execute(
+                "UPDATE rule_registry SET champion_id = ?, rollback_id = ?, updated_at = ? "
+                "WHERE singleton = 1",
+                (previous, current, now.isoformat()),
+            )
+        return self.rule_registry()
+
+    def rule_registry(self) -> dict:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT champion_id, challenger_id, rollback_id, updated_at "
+                "FROM rule_registry WHERE singleton = 1"
+            ).fetchone()
+        if row is None:
+            return {"champion_id": None, "challenger_id": None, "rollback_id": None}
+        return dict(row)
+
+    def load_active_rule(self) -> RuleCandidate | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT r.payload_json FROM rules r JOIN rule_registry g "
+                "ON g.champion_id = r.id WHERE g.singleton = 1"
+            ).fetchone()
+        return None if row is None else RuleCandidate.model_validate_json(row["payload_json"])
+
+    def list_pending_notifications(self, limit: int = 100) -> list[dict]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, delivery_key, kind, message, attempts, created_at "
+                "FROM notification_outbox WHERE status = 'pending' "
+                "ORDER BY id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_notification_delivered(self, notification_id: int, *, delivered_at: datetime) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE notification_outbox SET status='delivered', attempts=attempts+1, "
+                "delivered_at=?, last_error=NULL WHERE id=? AND status='pending'",
+                (delivered_at.isoformat(), notification_id),
+            )
+
+    def mark_notification_failed(self, notification_id: int, *, error_type: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE notification_outbox SET attempts=attempts+1, last_error=? "
+                "WHERE id=? AND status='pending'",
+                (error_type[:80], notification_id),
+            )
+
+    def record_news(self, result: NewsIngestResult) -> None:
+        with self._connect() as connection:
+            for event in result.accepted_events:
+                connection.execute(
+                    "INSERT OR IGNORE INTO news_events VALUES (?, ?, ?, ?)",
+                    (event.event_id, event.source_id, event.received_at.isoformat(), _json(event)),
+                )
+            for cluster in result.clusters:
+                connection.execute(
+                    "INSERT INTO news_clusters VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(id) DO UPDATE SET verified=excluded.verified, "
+                    "last_seen_at=excluded.last_seen_at, payload_json=excluded.payload_json",
+                    (
+                        cluster.cluster_id,
+                        int(cluster.verified),
+                        cluster.last_seen_at.isoformat(),
+                        _json(cluster),
+                    ),
+                )
+
+    def list_news_events(self, limit: int = 1000) -> list[NewsEvent]:
+        if not 1 <= limit <= 5000:
+            raise ValueError("limit must be between 1 and 5000")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM news_events ORDER BY received_at DESC, id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [NewsEvent.model_validate_json(row["payload_json"]) for row in rows]
+
+    def record_venue_frame(self, frame: VenueMarketFrame) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO venue_market_frames VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    frame.frame_id,
+                    frame.venue,
+                    frame.symbol,
+                    frame.event_time.isoformat(),
+                    frame.received_at.isoformat(),
+                    _json(frame),
+                ),
+            )
+
+    def venue_frame_count(self, venue: str) -> int:
+        with self._connect() as connection:
+            return connection.execute(
+                "SELECT COUNT(*) FROM venue_market_frames WHERE venue = ?", (venue,)
+            ).fetchone()[0]
+
+    def prune_venue_frames(self, *, before: datetime) -> int:
+        if before.tzinfo is None or before.utcoffset() is None:
+            raise ValueError("retention cutoff must be timezone-aware")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM venue_market_frames WHERE event_time < ?",
+                (before.isoformat(),),
+            )
+        return cursor.rowcount
+
+    def list_venue_frames(
+        self,
+        venue: str,
+        *,
+        symbol: str = "BTCUSDT",
+        limit: int = 1000,
+    ) -> list[VenueMarketFrame]:
+        if not 1 <= limit <= 1_000_000:
+            raise ValueError("limit must be between 1 and 1000000")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM venue_market_frames "
+                "WHERE venue = ? AND symbol = ? "
+                "ORDER BY event_time DESC, id DESC LIMIT ?",
+                (venue, symbol, limit),
+            ).fetchall()
+        return [
+            VenueMarketFrame.model_validate_json(row["payload_json"])
+            for row in reversed(rows)
+        ]
+
+    def venue_health(
+        self,
+        venue: str,
+        *,
+        now: datetime | None = None,
+        window_days: int = 14,
+    ) -> dict:
+        now = now or datetime.now(timezone.utc)
+        since = now - timedelta(days=window_days)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS total, MAX(received_at) AS last_received_at, "
+                "SUM(CASE WHEN event_time >= ? THEN 1 ELSE 0 END) AS window_frames "
+                "FROM venue_market_frames WHERE venue = ?",
+                (since.isoformat(), venue),
+            ).fetchone()
+            latest_row = connection.execute(
+                "SELECT payload_json FROM venue_market_frames WHERE venue = ? "
+                "ORDER BY event_time DESC, id DESC LIMIT 1", (venue,)
+            ).fetchone()
+        last = row["last_received_at"]
+        recent = int(row["window_frames"] or 0)
+        expected = window_days * 24 * 60 * 12
+        latest = (
+            VenueMarketFrame.model_validate_json(latest_row["payload_json"])
+            if latest_row else None
+        )
+        return {
+            "venue": venue,
+            "total_frames": int(row["total"]),
+            "window_days": window_days,
+            "window_frames": recent,
+            "coverage": min(recent / expected, 1.0),
+            "last_received_at": last,
+            "age_seconds": (
+                max(0.0, (now - datetime.fromisoformat(last)).total_seconds())
+                if last else None
+            ),
+            "latest": (
+                {
+                    "event_time": latest.event_time.isoformat(),
+                    "mark_price": latest.mark_price,
+                    "funding_bps_hour": latest.funding_bps_hour,
+                    "open_interest_usd": latest.open_interest_usd,
+                    "spread_bps": latest.spread_bps,
+                    "book_imbalance_10bps": latest.book_imbalance["10"],
+                    "metadata_age_seconds": max(
+                        0.0,
+                        (latest.received_at - latest.metadata_received_at).total_seconds(),
+                    ),
+                }
+                if latest else None
+            ),
+        }
+
+    def record_cross_venue_evaluation(
+        self, evaluation: CrossVenuePromotionEvaluation
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO cross_venue_evaluations VALUES (?, ?, ?, ?)",
+                (
+                    evaluation.evaluation_id,
+                    evaluation.status,
+                    evaluation.evaluated_at.isoformat(),
+                    _json(evaluation),
+                ),
+            )
+
+    def latest_cross_venue_evaluation(self) -> CrossVenuePromotionEvaluation | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM cross_venue_evaluations "
+                "ORDER BY evaluated_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        return (
+            None if row is None else
+            CrossVenuePromotionEvaluation.model_validate_json(row["payload_json"])
+        )
+
+    def cross_venue_activation_allowed(self) -> bool:
+        latest = self.latest_cross_venue_evaluation()
+        return latest is not None and latest.status == "promote"
