@@ -837,6 +837,21 @@ class IntradayStore:
                 "DELETE FROM provider_assignments WHERE role=?", (role.value,)
             )
 
+    def delete_provider_profile(self, profile_id: str) -> None:
+        with self._connect() as connection:
+            assigned = connection.execute(
+                "SELECT role FROM provider_assignments WHERE profile_id=?", (profile_id,)
+            ).fetchone()
+            if assigned is not None:
+                raise ValueError(
+                    f"provider profile is active for {assigned['role']}; deactivate it first"
+                )
+            cursor = connection.execute(
+                "DELETE FROM provider_profiles WHERE id=?", (profile_id,)
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("unknown provider profile")
+
     def record_model_call(self, call: ModelCallRecord) -> None:
         with self._connect() as connection:
             connection.execute(

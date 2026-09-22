@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
+import os
+import secrets
+import sys
 import threading
 import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from intraday.config import IntradayConfig
-from intraday.contracts import Direction
+from intraday.contracts import Direction, ProviderKind, ProviderProfile, ProviderRole
 from intraday.cross_venue import (
     CrossVenuePolicy,
     derive_cross_venue_thresholds,
@@ -23,6 +28,7 @@ from intraday.cross_venue_evaluation import (
 from intraday.hyperliquid import HyperliquidFeed
 from intraday.market import BinanceUsdMClient
 from intraday.notifications import TelegramNotifier, drain_outbox
+from intraday.provider_profiles import ProviderSecretStore
 from intraday.replay import compare_cross_venue
 from intraday.runtime import run_news_cycle, run_once
 from intraday.store import IntradayStore
@@ -46,7 +52,109 @@ def _parser() -> argparse.ArgumentParser:
     commands.choices["cross-venue-evaluate"].add_argument("--evidence", required=True)
     serve = commands.add_parser("serve")
     serve.add_argument("--database", default=None)
+    provider = commands.add_parser("provider")
+    provider_commands = provider.add_subparsers(dest="provider_command", required=True)
+    for name in ("add", "list", "show", "remove"):
+        command = provider_commands.add_parser(name)
+        if name in {"add", "show", "remove"}:
+            command.add_argument("profile_id")
+        command.add_argument("--database", default=None)
+        command.add_argument("--secrets-file", default=None)
+    add = provider_commands.choices["add"]
+    add.add_argument("--role", required=True, choices=[item.value for item in ProviderRole])
+    add.add_argument("--kind", required=True, choices=[item.value for item in ProviderKind])
+    add.add_argument("--base-url")
+    add.add_argument("--model", required=True)
+    add.add_argument("--api-key-stdin", action="store_true")
+    add.add_argument("--replace", action="store_true")
     return parser
+
+
+def _default_secrets_file() -> Path:
+    config_home = os.getenv("XDG_CONFIG_HOME")
+    root = Path(config_home).expanduser() if config_home else Path.home() / ".config"
+    return root / "aigorithmic-trading" / "provider-secrets.toml"
+
+
+def _provider_cli(arguments) -> None:
+    database = Path(
+        arguments.database
+        or os.getenv("INTRADAY_DATABASE", "state/intraday/intraday.sqlite3")
+    )
+    secret_store = ProviderSecretStore(arguments.secrets_file or _default_secrets_file())
+    store = IntradayStore(database)
+    command = arguments.provider_command
+
+    if command == "add":
+        kind = ProviderKind(arguments.kind)
+        role = ProviderRole(arguments.role)
+        base_url = arguments.base_url
+        if kind == ProviderKind.OPENROUTER_DECISIONS:
+            base_url = base_url or "https://openrouter.ai/api/alpha/decisions"
+        elif not base_url:
+            raise SystemExit("--base-url is required for OpenAI-compatible providers")
+        if arguments.api_key_stdin:
+            api_key = sys.stdin.readline().rstrip("\r\n")
+        else:
+            api_key = getpass.getpass("Provider API key: ")
+        now = datetime.now(timezone.utc)
+        existing = store.provider_profile(arguments.profile_id)
+        if existing is not None and not arguments.replace:
+            raise SystemExit("provider profile already exists; pass --replace to update it")
+        profile = ProviderProfile.create(
+            profile_id=arguments.profile_id,
+            role=role,
+            kind=kind,
+            base_url=base_url,
+            model=arguments.model,
+            credential_version=secrets.token_hex(16),
+            created_at=existing.created_at if existing and arguments.replace else now,
+            updated_at=now,
+        )
+        secret_store.upsert(profile, api_key, replace=arguments.replace)
+        store.sync_provider_profile(profile)
+        print(
+            json.dumps(
+                {**profile.model_dump(mode="json"), "has_secret": True}, indent=2
+            )
+        )
+        return
+
+    if command == "list":
+        secret_ids = {profile.profile_id for profile in secret_store.list_profiles()}
+        profiles = [
+            {**profile, "has_secret": profile["profile_id"] in secret_ids}
+            for profile in store.list_provider_profiles()
+        ]
+        print(json.dumps(profiles, indent=2))
+        return
+
+    profile = store.provider_profile(arguments.profile_id)
+    if profile is None:
+        raise SystemExit("unknown provider profile")
+    if command == "show":
+        try:
+            secret_store.get(arguments.profile_id)
+            has_secret = True
+        except KeyError:
+            has_secret = False
+        metadata = next(
+            item
+            for item in store.list_provider_profiles()
+            if item["profile_id"] == arguments.profile_id
+        )
+        print(json.dumps({**metadata, "has_secret": has_secret}, indent=2))
+        return
+
+    for role in ProviderRole:
+        assignment = store.provider_assignment(role)
+        if assignment and assignment["profile_id"] == arguments.profile_id:
+            raise SystemExit(
+                f"provider profile is active for {role.value}; deactivate it first"
+            )
+    secret_store.remove(arguments.profile_id)
+    store.delete_provider_profile(arguments.profile_id)
+    print(json.dumps({"profile_id": arguments.profile_id, "removed": True}, indent=2))
 
 
 def _doctor(config: IntradayConfig) -> dict:
@@ -79,6 +187,9 @@ def _news_loop(config: IntradayConfig) -> None:
 
 def main() -> None:
     arguments = _parser().parse_args()
+    if arguments.command == "provider":
+        _provider_cli(arguments)
+        return
     config = IntradayConfig.from_environment(database=arguments.database)
     if arguments.command == "doctor":
         print(json.dumps(_doctor(config), indent=2))

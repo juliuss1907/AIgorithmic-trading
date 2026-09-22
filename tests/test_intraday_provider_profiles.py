@@ -1,4 +1,9 @@
+import io
+import json
+import os
 import sqlite3
+import stat
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -10,6 +15,8 @@ from intraday.contracts import (
     ProviderRole,
 )
 from intraday.store import IntradayStore
+from intraday.provider_profiles import ProviderSecretStore
+from intraday.__main__ import main
 
 
 NOW = datetime(2026, 9, 22, 10, 0, tzinfo=timezone.utc)
@@ -166,3 +173,76 @@ def test_existing_v1_database_is_migrated_additively(tmp_path):
     assert {"payload_json", "result_json", "error_code", "applied_at"} <= command_columns
     assert {"provider_profiles", "provider_assignments", "model_calls"} <= provider_tables
     assert version == "2"
+
+
+def test_secret_store_writes_mode_0600_and_never_exposes_key_in_repr(tmp_path):
+    path = tmp_path / "secrets" / "providers.toml"
+    secret_store = ProviderSecretStore(path)
+    current = profile()
+
+    secret_store.upsert(current, "sk-or-private")
+    loaded = secret_store.get(current.profile_id)
+
+    assert loaded.profile == current
+    assert loaded.api_key == "sk-or-private"
+    assert "sk-or-private" not in repr(loaded)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_secret_store_rejects_group_readable_files_and_symlinks(tmp_path):
+    path = tmp_path / "providers.toml"
+    secret_store = ProviderSecretStore(path)
+    secret_store.upsert(profile(), "private-key")
+    path.chmod(0o640)
+
+    with pytest.raises(PermissionError, match="0600"):
+        secret_store.list_profiles()
+
+    target = tmp_path / "target.toml"
+    target.write_text("schema_version = 1\nprofiles = []\n", encoding="utf-8")
+    target.chmod(0o600)
+    link = tmp_path / "link.toml"
+    link.symlink_to(target)
+    with pytest.raises(PermissionError, match="symlink"):
+        ProviderSecretStore(link).list_profiles()
+
+
+def test_provider_cli_add_and_list_redacts_api_key(monkeypatch, capsys, tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    secrets_file = tmp_path / "providers.toml"
+    monkeypatch.setattr(sys, "stdin", io.StringIO("sk-or-private\n"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "intraday", "provider", "add", "jev-openrouter",
+            "--database", str(database),
+            "--secrets-file", str(secrets_file),
+            "--role", "jev",
+            "--kind", "openrouter-decisions",
+            "--model", "typesafe/jev-1.13",
+            "--api-key-stdin",
+        ],
+    )
+
+    main()
+    added_output = capsys.readouterr().out
+
+    assert "sk-or-private" not in added_output
+    assert json.loads(added_output)["profile_id"] == "jev-openrouter"
+    assert "sk-or-private" not in str(IntradayStore(database).list_provider_profiles())
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "intraday", "provider", "list",
+            "--database", str(database),
+            "--secrets-file", str(secrets_file),
+        ],
+    )
+    main()
+    listed_output = capsys.readouterr().out
+
+    assert "sk-or-private" not in listed_output
+    assert json.loads(listed_output)[0]["has_secret"] is True
