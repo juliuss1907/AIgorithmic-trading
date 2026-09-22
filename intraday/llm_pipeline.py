@@ -36,6 +36,8 @@ PROMPT_VERSION = "analysis-v1"
 
 
 def should_generate_rule(store: IntradayStore, *, now: datetime) -> bool:
+    if store.has_open_rule_candidate():
+        return False
     latest = store.latest_successful_model_call("rule_generator")
     return latest is None or now - latest.started_at >= timedelta(hours=24)
 

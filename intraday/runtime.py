@@ -18,6 +18,7 @@ from intraday.llm_pipeline import (
 )
 from intraday.provider_profiles import ProviderSecretStore
 from intraday.providers import DecisionProvider, StubDecisionProvider
+from intraday.rules import advance_rule_lifecycle
 from intraday.store import IntradayStore
 
 
@@ -153,10 +154,12 @@ def run_analysis_cycle(
     utc_now = now.astimezone(timezone.utc)
     day_start = utc_now.replace(hour=0, minute=0, second=0, microsecond=0)
     daily_cost = store.model_cost_since(day_start)
+    lifecycle = advance_rule_lifecycle(store, now=now)
     return {
         "status": "ok",
         "thesis_id": result.thesis.thesis_id,
         "candidate_id": result.candidate.rule_id if result.candidate else None,
         "daily_cost_usd": daily_cost,
         "cost_warning": daily_cost > 2,
+        "rule_lifecycle": lifecycle,
     }

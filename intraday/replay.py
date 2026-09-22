@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import math
 from pathlib import Path
 
-from intraday.contracts import FeatureSnapshot, JevDecision
+from intraday.contracts import FeatureSnapshot, JevDecision, RuleCandidate
 from intraday.engine import IntradayEngine
 from intraday.store import IntradayStore
 
@@ -78,6 +78,7 @@ def replay(
     database: str | Path,
     initial_equity: float = 10_000,
     cross_venue_mode: str = "off",
+    rule: RuleCandidate | None = None,
 ) -> ReplayReport:
     if any(
         current.event_time <= previous.event_time
@@ -85,6 +86,9 @@ def replay(
     ):
         raise ValueError("snapshots must be strictly chronological")
     store = IntradayStore(database)
+    if rule is not None:
+        store.register_rule(rule, status="champion")
+        store.activate_champion(rule.rule_id, now=snapshots[0].built_at)
     engine = IntradayEngine(
         store,
         provider,

@@ -608,3 +608,19 @@ class PromotionEvaluation(StrictContract):
 
     _promotion_started_is_aware = field_validator("started_at")(_aware)
     _promotion_evaluated_is_aware = field_validator("evaluated_at")(_aware)
+
+
+class RuleReplayEvaluation(StrictContract):
+    evaluation_id: str = Field(min_length=1, max_length=128)
+    candidate_id: str = Field(min_length=1, max_length=128)
+    champion_id: str = Field(min_length=1, max_length=128)
+    evaluated_at: datetime
+    history_days: float = Field(ge=0, allow_inf_nan=False)
+    decision_coverage: float = Field(ge=0, le=1, allow_inf_nan=False)
+    feature_coverage: float = Field(ge=0, le=1, allow_inf_nan=False)
+    champion_score: float
+    challenger_score: float
+    status: Literal["deferred", "reject", "pass"]
+    reasons: tuple[str, ...] = ()
+
+    _replay_evaluated_is_aware = field_validator("evaluated_at")(_aware)

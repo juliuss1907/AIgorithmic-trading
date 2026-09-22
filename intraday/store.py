@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,7 +20,9 @@ from intraday.contracts import (
     ModelCallRecord,
     ProviderProfile,
     ProviderRole,
+    PromotionEvaluation,
     RuleCandidate,
+    RuleReplayEvaluation,
     VenueMarketFrame,
 )
 from intraday.cross_venue_evaluation import CrossVenuePromotionEvaluation
@@ -193,6 +196,16 @@ class IntradayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_market_theses_latest
                     ON market_theses(generated_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS rule_evaluations (
+                    id TEXT PRIMARY KEY,
+                    candidate_id TEXT NOT NULL REFERENCES rules(id),
+                    kind TEXT NOT NULL CHECK (kind IN ('replay', 'promotion')),
+                    status TEXT NOT NULL,
+                    evaluated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_rule_evaluations_candidate
+                    ON rule_evaluations(candidate_id, evaluated_at DESC, id DESC);
                 CREATE TABLE IF NOT EXISTS schema_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -212,7 +225,7 @@ class IntradayStore:
                 if name not in command_columns:
                     connection.execute(f"ALTER TABLE commands ADD COLUMN {name} {definition}")
             connection.execute(
-                "UPDATE schema_meta SET value='3' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='4' WHERE key='schema_version'"
             )
 
     def record_tick(
@@ -370,8 +383,8 @@ class IntradayStore:
         return result
 
     def list_snapshots(self, limit: int = 100_000) -> list[FeatureSnapshot]:
-        if not 1 <= limit <= 1_000_000:
-            raise ValueError("limit must be between 1 and 1000000")
+        if not 1 <= limit <= 2_000_000:
+            raise ValueError("limit must be between 1 and 2000000")
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM snapshots "
@@ -390,14 +403,49 @@ class IntradayStore:
             ).fetchone()
         return None if row is None else FeatureSnapshot.model_validate_json(row["payload_json"])
 
-    def list_recorded_decisions(self, limit: int = 100_000) -> list[JevDecision]:
-        if not 1 <= limit <= 1_000_000:
-            raise ValueError("limit must be between 1 and 1000000")
+    def snapshot_history_bounds(self) -> dict:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS snapshots, MIN(event_time) AS first_event_time, "
+                "MAX(event_time) AS last_event_time FROM snapshots"
+            ).fetchone()
+        return dict(row)
+
+    def list_snapshots_since(
+        self, since: datetime, *, limit: int = 2_000_000
+    ) -> list[FeatureSnapshot]:
+        if since.tzinfo is None or since.utcoffset() is None:
+            raise ValueError("snapshot boundary must be timezone-aware")
+        if not 1 <= limit <= 2_000_000:
+            raise ValueError("limit must be between 1 and 2000000")
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT payload_json FROM decisions "
-                "ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)
+                "SELECT payload_json FROM snapshots "
+                "WHERE julianday(event_time) >= julianday(?) "
+                "ORDER BY event_time DESC, id DESC LIMIT ?",
+                (since.isoformat(), limit),
             ).fetchall()
+        return [
+            FeatureSnapshot.model_validate_json(row["payload_json"])
+            for row in reversed(rows)
+        ]
+
+    def list_recorded_decisions(
+        self, limit: int = 100_000, *, since: datetime | None = None
+    ) -> list[JevDecision]:
+        if not 1 <= limit <= 2_000_000:
+            raise ValueError("limit must be between 1 and 2000000")
+        if since is not None and (since.tzinfo is None or since.utcoffset() is None):
+            raise ValueError("decision boundary must be timezone-aware")
+        query = "SELECT payload_json FROM decisions"
+        parameters: tuple = ()
+        if since is not None:
+            query += " WHERE julianday(created_at) >= julianday(?)"
+            parameters = (since.isoformat(),)
+        query += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        parameters += (limit,)
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
         return [
             JevDecision.model_validate_json(row["payload_json"])
             for row in reversed(rows)
@@ -460,6 +508,75 @@ class IntradayStore:
                 "SELECT status FROM rules WHERE id=?", (rule_id,)
             ).fetchone()
         return None if row is None else row["status"]
+
+    def load_rule(self, rule_id: str) -> RuleCandidate | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM rules WHERE id=?", (rule_id,)
+            ).fetchone()
+        return None if row is None else RuleCandidate.model_validate_json(row["payload_json"])
+
+    def oldest_rule(self, status: str) -> RuleCandidate | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM rules WHERE status=? "
+                "ORDER BY created_at, id LIMIT 1",
+                (status,),
+            ).fetchone()
+        return None if row is None else RuleCandidate.model_validate_json(row["payload_json"])
+
+    def has_open_rule_candidate(self) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM rules WHERE status IN "
+                "('queued', 'replay_passed', 'challenger') LIMIT 1"
+            ).fetchone()
+        return row is not None
+
+    def update_rule_status(self, rule_id: str, *, expected: str, status: str) -> None:
+        transitions = {
+            ("queued", "replay_passed"),
+            ("queued", "rejected"),
+            ("challenger", "rejected"),
+        }
+        if (expected, status) not in transitions:
+            raise ValueError("unsupported rule status transition")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE rules SET status=? WHERE id=? AND status=?",
+                (status, rule_id, expected),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("rule is not in the expected state")
+
+    def record_rule_replay_evaluation(self, evaluation: RuleReplayEvaluation) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO rule_evaluations VALUES (?, ?, 'replay', ?, ?, ?)",
+                (
+                    evaluation.evaluation_id,
+                    evaluation.candidate_id,
+                    evaluation.status,
+                    evaluation.evaluated_at.isoformat(),
+                    _json(evaluation),
+                ),
+            )
+
+    def record_rule_promotion_evaluation(self, evaluation: PromotionEvaluation) -> None:
+        identity = hashlib.sha256(
+            f"promotion:{evaluation.candidate_id}:{evaluation.evaluated_at.isoformat()}".encode()
+        ).hexdigest()[:32]
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO rule_evaluations VALUES (?, ?, 'promotion', ?, ?, ?)",
+                (
+                    identity,
+                    evaluation.candidate_id,
+                    evaluation.status,
+                    evaluation.evaluated_at.isoformat(),
+                    _json(evaluation),
+                ),
+            )
 
     def record_analysis(
         self,
@@ -528,12 +645,14 @@ class IntradayStore:
                 "SELECT champion_id, challenger_id FROM rule_registry WHERE singleton = 1"
             ).fetchone()
             rule = connection.execute(
-                "SELECT parent_id FROM rules WHERE id = ?", (rule_id,)
+                "SELECT parent_id, status FROM rules WHERE id = ?", (rule_id,)
             ).fetchone()
             if registry is None or rule is None:
                 raise ValueError("champion and candidate must exist")
             if registry["challenger_id"] is not None:
                 raise ValueError("a challenger is already active")
+            if rule["status"] != "replay_passed":
+                raise ValueError("challenger must pass replay first")
             if rule["parent_id"] != registry["champion_id"]:
                 raise ValueError("challenger must descend from the active champion")
             connection.execute("UPDATE rules SET status = 'challenger' WHERE id = ?", (rule_id,))
@@ -557,6 +676,23 @@ class IntradayStore:
                 "UPDATE rule_registry SET champion_id = ?, challenger_id = NULL, "
                 "rollback_id = ?, updated_at = ? WHERE singleton = 1",
                 (new, old, now.isoformat()),
+            )
+        return self.rule_registry()
+
+    def reject_challenger(self, *, now: datetime) -> dict:
+        with self._connect() as connection:
+            registry = connection.execute(
+                "SELECT challenger_id FROM rule_registry WHERE singleton = 1"
+            ).fetchone()
+            if registry is None or registry["challenger_id"] is None:
+                raise ValueError("no active challenger")
+            connection.execute(
+                "UPDATE rules SET status='rejected' WHERE id=?",
+                (registry["challenger_id"],),
+            )
+            connection.execute(
+                "UPDATE rule_registry SET challenger_id=NULL, updated_at=? WHERE singleton=1",
+                (now.isoformat(),),
             )
         return self.rule_registry()
 
