@@ -32,7 +32,7 @@ class ProviderPreflightResult:
 Transport = Callable[..., HttpResponse]
 
 
-def _http_transport(*, url: str, headers: dict[str, str], body: bytes, timeout: float):
+def http_transport(*, url: str, headers: dict[str, str], body: bytes, timeout: float):
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -71,7 +71,7 @@ class ProviderPreflightClient:
     ):
         if timeout_seconds <= 0:
             raise ValueError("provider timeout must be positive")
-        self._transport = transport or _http_transport
+        self._transport = transport or http_transport
         self._timeout_seconds = timeout_seconds
 
     @staticmethod
