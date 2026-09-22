@@ -1,5 +1,63 @@
 # Phòng thử nghiệm trading
 
+## Intraday BTCUSDT — paper isolated 3×
+
+Package `intraday/` là hệ thống mới, độc lập với bot Donchian hằng ngày trong `lab/`.
+Nó thu dữ liệu public của Binance USD-M, tạo snapshot 20 feature, lấy quyết định từ
+provider typed, chạy deterministic risk gate rồi mới mô phỏng perpetual fill. V1 cố định
+`BTCUSDT`, one-way, isolated 3×, tối đa hai tranche và **không có code đặt lệnh thật**.
+Hyperliquid được thu thập như evidence liên thị trường ở chế độ `shadow`: WebSocket cho
+L2 book, REST 30 giây cho funding/OI/mark/oracle. Mất dữ liệu DEX không chặn Binance.
+
+Kiểm tra cấu hình an toàn và chạy một vòng stub:
+
+```bash
+uv run --frozen python -m intraday doctor
+uv run --frozen python -m intraday run --once
+uv run --frozen python -m intraday cross-venue-status
+```
+
+`stub` mặc định trả `Hold`. Muốn kiểm tra toàn bộ đường paper fill có chủ đích:
+
+```bash
+uv run --frozen python -m intraday run --once --direction Buy
+```
+
+Chạy worker liên tục và dashboard cục bộ trong hai terminal:
+
+```bash
+uv run --frozen python -m intraday run
+uv run --frozen python -m intraday serve
+```
+
+Mở `http://127.0.0.1:8081`. Dữ liệu riêng nằm tại
+`state/intraday/intraday.sqlite3`; không dùng chung paper account với `lab/`.
+Thiết kế và các launch gate nằm ở
+[docs/crypto-intraday-system-design.md](docs/crypto-intraday-system-design.md).
+
+Triển khai Docker cần tạo `.env.intraday` từ `.env.example`, thay control token, rồi:
+
+```bash
+docker compose -f deploy/intraday/compose.yaml up --build -d
+```
+
+Port dashboard chỉ publish trên loopback. Jev/LLM thật vẫn bị khóa cho tới khi hoàn tất
+replay và soak test; `OPENROUTER_API_KEY` trong file mẫu chưa được sử dụng ở milestone này.
+Cross-venue overlay cũng không thể chuyển sang `active` chỉ bằng sửa `.env`: SQLite phải
+có evaluation record `promote` sau tối thiểu 14 ngày, coverage 95%, 100 quyết định khác
+Hold và 30 closed trades. Replay baseline-vs-overlay dùng:
+
+```bash
+uv run --frozen python -m intraday cross-venue-replay \
+  --output-dir state/intraday/cross-venue-replay
+uv run --frozen python -m intraday cross-venue-evaluate \
+  --evidence evidence/cross-venue-evaluation.json
+```
+
+News worker hiện allowlist RSS của SEC, CFTC, Fed, CoinDesk, Decrypt và Cointelegraph.
+The Block, Wu Blockchain và Binance announcements được hiện là `disabled` kèm lý do
+thay vì dùng scraper hoặc nguồn mirror không được xác minh.
+
 Hệ thống hiện là **bot thuật toán BTCUSDT + AI copilot chỉ đọc**. Quy tắc deterministic tạo signal
 và paper order; AI chỉ giải thích evidence, không thể đặt lệnh. Binance integration chỉ dùng public
 market-data API; dự án không có endpoint giao dịch thật.

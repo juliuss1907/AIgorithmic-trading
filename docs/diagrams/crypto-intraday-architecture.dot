@@ -1,0 +1,74 @@
+digraph TradingArchitecture {
+  graph [
+    rankdir=LR,
+    bgcolor="white",
+    pad="0.25",
+    nodesep="0.35",
+    ranksep="0.65",
+    fontname="Helvetica Neue"
+  ];
+  node [
+    shape=box,
+    style="rounded,filled",
+    color="#223047",
+    fillcolor="#F5F7FA",
+    fontcolor="#172033",
+    fontname="Helvetica Neue",
+    fontsize=10,
+    margin="0.14,0.09"
+  ];
+  edge [color="#65738A", penwidth=1.2, arrowsize=0.7];
+
+  subgraph cluster_sources {
+    label="EXTERNAL SOURCES";
+    color="#CBD3DE";
+    fontcolor="#65738A";
+    fontsize=10;
+    ws [label="Binance\nWebSocket"];
+    rest [label="Binance REST\nCCXT"];
+    intel [label="RSS + social\n(optional feeds)"];
+  }
+
+  subgraph cluster_data {
+    label="MARKET DATA PLANE";
+    color="#CBD3DE";
+    fontcolor="#65738A";
+    cache [label="Timestamped\nfeature cache"];
+    snapshot [label="FeatureSnapshot\nevery 5 seconds", fillcolor="#E8F0FC"];
+  }
+
+  subgraph cluster_cold {
+    label="COLD PATH — 60 MINUTES";
+    color="#CBD3DE";
+    fontcolor="#65738A";
+    analysts [label="Market · News ·\nSentiment analysts"];
+    manager [label="Research\nmanager"];
+    rules [label="Bounded rule\ngenerator"];
+    eval [label="Validation · replay ·\nchampion/challenger", fillcolor="#F5EFD9"];
+  }
+
+  subgraph cluster_hot {
+    label="HOT PATH — 5 SECONDS";
+    color="#CBD3DE";
+    fontcolor="#65738A";
+    jev [label="Jev typed\ndecision", fillcolor="#E8F0FC"];
+    gate [label="Deterministic\nrisk gate", fillcolor="#F7E5E5"];
+    paper [label="3x isolated\npaper engine", fillcolor="#E7F4EC"];
+  }
+
+  db [shape=cylinder, label="SQLite WAL\naudit + ledger", fillcolor="#EEF1F5"];
+  ops [label="Private dashboard\n+ Telegram", fillcolor="#EEF1F5"];
+
+  ws -> cache;
+  rest -> cache;
+  cache -> snapshot;
+  snapshot -> analysts;
+  intel -> analysts;
+  analysts -> manager -> rules -> eval;
+  snapshot -> jev -> gate -> paper;
+  eval -> gate;
+  paper -> db;
+  gate -> db;
+  analysts -> db;
+  db -> ops;
+}
