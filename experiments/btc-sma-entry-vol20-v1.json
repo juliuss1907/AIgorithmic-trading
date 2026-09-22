@@ -1,0 +1,38 @@
+{
+  "title": "BTCUSDT SMA 20/50 + entry volatility 20d · observed 2018–2025",
+  "hypothesis": "Sizing vị thế lúc vào lệnh theo nghịch đảo volatility 20 ngày với risk target 20%/năm có thể giảm worst annual drawdown xuống không quá 20% mà không làm mất kỳ vọng dương sau stress cost.",
+  "market": "crypto_spot",
+  "venue": "binance",
+  "symbol": "BTCUSDT",
+  "interval": "1d",
+  "calendar": "UTC_24_7",
+  "dataset_id": "c225bc7732a0cc1d347adc7925a923b41fb3b12150db1b0ac137b9cf0cf775a2",
+  "parent_run_id": "2ee8ac697f7c6d2160f5",
+  "prior_observed_periods": ["2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025"],
+  "data": {"start": "2017-08-17", "end_exclusive": "2026-01-01"},
+  "strategy": {"family": "sma_crossover", "fast_window": 20, "slow_window": 50},
+  "initial_cash": 10000,
+  "slippage_bps": [0, 5, 10],
+  "taker_fee_bps": 10,
+  "commission": 0,
+  "risk_policy": {
+    "max_target_weight": 0.5,
+    "halt_drawdown": 0.2,
+    "position_sizing": {
+      "family": "entry_volatility",
+      "lookback": 20,
+      "annual_target": 0.2,
+      "annualization_days": 365
+    }
+  },
+  "periods": {
+    "2018": ["2018-01-01", "2018-12-31"],
+    "2019": ["2019-01-01", "2019-12-31"],
+    "2020": ["2020-01-01", "2020-12-31"],
+    "2021": ["2021-01-01", "2021-12-31"],
+    "2022": ["2022-01-01", "2022-12-31"],
+    "2023": ["2023-01-01", "2023-12-31"],
+    "2024": ["2024-01-01", "2024-12-31"],
+    "2025": ["2025-01-01", "2025-12-31"]
+  }
+}

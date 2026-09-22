@@ -1,0 +1,27 @@
+{
+  "title": "BTCUSDT RSI + Bollinger · walk-forward 2018–2025",
+  "hypothesis": "Các nhịp quá bán sâu của BTC có thể hồi về trung bình đủ để bù chi phí với exposure tối đa 50%.",
+  "market": "crypto_spot",
+  "venue": "binance",
+  "symbol": "BTCUSDT",
+  "interval": "1d",
+  "calendar": "UTC_24_7",
+  "dataset_id": null,
+  "data": {"start": "2017-08-17", "end_exclusive": "2026-01-01"},
+  "strategy": {"family": "rsi_bollinger", "rsi_window": 14, "bollinger_window": 20, "bollinger_stddev": 2, "entry_rsi": 30, "exit_rsi": 50},
+  "initial_cash": 10000,
+  "slippage_bps": [0, 5, 10],
+  "taker_fee_bps": 10,
+  "commission": 0,
+  "risk_policy": {"max_target_weight": 0.5, "halt_drawdown": 0.2},
+  "periods": {
+    "2018": ["2018-01-01", "2018-12-31"],
+    "2019": ["2019-01-01", "2019-12-31"],
+    "2020": ["2020-01-01", "2020-12-31"],
+    "2021": ["2021-01-01", "2021-12-31"],
+    "2022": ["2022-01-01", "2022-12-31"],
+    "2023": ["2023-01-01", "2023-12-31"],
+    "2024": ["2024-01-01", "2024-12-31"],
+    "2025": ["2025-01-01", "2025-12-31"]
+  }
+}
