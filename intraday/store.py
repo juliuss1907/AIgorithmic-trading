@@ -382,6 +382,14 @@ class IntradayStore:
             for row in reversed(rows)
         ]
 
+    def latest_snapshot(self) -> FeatureSnapshot | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM snapshots "
+                "ORDER BY event_time DESC, id DESC LIMIT 1"
+            ).fetchone()
+        return None if row is None else FeatureSnapshot.model_validate_json(row["payload_json"])
+
     def list_recorded_decisions(self, limit: int = 100_000) -> list[JevDecision]:
         if not 1 <= limit <= 1_000_000:
             raise ValueError("limit must be between 1 and 1000000")
@@ -948,3 +956,24 @@ class IntradayStore:
                 "ORDER BY started_at DESC, id DESC LIMIT ?", (limit,)
             ).fetchall()
         return [ModelCallRecord.model_validate_json(row["payload_json"]) for row in rows]
+
+    def latest_successful_model_call(self, workflow: str) -> ModelCallRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM model_calls "
+                "WHERE status='success' AND json_extract(payload_json, '$.workflow')=? "
+                "ORDER BY julianday(started_at) DESC, id DESC LIMIT 1",
+                (workflow,),
+            ).fetchone()
+        return None if row is None else ModelCallRecord.model_validate_json(row["payload_json"])
+
+    def model_cost_since(self, since: datetime) -> float:
+        if since.tzinfo is None or since.utcoffset() is None:
+            raise ValueError("cost boundary must be timezone-aware")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0) AS total FROM model_calls "
+                "WHERE julianday(started_at) >= julianday(?) AND cost_usd IS NOT NULL",
+                (since.isoformat(),),
+            ).fetchone()
+        return round(float(row["total"]), 12)

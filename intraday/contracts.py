@@ -510,30 +510,31 @@ class AnalystReport(StrictContract):
     _report_time_is_aware = field_validator("generated_at")(_aware)
 
 
+class KeyLevels(StrictContract):
+    support: float = Field(gt=0, allow_inf_nan=False)
+    resistance: float = Field(gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def resistance_is_above_support(self):
+        if self.resistance <= self.support:
+            raise ValueError("resistance must be above support")
+        return self
+
+
 class ThesisAssessment(StrictContract):
     summary: str = Field(min_length=20, max_length=3000)
     stance: Literal["bullish", "bearish", "neutral"]
     confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
-    key_levels: dict[str, float]
+    key_levels: KeyLevels
     risk_factors: tuple[str, ...] = Field(min_length=1, max_length=10)
     horizon_minutes: int = Field(ge=30, le=1440)
-
-    @field_validator("key_levels")
-    @classmethod
-    def levels_are_positive_and_bounded(cls, values):
-        if not 1 <= len(values) <= 8:
-            raise ValueError("market thesis requires one to eight key levels")
-        if any(not name.strip() or value <= 0 for name, value in values.items()):
-            raise ValueError("market thesis key levels must be named and positive")
-        return values
-
 
 class MarketThesis(StrictContract):
     thesis_id: str = Field(min_length=1, max_length=128)
     summary: str = Field(min_length=20, max_length=3000)
     stance: Literal["bullish", "bearish", "neutral"]
     confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
-    key_levels: dict[str, float]
+    key_levels: KeyLevels
     risk_factors: tuple[str, ...] = Field(min_length=1, max_length=10)
     horizon_minutes: int = Field(ge=30, le=1440)
     source_report_ids: tuple[str, str, str]

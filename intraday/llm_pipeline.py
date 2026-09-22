@@ -35,6 +35,33 @@ T = TypeVar("T", bound=BaseModel)
 PROMPT_VERSION = "analysis-v1"
 
 
+def should_generate_rule(store: IntradayStore, *, now: datetime) -> bool:
+    latest = store.latest_successful_model_call("rule_generator")
+    return latest is None or now - latest.started_at >= timedelta(hours=24)
+
+
+def active_llm_client(
+    store: IntradayStore,
+    secret_store,
+    *,
+    client_factory=None,
+):
+    assignment = store.provider_assignment(ProviderRole.LLM)
+    if assignment is None:
+        return None
+    profile = store.provider_profile(assignment["profile_id"])
+    if profile is None or profile.fingerprint != assignment["profile_fingerprint"]:
+        raise StructuredLLMError("profile_metadata_mismatch")
+    try:
+        credential = secret_store.get(profile.profile_id)
+    except KeyError as error:
+        raise StructuredLLMError("missing_secret") from error
+    if credential.profile.fingerprint != assignment["profile_fingerprint"]:
+        raise StructuredLLMError("profile_secret_mismatch")
+    factory = client_factory or (lambda item: StructuredLLMClient(item, store=store))
+    return factory(credential)
+
+
 class StructuredLLMError(RuntimeError):
     def __init__(self, code: str):
         self.code = code
@@ -79,6 +106,25 @@ class StructuredLLMClient:
             status_code,
             "provider_unavailable" if status_code >= 500 else "http_error",
         )
+
+    @staticmethod
+    def _strict_schema(response_model: type[BaseModel]) -> dict:
+        schema = response_model.model_json_schema()
+
+        def normalize(node):
+            if isinstance(node, dict):
+                properties = node.get("properties")
+                if isinstance(properties, dict):
+                    node["additionalProperties"] = False
+                    node["required"] = list(properties)
+                for value in node.values():
+                    normalize(value)
+            elif isinstance(node, list):
+                for value in node:
+                    normalize(value)
+
+        normalize(schema)
+        return schema
 
     def _record(
         self,
@@ -175,7 +221,7 @@ class StructuredLLMClient:
                 "json_schema": {
                     "name": workflow,
                     "strict": True,
-                    "schema": response_model.model_json_schema(),
+                    "schema": self._strict_schema(response_model),
                 },
             },
         }

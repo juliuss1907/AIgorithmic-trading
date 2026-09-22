@@ -1,11 +1,12 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from intraday.contracts import (
     AnalysisAssessment,
     AnalystReport,
     FeatureSnapshot,
     MarketThesis,
+    ModelCallRecord,
     ProviderKind,
     ProviderProfile,
     ProviderRole,
@@ -13,10 +14,15 @@ from intraday.contracts import (
     RuleProposal,
     ThesisAssessment,
 )
-from intraday.llm_pipeline import LLMAnalysisPipeline, StructuredLLMClient
+from intraday.llm_pipeline import (
+    LLMAnalysisPipeline,
+    StructuredLLMClient,
+    should_generate_rule,
+)
 from intraday.provider_client import HttpResponse
-from intraday.provider_profiles import ProviderCredential
+from intraday.provider_profiles import ProviderCredential, ProviderSecretStore
 from intraday.store import IntradayStore
+from intraday.runtime import run_analysis_cycle
 
 
 NOW = datetime(2026, 9, 22, 13, 0, tzinfo=timezone.utc)
@@ -103,6 +109,9 @@ def test_structured_llm_client_uses_strict_json_schema_and_audits_call(tmp_path)
     body = json.loads(request["body"])
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["strict"] is True
+    response_schema = body["response_format"]["json_schema"]["schema"]
+    assert set(response_schema["required"]) == set(response_schema["properties"])
+    assert response_schema["additionalProperties"] is False
     assert body["tools"] == []
     call = store.list_model_calls()[0]
     assert call.workflow == "market_analyst"
@@ -188,3 +197,79 @@ def test_pipeline_keeps_champion_when_generated_parameters_are_unchanged(tmp_pat
 
     assert result.candidate is None
     assert store.rule_registry()["champion_id"] == "rule-v1"
+
+
+def test_rule_generation_is_limited_to_one_successful_call_per_24_hours(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    current = llm_profile()
+    store.sync_provider_profile(current)
+    assert should_generate_rule(store, now=NOW) is True
+    store.record_model_call(
+        ModelCallRecord(
+            call_id="rule-call-1",
+            workflow="rule_generator",
+            role=ProviderRole.LLM,
+            profile_id=current.profile_id,
+            profile_fingerprint=current.fingerprint,
+            model=current.model,
+            status="success",
+            started_at=NOW,
+            completed_at=NOW,
+            latency_ms=0,
+            cost_usd=0.01,
+            request_hash="a" * 64,
+            response_hash="b" * 64,
+        )
+    )
+
+    assert should_generate_rule(store, now=NOW) is False
+    assert should_generate_rule(store, now=NOW.replace(day=23) + timedelta(hours=1)) is True
+
+
+def test_analysis_cycle_skips_safely_without_active_llm_or_snapshot(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    secrets = ProviderSecretStore(tmp_path / "providers.toml")
+
+    assert run_analysis_cycle(store, secrets, now=NOW) == {
+        "status": "skipped",
+        "reason": "no_active_llm",
+    }
+
+    current = llm_profile()
+    store.sync_provider_profile(current)
+    store.record_provider_test(
+        current.profile_id, status="ok", tested_at=NOW, latency_ms=10
+    )
+    store.activate_provider(ProviderRole.LLM, current.profile_id, actor="test", now=NOW)
+    secrets.upsert(current, "private-key")
+
+    assert run_analysis_cycle(store, secrets, now=NOW) == {
+        "status": "skipped",
+        "reason": "no_market_snapshot",
+    }
+
+
+def test_daily_model_cost_is_summed_without_hard_stopping(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    current = llm_profile()
+    store.sync_provider_profile(current)
+    for index, cost in enumerate((1.25, 0.90)):
+        store.record_model_call(
+            ModelCallRecord(
+                call_id=f"cost-call-{index}",
+                workflow="market_analyst",
+                role=ProviderRole.LLM,
+                profile_id=current.profile_id,
+                profile_fingerprint=current.fingerprint,
+                model=current.model,
+                status="success",
+                started_at=NOW + timedelta(minutes=index),
+                completed_at=NOW + timedelta(minutes=index),
+                latency_ms=0,
+                cost_usd=cost,
+                request_hash=f"{index + 1}" * 64,
+                response_hash=f"{index + 3}" * 64,
+            )
+        )
+
+    assert store.model_cost_since(NOW.replace(hour=0)) == 2.15

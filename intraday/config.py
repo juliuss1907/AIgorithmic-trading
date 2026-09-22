@@ -27,6 +27,7 @@ class IntradayConfig:
     provider_secrets_file: Path = Path(
         "~/.config/aigorithmic-trading/provider-secrets.toml"
     ).expanduser()
+    llm_analysis_interval_seconds: float = 3600
     mode: str = "paper"
     dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 8081
@@ -49,6 +50,8 @@ class IntradayConfig:
             raise ValueError("interval must be at least one second")
         if self.provider != "stub":
             raise ValueError("only the stub provider is enabled before soak acceptance")
+        if self.llm_analysis_interval_seconds < 300:
+            raise ValueError("LLM analysis interval must be at least five minutes")
         if self.mode != "paper":
             raise ValueError("real execution is not implemented")
         if not 1 <= self.dashboard_port <= 65535:
@@ -76,6 +79,9 @@ class IntradayConfig:
                     "~/.config/aigorithmic-trading/provider-secrets.toml",
                 )
             ).expanduser(),
+            llm_analysis_interval_seconds=float(
+                os.getenv("INTRADAY_LLM_ANALYSIS_INTERVAL", "3600")
+            ),
             mode=os.getenv("INTRADAY_MODE", "paper"),
             dashboard_host=os.getenv("INTRADAY_DASHBOARD_HOST", "127.0.0.1"),
             dashboard_port=int(os.getenv("INTRADAY_DASHBOARD_PORT", "8081")),

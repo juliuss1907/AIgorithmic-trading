@@ -32,7 +32,7 @@ from intraday.provider_client import ProviderPreflightClient
 from intraday.provider_profiles import ProviderSecretStore
 from intraday.providers import AssignedDecisionProvider, StubDecisionProvider
 from intraday.replay import compare_cross_venue
-from intraday.runtime import run_news_cycle, run_once
+from intraday.runtime import run_analysis_cycle, run_news_cycle, run_once
 from intraday.store import IntradayStore
 
 
@@ -40,7 +40,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="intraday")
     commands = parser.add_subparsers(dest="command", required=True)
     for name in (
-        "doctor", "collect", "news", "run", "cross-venue-status",
+        "doctor", "collect", "news", "analysis", "run", "cross-venue-status",
         "cross-venue-replay", "cross-venue-evaluate",
     ):
         command = commands.add_parser(name)
@@ -242,6 +242,18 @@ def _news_loop(config: IntradayConfig) -> None:
         time.sleep(config.news_interval_seconds)
 
 
+def _analysis_loop(config: IntradayConfig) -> None:
+    store = IntradayStore(config.database)
+    secret_store = ProviderSecretStore(config.provider_secrets_file)
+    while True:
+        result = run_analysis_cycle(store, secret_store)
+        print(json.dumps({"analysis_cycle": result}), flush=True)
+        if result["status"] == "skipped":
+            time.sleep(min(60, config.llm_analysis_interval_seconds))
+        else:
+            time.sleep(config.llm_analysis_interval_seconds)
+
+
 def main() -> None:
     arguments = _parser().parse_args()
     if arguments.command == "provider":
@@ -268,6 +280,13 @@ def main() -> None:
         return
     if arguments.command == "news":
         print(json.dumps(run_news_cycle(IntradayStore(config.database)), indent=2))
+        return
+    if arguments.command == "analysis":
+        result = run_analysis_cycle(
+            IntradayStore(config.database),
+            ProviderSecretStore(config.provider_secrets_file),
+        )
+        print(json.dumps(result, indent=2))
         return
     if arguments.command == "cross-venue-status":
         store = IntradayStore(config.database)
@@ -313,6 +332,8 @@ def main() -> None:
         raise SystemExit("cross-venue active mode requires a recorded promote evaluation")
     if config.news_enabled and not arguments.once:
         threading.Thread(target=_news_loop, args=(config,), daemon=True).start()
+    if not arguments.once:
+        threading.Thread(target=_analysis_loop, args=(config,), daemon=True).start()
     notifier = (
         TelegramNotifier(token=config.telegram_bot_token, chat_id=config.telegram_chat_id)
         if config.telegram_enabled else None

@@ -10,6 +10,13 @@ from intraday.cross_venue import CrossVenuePolicy
 from intraday.engine import IntradayEngine
 from intraday.news import NewsIntelligence
 from intraday.news_sources import NewsSource, enabled_sources, fetch_source
+from intraday.llm_pipeline import (
+    LLMAnalysisPipeline,
+    StructuredLLMError,
+    active_llm_client,
+    should_generate_rule,
+)
+from intraday.provider_profiles import ProviderSecretStore
 from intraday.providers import DecisionProvider, StubDecisionProvider
 from intraday.store import IntradayStore
 
@@ -113,4 +120,43 @@ def run_news_cycle(
         "verified_clusters": sum(cluster.verified for cluster in result.clusters),
         "pause_until": runtime["news_pause_until"],
         "failed_sources": failures,
+    }
+
+
+def run_analysis_cycle(
+    store: IntradayStore,
+    secret_store: ProviderSecretStore,
+    *,
+    now: datetime | None = None,
+    client_factory=None,
+) -> dict:
+    now = now or datetime.now(timezone.utc)
+    try:
+        client = active_llm_client(
+            store, secret_store, client_factory=client_factory
+        )
+    except StructuredLLMError as error:
+        return {"status": "degraded", "error_code": error.code}
+    if client is None:
+        return {"status": "skipped", "reason": "no_active_llm"}
+    snapshot = store.latest_snapshot()
+    if snapshot is None:
+        return {"status": "skipped", "reason": "no_market_snapshot"}
+    try:
+        result = LLMAnalysisPipeline(client, store).run(
+            snapshot,
+            now=now,
+            generate_rule=should_generate_rule(store, now=now),
+        )
+    except StructuredLLMError as error:
+        return {"status": "degraded", "error_code": error.code}
+    utc_now = now.astimezone(timezone.utc)
+    day_start = utc_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    daily_cost = store.model_cost_since(day_start)
+    return {
+        "status": "ok",
+        "thesis_id": result.thesis.thesis_id,
+        "candidate_id": result.candidate.rule_id if result.candidate else None,
+        "daily_cost_usd": daily_cost,
+        "cost_warning": daily_cost > 2,
     }
