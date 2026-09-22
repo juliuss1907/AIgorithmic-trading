@@ -14,6 +14,9 @@ from intraday.contracts import (
     NewsEvent,
     NewsIngestResult,
     PaperFill,
+    ModelCallRecord,
+    ProviderProfile,
+    ProviderRole,
     RuleCandidate,
     VenueMarketFrame,
 )
@@ -141,12 +144,58 @@ class IntradayStore:
                     evaluated_at TEXT NOT NULL,
                     payload_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS provider_profiles (
+                    id TEXT PRIMARY KEY,
+                    role TEXT NOT NULL CHECK (role IN ('jev', 'llm')),
+                    kind TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    last_test_status TEXT CHECK (
+                        last_test_status IS NULL OR last_test_status IN ('ok', 'error')
+                    ),
+                    last_test_at TEXT,
+                    latency_ms INTEGER,
+                    error_code TEXT,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS provider_assignments (
+                    role TEXT PRIMARY KEY CHECK (role IN ('jev', 'llm')),
+                    profile_id TEXT NOT NULL REFERENCES provider_profiles(id),
+                    profile_fingerprint TEXT NOT NULL,
+                    activated_at TEXT NOT NULL,
+                    actor TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS model_calls (
+                    id TEXT PRIMARY KEY,
+                    role TEXT NOT NULL,
+                    profile_id TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('success', 'error')),
+                    cost_usd REAL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_model_calls_started
+                    ON model_calls(started_at DESC, id DESC);
                 CREATE TABLE IF NOT EXISTS schema_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
                 INSERT OR IGNORE INTO schema_meta VALUES ('schema_version', '1');
                 """
+            )
+            command_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(commands)")
+            }
+            for name, definition in {
+                "payload_json": "TEXT",
+                "result_json": "TEXT",
+                "error_code": "TEXT",
+                "applied_at": "TEXT",
+            }.items():
+                if name not in command_columns:
+                    connection.execute(f"ALTER TABLE commands ADD COLUMN {name} {definition}")
+            connection.execute(
+                "UPDATE schema_meta SET value='2' WHERE key='schema_version'"
             )
 
     def record_tick(
@@ -335,7 +384,8 @@ class IntradayStore:
             raise ValueError("unsupported operator command")
         with self._connect() as connection:
             connection.execute(
-                "INSERT OR IGNORE INTO commands VALUES (?, ?, ?, 'pending', ?)",
+                "INSERT OR IGNORE INTO commands "
+                "(id, kind, actor, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
                 (command_id, kind, actor, created_at.isoformat()),
             )
             row = connection.execute("SELECT * FROM commands WHERE id = ?", (command_id,)).fetchone()
@@ -657,3 +707,157 @@ class IntradayStore:
     def cross_venue_activation_allowed(self) -> bool:
         latest = self.latest_cross_venue_evaluation()
         return latest is not None and latest.status == "promote"
+
+    def sync_provider_profile(self, profile: ProviderProfile) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO provider_profiles "
+                "(id, role, kind, fingerprint, payload_json, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "role=excluded.role, kind=excluded.kind, "
+                "fingerprint=excluded.fingerprint, payload_json=excluded.payload_json, "
+                "last_test_status=CASE WHEN provider_profiles.fingerprint=excluded.fingerprint "
+                "THEN provider_profiles.last_test_status ELSE NULL END, "
+                "last_test_at=CASE WHEN provider_profiles.fingerprint=excluded.fingerprint "
+                "THEN provider_profiles.last_test_at ELSE NULL END, "
+                "latency_ms=CASE WHEN provider_profiles.fingerprint=excluded.fingerprint "
+                "THEN provider_profiles.latency_ms ELSE NULL END, "
+                "error_code=CASE WHEN provider_profiles.fingerprint=excluded.fingerprint "
+                "THEN provider_profiles.error_code ELSE NULL END, "
+                "updated_at=excluded.updated_at",
+                (
+                    profile.profile_id,
+                    profile.role.value,
+                    profile.kind.value,
+                    profile.fingerprint,
+                    _json(profile),
+                    profile.updated_at.isoformat(),
+                ),
+            )
+
+    def provider_profile(self, profile_id: str) -> ProviderProfile | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM provider_profiles WHERE id = ?",
+                (profile_id,),
+            ).fetchone()
+        return None if row is None else ProviderProfile.model_validate_json(row["payload_json"])
+
+    def list_provider_profiles(self) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json, last_test_status, last_test_at, latency_ms, error_code "
+                "FROM provider_profiles ORDER BY role, id"
+            ).fetchall()
+        return [
+            {
+                **ProviderProfile.model_validate_json(row["payload_json"]).model_dump(mode="json"),
+                "last_test_status": row["last_test_status"],
+                "last_test_at": row["last_test_at"],
+                "latency_ms": row["latency_ms"],
+                "error_code": row["error_code"],
+            }
+            for row in rows
+        ]
+
+    def record_provider_test(
+        self,
+        profile_id: str,
+        *,
+        status: str,
+        tested_at: datetime,
+        latency_ms: int | None,
+        error_code: str | None = None,
+    ) -> None:
+        if status not in {"ok", "error"}:
+            raise ValueError("invalid provider test status")
+        if status == "ok" and error_code is not None:
+            raise ValueError("successful provider test cannot have an error code")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE provider_profiles SET last_test_status=?, last_test_at=?, "
+                "latency_ms=?, error_code=? WHERE id=?",
+                (status, tested_at.isoformat(), latency_ms, error_code, profile_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("unknown provider profile")
+
+    def activate_provider(
+        self,
+        role: ProviderRole,
+        profile_id: str,
+        *,
+        actor: str,
+        now: datetime,
+    ) -> dict:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT role, fingerprint, last_test_status, last_test_at "
+                "FROM provider_profiles WHERE id=?",
+                (profile_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("unknown provider profile")
+            if row["role"] != role.value:
+                raise ValueError("provider profile role mismatch")
+            tested_at = (
+                datetime.fromisoformat(row["last_test_at"])
+                if row["last_test_at"] else None
+            )
+            age = now - tested_at if tested_at else None
+            if (
+                row["last_test_status"] != "ok"
+                or age is None
+                or not timedelta(0) <= age <= timedelta(minutes=10)
+            ):
+                raise ValueError("provider profile requires a recent successful preflight")
+            connection.execute(
+                "INSERT INTO provider_assignments VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(role) DO UPDATE SET profile_id=excluded.profile_id, "
+                "profile_fingerprint=excluded.profile_fingerprint, "
+                "activated_at=excluded.activated_at, actor=excluded.actor",
+                (role.value, profile_id, row["fingerprint"], now.isoformat(), actor),
+            )
+            assigned = connection.execute(
+                "SELECT * FROM provider_assignments WHERE role=?", (role.value,)
+            ).fetchone()
+        return dict(assigned)
+
+    def provider_assignment(self, role: ProviderRole) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM provider_assignments WHERE role=?", (role.value,)
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def deactivate_provider(self, role: ProviderRole) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM provider_assignments WHERE role=?", (role.value,)
+            )
+
+    def record_model_call(self, call: ModelCallRecord) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO model_calls VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    call.call_id,
+                    call.role.value,
+                    call.profile_id,
+                    call.started_at.isoformat(),
+                    call.status,
+                    call.cost_usd,
+                    _json(call),
+                ),
+            )
+
+    def list_model_calls(self, limit: int = 100) -> list[ModelCallRecord]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM model_calls "
+                "ORDER BY started_at DESC, id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [ModelCallRecord.model_validate_json(row["payload_json"]) for row in rows]

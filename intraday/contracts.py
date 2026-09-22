@@ -7,6 +7,7 @@ import json
 from datetime import datetime
 from enum import Enum
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -44,6 +45,16 @@ class SourceTier(str, Enum):
     A = "A"
     B = "B"
     C = "C"
+
+
+class ProviderRole(str, Enum):
+    JEV = "jev"
+    LLM = "llm"
+
+
+class ProviderKind(str, Enum):
+    OPENROUTER_DECISIONS = "openrouter-decisions"
+    OPENAI_COMPATIBLE = "openai-compatible"
 
 
 class NewsSeverity(str, Enum):
@@ -370,6 +381,106 @@ class VenueMarketFrame(StrictContract):
         payload = {"schema_version": "1", **values}
         checksum = cls._checksum_for(payload)
         return cls(frame_id=checksum[:24], checksum=checksum, **values)
+
+
+class ProviderProfile(StrictContract):
+    """Redacted provider metadata safe to persist and return from the web API."""
+
+    profile_id: str = Field(
+        min_length=3,
+        max_length=80,
+        pattern=r"^[a-z0-9][a-z0-9._-]*$",
+    )
+    role: ProviderRole
+    kind: ProviderKind
+    base_url: str = Field(min_length=8, max_length=500)
+    model: str = Field(min_length=1, max_length=200)
+    credential_version: str = Field(min_length=1, max_length=100)
+    created_at: datetime
+    updated_at: datetime
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    _profile_created_is_aware = field_validator("created_at")(_aware)
+    _profile_updated_is_aware = field_validator("updated_at")(_aware)
+
+    @model_validator(mode="after")
+    def valid_provider_endpoint(self):
+        parsed = urlsplit(self.base_url)
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("provider URL must not contain credentials, query, or fragment")
+        if self.kind == ProviderKind.OPENROUTER_DECISIONS:
+            if self.role != ProviderRole.JEV:
+                raise ValueError("OpenRouter Decisions profiles must use the jev role")
+            if self.base_url.rstrip("/") != "https://openrouter.ai/api/alpha/decisions":
+                raise ValueError("OpenRouter Decisions endpoint is fixed")
+        elif parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("OpenAI-compatible provider URL must use HTTPS")
+        expected = self._fingerprint_for(
+            profile_id=self.profile_id,
+            role=self.role,
+            kind=self.kind,
+            base_url=self.base_url,
+            model=self.model,
+            credential_version=self.credential_version,
+        )
+        if self.fingerprint != expected:
+            raise ValueError("provider profile fingerprint does not match")
+        return self
+
+    @staticmethod
+    def _fingerprint_for(**values) -> str:
+        payload = {
+            key: value.value if isinstance(value, Enum) else value
+            for key, value in values.items()
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    @classmethod
+    def create(cls, **values) -> "ProviderProfile":
+        fingerprint = cls._fingerprint_for(
+            **{
+                key: values[key]
+                for key in (
+                    "profile_id", "role", "kind", "base_url", "model",
+                    "credential_version",
+                )
+            }
+        )
+        return cls(fingerprint=fingerprint, **values)
+
+
+class ModelCallRecord(StrictContract):
+    call_id: str = Field(min_length=1, max_length=128)
+    workflow: str = Field(min_length=1, max_length=80)
+    role: ProviderRole
+    profile_id: str = Field(min_length=3, max_length=80)
+    profile_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    model: str = Field(min_length=1, max_length=200)
+    status: Literal["success", "error"]
+    started_at: datetime
+    completed_at: datetime
+    latency_ms: int = Field(ge=0)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    provider_request_id: str | None = Field(default=None, max_length=200)
+    request_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    response_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    error_code: str | None = Field(default=None, max_length=80)
+
+    _call_started_is_aware = field_validator("started_at")(_aware)
+    _call_completed_is_aware = field_validator("completed_at")(_aware)
+
+    @model_validator(mode="after")
+    def valid_call_result(self):
+        if self.completed_at < self.started_at:
+            raise ValueError("model call completion precedes start")
+        if self.status == "success" and self.error_code is not None:
+            raise ValueError("successful model call cannot have an error code")
+        if self.status == "error" and not self.error_code:
+            raise ValueError("failed model call requires an error code")
+        return self
 
 
 class RuleParameters(StrictContract):
