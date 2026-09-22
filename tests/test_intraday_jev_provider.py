@@ -13,16 +13,22 @@ from intraday.contracts import (
     RiskLevel,
 )
 from intraday.provider_client import HttpResponse
-from intraday.provider_profiles import ProviderCredential
-from intraday.providers import JevDecisionProvider, ProviderDecisionError
+from intraday.provider_profiles import ProviderCredential, ProviderSecretStore
+from intraday.engine import IntradayEngine
+from intraday.providers import (
+    AssignedDecisionProvider,
+    JevDecisionProvider,
+    ProviderDecisionError,
+    StubDecisionProvider,
+)
 from intraday.store import IntradayStore
 
 NOW = datetime(2026, 9, 22, 12, 0, tzinfo=timezone.utc)
 
 
-def profile():
+def profile(profile_id="jev-openrouter"):
     return ProviderProfile.create(
-        profile_id="jev-openrouter",
+        profile_id=profile_id,
         role=ProviderRole.JEV,
         kind=ProviderKind.OPENROUTER_DECISIONS,
         base_url="https://openrouter.ai/api/alpha/decisions",
@@ -184,3 +190,61 @@ def test_jev_provider_rejects_invalid_answer_without_returning_partial_decision(
 
     assert store.list_model_calls()[0].status == "error"
     assert store.list_model_calls()[0].error_code == "invalid_response"
+
+
+def test_assigned_provider_switches_atomically_on_the_next_tick(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    secrets = ProviderSecretStore(tmp_path / "providers.toml")
+    first = profile("jev-first")
+    second = profile("jev-second")
+    for current in (first, second):
+        store.sync_provider_profile(current)
+        store.record_provider_test(
+            current.profile_id, status="ok", tested_at=NOW, latency_ms=10
+        )
+        secrets.upsert(current, f"key-{current.profile_id}")
+    store.activate_provider(ProviderRole.JEV, first.profile_id, actor="test", now=NOW)
+    created = []
+
+    def factory(credential):
+        created.append(credential.profile.profile_id)
+        direction = Direction.BUY if credential.profile.profile_id == "jev-first" else Direction.SELL
+        return StubDecisionProvider(direction=direction)
+
+    assigned = AssignedDecisionProvider(
+        store,
+        secrets,
+        fallback=StubDecisionProvider(direction=Direction.HOLD),
+        provider_factory=factory,
+    )
+
+    first_decision = assigned.decide(snapshot(), "BTCUSDT:one", NOW)
+    store.activate_provider(ProviderRole.JEV, second.profile_id, actor="test", now=NOW)
+    second_decision = assigned.decide(snapshot(), "BTCUSDT:two", NOW)
+
+    assert first_decision.direction == Direction.BUY
+    assert second_decision.direction == Direction.SELL
+    assert created == ["jev-first", "jev-second"]
+
+
+def test_active_profile_with_missing_secret_fails_closed_in_engine(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    current = profile()
+    store.sync_provider_profile(current)
+    store.record_provider_test(
+        current.profile_id, status="ok", tested_at=NOW, latency_ms=10
+    )
+    store.activate_provider(ProviderRole.JEV, current.profile_id, actor="test", now=NOW)
+    assigned = AssignedDecisionProvider(
+        store,
+        ProviderSecretStore(tmp_path / "missing-secrets.toml"),
+        fallback=StubDecisionProvider(direction=Direction.BUY),
+    )
+
+    result = IntradayEngine(store, assigned, initial_equity=10_000).run_tick(
+        snapshot(), now=NOW
+    )
+
+    assert result.decision.direction == Direction.HOLD
+    assert result.decision.model_ref == "fallback/hold-v1"
+    assert result.gate.reason_codes == ("provider_failure",)

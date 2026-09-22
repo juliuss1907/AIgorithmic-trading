@@ -30,6 +30,7 @@ from intraday.market import BinanceUsdMClient
 from intraday.notifications import TelegramNotifier, drain_outbox
 from intraday.provider_client import ProviderPreflightClient
 from intraday.provider_profiles import ProviderSecretStore
+from intraday.providers import AssignedDecisionProvider, StubDecisionProvider
 from intraday.replay import compare_cross_venue
 from intraday.runtime import run_news_cycle, run_once
 from intraday.store import IntradayStore
@@ -81,6 +82,9 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _default_secrets_file() -> Path:
+    configured = os.getenv("INTRADAY_PROVIDER_SECRETS_FILE")
+    if configured:
+        return Path(configured).expanduser()
     config_home = os.getenv("XDG_CONFIG_HOME")
     root = Path(config_home).expanduser() if config_home else Path.home() / ".config"
     return root / "aigorithmic-trading" / "provider-secrets.toml"
@@ -206,10 +210,16 @@ def _provider_cli(arguments) -> None:
 
 def _doctor(config: IntradayConfig) -> dict:
     store = IntradayStore(config.database)
+    active_jev = store.provider_assignment(ProviderRole.JEV)
+    active_llm = store.provider_assignment(ProviderRole.LLM)
     return {
         "status": "ok",
         "mode": config.mode,
         "provider": config.provider,
+        "active_providers": {
+            "jev": active_jev["profile_id"] if active_jev else None,
+            "llm": active_llm["profile_id"] if active_llm else None,
+        },
         "execution_enabled": False,
         "symbol": config.symbol,
         "market": "Binance USD-M perpetual",
@@ -294,6 +304,11 @@ def main() -> None:
 
     direction = Direction(arguments.direction)
     store = IntradayStore(config.database)
+    decision_provider = AssignedDecisionProvider(
+        store,
+        ProviderSecretStore(config.provider_secrets_file),
+        fallback=StubDecisionProvider(direction=direction),
+    )
     if config.cross_venue_mode == "active" and not store.cross_venue_activation_allowed():
         raise SystemExit("cross-venue active mode requires a recorded promote evaluation")
     if config.news_enabled and not arguments.once:
@@ -341,6 +356,7 @@ def main() -> None:
                 initial_equity=config.initial_equity,
                 cross_venue_mode=config.cross_venue_mode,
                 cross_venue_policy=cross_venue_policy,
+                decision_provider=decision_provider,
                 now=now,
             )
             print(json.dumps(result), flush=True)

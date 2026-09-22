@@ -24,6 +24,9 @@ class IntradayConfig:
     initial_equity: float = 10_000.0
     interval_seconds: float = 5.0
     provider: str = "stub"
+    provider_secrets_file: Path = Path(
+        "~/.config/aigorithmic-trading/provider-secrets.toml"
+    ).expanduser()
     mode: str = "paper"
     dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 8081
@@ -67,6 +70,12 @@ class IntradayConfig:
             initial_equity=float(os.getenv("INTRADAY_PAPER_BALANCE", "10000")),
             interval_seconds=float(os.getenv("INTRADAY_INTERVAL_SECONDS", "5")),
             provider=os.getenv("INTRADAY_PROVIDER", "stub"),
+            provider_secrets_file=Path(
+                os.getenv(
+                    "INTRADAY_PROVIDER_SECRETS_FILE",
+                    "~/.config/aigorithmic-trading/provider-secrets.toml",
+                )
+            ).expanduser(),
             mode=os.getenv("INTRADAY_MODE", "paper"),
             dashboard_host=os.getenv("INTRADAY_DASHBOARD_HOST", "127.0.0.1"),
             dashboard_port=int(os.getenv("INTRADAY_DASHBOARD_PORT", "8081")),

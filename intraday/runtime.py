@@ -10,7 +10,7 @@ from intraday.cross_venue import CrossVenuePolicy
 from intraday.engine import IntradayEngine
 from intraday.news import NewsIntelligence
 from intraday.news_sources import NewsSource, enabled_sources, fetch_source
-from intraday.providers import StubDecisionProvider
+from intraday.providers import DecisionProvider, StubDecisionProvider
 from intraday.store import IntradayStore
 
 
@@ -22,12 +22,13 @@ def run_once(
     initial_equity: float = 10_000,
     cross_venue_mode: str = "off",
     cross_venue_policy: CrossVenuePolicy | None = None,
+    decision_provider: DecisionProvider | None = None,
     now: datetime | None = None,
 ) -> dict:
     store = IntradayStore(database)
     engine = IntradayEngine(
         store,
-        StubDecisionProvider(direction=direction),
+        decision_provider or StubDecisionProvider(direction=direction),
         initial_equity=initial_equity,
         cross_venue_mode=cross_venue_mode,
         cross_venue_policy=cross_venue_policy,

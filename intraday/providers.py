@@ -8,7 +8,7 @@ import socket
 import time
 import urllib.error
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import Callable, Protocol
 
 from intraday.contracts import (
     Direction,
@@ -20,7 +20,7 @@ from intraday.contracts import (
     RiskLevel,
 )
 from intraday.provider_client import HttpResponse, Transport, http_transport
-from intraday.provider_profiles import ProviderCredential
+from intraday.provider_profiles import ProviderCredential, ProviderSecretStore
 from intraday.store import IntradayStore
 
 
@@ -361,6 +361,44 @@ class JevDecisionProvider:
             latency_ms=latency_ms,
             provider_request_id=request_id,
         )
+
+
+class AssignedDecisionProvider:
+    """Resolve the active Jev profile on every tick and hot-swap atomically."""
+
+    model_ref = "registry/jev"
+
+    def __init__(
+        self,
+        store: IntradayStore,
+        secret_store: ProviderSecretStore,
+        *,
+        fallback: DecisionProvider,
+        provider_factory: Callable[[ProviderCredential], DecisionProvider] | None = None,
+    ):
+        self.store = store
+        self.secret_store = secret_store
+        self.fallback = fallback
+        self._provider_factory = provider_factory or (
+            lambda credential: JevDecisionProvider(credential, store=store)
+        )
+        self._providers: dict[str, DecisionProvider] = {}
+
+    def decide(self, snapshot: FeatureSnapshot, tick_id: str, now) -> JevDecision:
+        assignment = self.store.provider_assignment(ProviderRole.JEV)
+        if assignment is None:
+            return self.fallback.decide(snapshot, tick_id, now)
+        profile = self.store.provider_profile(assignment["profile_id"])
+        if profile is None or profile.fingerprint != assignment["profile_fingerprint"]:
+            raise ProviderDecisionError("profile_metadata_mismatch")
+        credential = self.secret_store.get(profile.profile_id)
+        if credential.profile.fingerprint != assignment["profile_fingerprint"]:
+            raise ProviderDecisionError("profile_secret_mismatch")
+        provider = self._providers.get(profile.fingerprint)
+        if provider is None:
+            provider = self._provider_factory(credential)
+            self._providers[profile.fingerprint] = provider
+        return provider.decide(snapshot, tick_id, now)
 
 
 class StubDecisionProvider:
