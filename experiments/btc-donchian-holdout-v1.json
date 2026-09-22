@@ -1,0 +1,39 @@
+{
+  "title": "BTCUSDT Donchian 20/10 + entry volatility 20d · one-shot holdout",
+  "hypothesis": "The locked Donchian candidate will remain profitable after 5 bps slippage and keep drawdown within 20% on the untouched 2026 holdout.",
+  "market": "crypto_spot",
+  "venue": "binance",
+  "symbol": "BTCUSDT",
+  "interval": "1d",
+  "calendar": "UTC_24_7",
+  "dataset_id": null,
+  "parent_run_id": "e1bb13fe60817ce83d85",
+  "prior_observed_periods": ["2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025"],
+  "data": {"start": "2017-08-17", "end_exclusive": "2026-09-01"},
+  "strategy": {"family": "donchian_breakout", "entry_window": 20, "exit_window": 10, "atr_window": 14},
+  "initial_cash": 10000,
+  "slippage_bps": [0, 5, 10],
+  "taker_fee_bps": 10,
+  "commission": 0,
+  "risk_policy": {
+    "max_target_weight": 0.5,
+    "halt_drawdown": 0.2,
+    "position_sizing": {
+      "family": "entry_volatility",
+      "lookback": 20,
+      "annual_target": 0.2,
+      "annualization_days": 365
+    }
+  },
+  "periods": {
+    "2018": ["2018-01-01", "2018-12-31"],
+    "2019": ["2019-01-01", "2019-12-31"],
+    "2020": ["2020-01-01", "2020-12-31"],
+    "2021": ["2021-01-01", "2021-12-31"],
+    "2022": ["2022-01-01", "2022-12-31"],
+    "2023": ["2023-01-01", "2023-12-31"],
+    "2024": ["2024-01-01", "2024-12-31"],
+    "2025": ["2025-01-01", "2025-12-31"],
+    "holdout": ["2026-01-01", "2026-08-31"]
+  }
+}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}So sánh run · System Trading Lab{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/">Thư viện</a><span>/</span><span>So sánh</span></nav>
+<section class="form-hero compare-hero">
+  <p class="eyebrow">Experiment comparison</p>
+  <h1>Đặt hai giả thuyết cạnh nhau.</h1>
+  <p class="lede">Chênh lệch chỉ được tính khi dataset, kỳ, vốn và chi phí giống nhau.</p>
+</section>
+
+<form class="compare-picker" action="/compare" method="get">
+  <div><label for="left_id">Run A</label><select id="left_id" name="left_id" required>
+    <option value="">Chọn run thứ nhất</option>
+    {% for run in runs %}<option value="{{ run.id }}"{% if run.id == left_id %} selected{% endif %}>{{ run.symbol }} · {{ run.title }} · {{ run.strategy_label }}</option>{% endfor %}
+  </select></div>
+  <div><label for="right_id">Run B</label><select id="right_id" name="right_id" required>
+    <option value="">Chọn run thứ hai</option>
+    {% for run in runs %}<option value="{{ run.id }}"{% if run.id == right_id %} selected{% endif %}>{{ run.symbol }} · {{ run.title }} · {{ run.strategy_label }}</option>{% endfor %}
+  </select></div>
+  <button type="submit">So sánh</button>
+</form>
+
+{% if error %}<div class="warning" role="alert"><strong>Chưa thể so sánh.</strong> {{ error }}</div>{% endif %}
+{% if not comparison and not error %}<div class="empty-state"><h2>Chọn hai run</h2><p>Có thể chọn tự do từ lịch sử hoặc bắt đầu bằng nút “Nhân bản” trên một run.</p></div>{% endif %}
+
+{% if comparison %}
+<section class="compatibility {{ 'compatible' if comparison.compatible else 'incompatible' }}" role="status">
+  <strong>{{ 'Cùng điều kiện' if comparison.compatible else 'Không xếp hạng' }}</strong>
+  <span>{{ 'Delta là Run B trừ Run A; không có kết luận thắng/thua tổng thể.' if comparison.compatible else 'Hai run vẫn được hiển thị để tham khảo, nhưng delta bị tắt vì điều kiện khác nhau.' }}</span>
+</section>
+
+{% if comparison.differences %}<section class="difference-list"><p class="eyebrow">Điều kiện khác nhau</p><ul>
+{% set labels = {'dataset_id': 'Dataset', 'initial_cash': 'Vốn giả lập', 'symbol': 'Symbol', 'periods': 'Giai đoạn', 'slippage_bps': 'Trượt giá', 'commission': 'Commission', 'cases': 'Ca chạy'} %}
+{% for item in comparison.differences %}<li><strong>{{ labels.get(item.field, item.field) }}</strong><span>{{ item.left }} → {{ item.right }}</span></li>{% endfor %}
+</ul></section>{% endif %}
+
+<div class="compare-identities">
+  {% for side, run in [('A', comparison.left), ('B', comparison.right)] %}<article>
+    <p class="eyebrow">Run {{ side }}</p><span class="symbol">{{ run.symbol }}</span><h2>{{ run.title }}</h2>
+    <p>{{ run.strategy_label }}</p><div class="run-actions"><a href="/runs/{{ run.id }}">Mở bằng chứng</a><a href="/runs/{{ run.id }}/clone">Nhân bản</a></div>
+  </article>{% endfor %}
+</div>
+
+{% for case in comparison.cases %}<section class="case-comparison">
+  <div class="section-head"><div><p class="eyebrow">Case</p><h2>{{ case.case }}</h2></div></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Chỉ tiêu</th><th>Run A</th><th>Run B</th><th>Delta B − A</th></tr></thead>
+    <tbody>
+      <tr><td>Vốn cuối</td><td>${{ "{:,.2f}".format(case.left.final_equity) if case.left else '—' }}</td><td>${{ "{:,.2f}".format(case.right.final_equity) if case.right else '—' }}</td><td>{{ "${:+,.2f}".format(case.delta.final_equity) if case.delta else '—' }}</td></tr>
+      <tr><td>Lợi nhuận</td><td>{{ "{:.2%}".format(case.left.total_return) if case.left else '—' }}</td><td>{{ "{:.2%}".format(case.right.total_return) if case.right else '—' }}</td><td>{{ "{:+.2%}".format(case.delta.total_return) if case.delta else '—' }}</td></tr>
+      <tr><td>CAGR</td><td>{{ "{:.2%}".format(case.left.cagr_252) if case.left else '—' }}</td><td>{{ "{:.2%}".format(case.right.cagr_252) if case.right else '—' }}</td><td>{{ "{:+.2%}".format(case.delta.cagr_252) if case.delta else '—' }}</td></tr>
+      <tr><td>Drawdown</td><td>{{ "{:.2%}".format(case.left.max_drawdown) if case.left else '—' }}</td><td>{{ "{:.2%}".format(case.right.max_drawdown) if case.right else '—' }}</td><td>{{ "{:+.2%}".format(case.delta.max_drawdown) if case.delta else '—' }}</td></tr>
+      <tr><td>Vòng giao dịch</td><td>{{ case.left.round_trips if case.left else '—' }}</td><td>{{ case.right.round_trips if case.right else '—' }}</td><td>{{ "{:+d}".format(case.delta.round_trips|int) if case.delta else '—' }}</td></tr>
+    </tbody>
+  </table></div>
+</section>{% endfor %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Paper trading · System Trading Lab{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/">Thư viện</a><span>/</span><span>Paper trading</span></nav>
+<section class="form-hero paper-hero">
+  <p class="eyebrow">BTCUSDT · simulated execution</p>
+  <h1>Paper trading, có phanh.</h1>
+  <p class="lede">Bot thuật toán quyết định; AI chỉ giải thích. Mỗi fill, biến động số dư và lý do dừng đều có dấu vết đối soát.</p>
+</section>
+
+<section class="section-head">
+  <div><p class="eyebrow">Accounts</p><h2>{{ accounts|length }} tài khoản mô phỏng</h2></div>
+  <span class="safety-note">Không kết nối API đặt lệnh thật</span>
+</section>
+{% if gate %}
+<section class="gate-panel" aria-labelledby="gate-heading">
+  <div><p class="eyebrow">Promotion gate · đã khóa</p><h2 id="gate-heading">{{ 'Giữ tiền mặt' if gate.status == 'stay_cash' else 'Ứng viên: ' ~ gate.selected }}</h2></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Chiến lược</th><th>Năm có lãi</th><th>Stress return</th><th>Drawdown tệ nhất</th><th>Kết quả</th></tr></thead>
+    <tbody>{% for score in gate.scores %}<tr><td>{{ score.name }}</td><td>{{ score.profitable_folds }}/8</td><td>{{ "{:.2%}".format(score.aggregate_stress_return) }}</td><td class="negative">{{ "{:.2%}".format(score.worst_drawdown) }}</td><td>{{ 'Qua' if score.passed else 'Không qua' }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% if gate.status == 'stay_cash' %}<p class="muted-copy">Không chiến lược nào đạt trần drawdown 20%. Holdout chưa mở; bot không được tạo vị thế.</p>{% endif %}
+  {% if gate.candidate_lock %}<p class="muted-copy"><strong>Candidate đã khóa:</strong>
+    run <code>{{ gate.candidate_lock.run_id[:12] }}</code> · dataset <code>{{ gate.candidate_lock.dataset_id[:12] }}</code> ·
+    {{ 'Entry volatility · 20 ngày · risk target 20%/năm · cap 50%' if gate.candidate_lock.position_sizing.family == 'entry_volatility' else 'Fixed sizing' }}.
+  </p>{% endif %}
+  {% if gate.holdout %}<p class="muted-copy" role="status"><strong>{{ 'Holdout đã qua' if gate.holdout.passed else 'Holdout không qua' }}:</strong>
+    {{ gate.holdout.period }} · return {{ "{:.2%}".format(gate.holdout.total_return) }} · max drawdown {{ "{:.2%}".format(gate.holdout.max_drawdown).replace('-', '−') }} · run <code>{{ gate.holdout.run_id[:12] }}</code>.
+  </p>{% endif %}
+</section>
+{% endif %}
+{% if accounts %}
+<div class="paper-list">
+  {% for account in accounts %}
+  <a class="paper-row" href="/paper/{{ account.id }}">
+    <span class="status-pill {{ account.status }}">{{ 'Đang chạy' if account.status == 'active' else 'Đã dừng' }}</span>
+    <span><strong>BTCUSDT</strong><small>{{ account.strategy.family }} · {{ account.position_sizing.family }}</small></span>
+    <span><small>Equity</small><strong>{{ "{:,.2f}".format(account.equity) }} USDT</strong></span>
+    <span><small>Drawdown</small><strong>{{ "{:.2%}".format(account.drawdown) }}</strong></span>
+    <b aria-hidden="true">→</b>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+  <h2>Chưa có tài khoản paper</h2>
+  <p>Tài khoản chỉ được tạo sau khi một chiến lược vượt promotion gate và holdout. Hiện bot giữ tiền mặt.</p>
+</div>
+{% endif %}
+{% endblock %}

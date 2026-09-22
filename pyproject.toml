@@ -1,0 +1,38 @@
+[project]
+name = "system-trading-lab"
+version = "0.1.0"
+description = "Auditable BTC-first algorithmic trading research and paper bot"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "vibe-trading-ai==0.1.15",
+    "pandas>=2.2,<3",
+    "numpy>=2,<3",
+    "matplotlib>=3.9,<4",
+    "yfinance>=1,<2",
+    "exchange-calendars>=4.11,<5",
+    "fastapi==0.141.1",
+    "jinja2==3.1.6",
+    "uvicorn==0.52.4",
+    "websockets==16.1.1",
+]
+
+[project.scripts]
+aigt = "intraday.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.11.14,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = ["intraday", "lab"]
+module-root = ""
+
+[dependency-groups]
+dev = [
+    "httpx==0.28.1",
+    "pytest>=8,<10",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

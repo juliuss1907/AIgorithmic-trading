@@ -1,0 +1,11 @@
+[Unit]
+Description=Run BTCUSDT paper trading at 09:00 Vietnam time
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 Asia/Ho_Chi_Minh
+Persistent=true
+AccuracySec=1s
+Unit=system-trading-paper.service
+
+[Install]
+WantedBy=timers.target

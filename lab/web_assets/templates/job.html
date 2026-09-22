@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job.id[:8] }} · System Trading Lab{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/">Thư viện</a><span>/</span><span>Job {{ job.id[:8] }}</span></nav>
+<section class="job-state">
+  <p class="eyebrow">Background worker</p>
+  <div id="state-orbit" class="state-orbit {{ job.status }}"><i></i></div>
+  <h1 id="job-title" aria-live="polite">{{ 'Đã xếp hàng.' if job.status == 'queued' else 'Đang đọc trạng thái…' }}</h1>
+  <p id="job-message" class="lede" aria-live="polite">Bạn có thể giữ trang này mở. Backtest chạy tách khỏi web request.</p>
+  <a id="result-link" class="button-link hidden" href="#">Mở kết quả →</a>
+  <button id="retry-button" class="secondary hidden" type="button">Thử lại bằng run mới</button>
+</section>
+{% endblock %}
+{% block scripts %}<script>
+const jobId = '{{ job.id }}';
+const parentRunId = '{{ job.config.parent_run_id or '' }}';
+const labels = {queued: ['Đã xếp hàng.', 'Worker sẽ nhận job này theo thứ tự.'], running: ['Đang chạy backtest…', 'Audit và report phải hoàn tất trước khi công bố kết quả.'], failed: ['Job thất bại.', 'Kết quả không được đăng ký.'], interrupted: ['Worker đã bị ngắt.', 'Bạn có thể thử lại bằng một run mới.']};
+async function refresh() {
+  const response = await fetch(`/api/jobs/${jobId}`); const job = await response.json();
+  document.querySelector('#state-orbit').className = `state-orbit ${job.status}`;
+  if (job.status === 'completed') {
+    document.querySelector('#job-title').textContent = 'Đã hoàn tất & audit.';
+    document.querySelector('#job-message').textContent = 'Run đã được đăng ký vào thư viện bằng chứng.';
+    const link = document.querySelector('#result-link');
+    link.href = parentRunId ? `/compare?left_id=${parentRunId}&right_id=${job.result_run_id}` : `/runs/${job.result_run_id}`;
+    link.textContent = parentRunId ? 'So sánh với run cha →' : 'Mở kết quả →';
+    link.classList.remove('hidden'); return;
+  }
+  const copy = labels[job.status]; document.querySelector('#job-title').textContent = copy[0];
+  document.querySelector('#job-message').textContent = job.error_message || copy[1];
+  if (['failed', 'interrupted'].includes(job.status)) document.querySelector('#retry-button').classList.remove('hidden');
+  if (['queued', 'running'].includes(job.status)) setTimeout(refresh, 1000);
+}
+document.querySelector('#retry-button').addEventListener('click', async () => {
+  const response = await fetch(`/api/jobs/${jobId}/retry`, {method: 'POST'});
+  if (response.ok) { const job = await response.json(); window.location.assign(`/jobs/${job.id}`); }
+});
+refresh();
+</script>{% endblock %}

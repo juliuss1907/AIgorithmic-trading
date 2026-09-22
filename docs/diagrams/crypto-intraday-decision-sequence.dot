@@ -1,0 +1,38 @@
+digraph DecisionSequence {
+  graph [
+    rankdir=LR,
+    bgcolor="white",
+    pad="0.2",
+    nodesep="0.25",
+    ranksep="0.55",
+    fontname="Helvetica Neue"
+  ];
+  node [
+    shape=box,
+    style="rounded,filled",
+    color="#223047",
+    fillcolor="#F5F7FA",
+    fontcolor="#172033",
+    fontname="Helvetica Neue",
+    fontsize=10,
+    margin="0.13,0.08"
+  ];
+  edge [color="#65738A", penwidth=1.15, arrowsize=0.68, fontname="Helvetica Neue", fontsize=8];
+
+  tick [label="1 · Decision tick\nUTC 5-second bucket"];
+  snap [label="2 · Build snapshot\nvalidate freshness"];
+  jev [label="3 · Jev decision\ntyped answers", fillcolor="#E8F0FC"];
+  gate [label="4 · Risk gate\npolicy + margin", fillcolor="#F7E5E5"];
+  fill [label="5 · Atomic fill\nledger + outbox", fillcolor="#E7F4EC"];
+  hold [label="Persist blocked / HOLD\nwith reason codes", fillcolor="#F5EFD9"];
+  notify [label="6 · Async notify\nno rollback on failure"];
+
+  tick -> snap;
+  snap -> jev [label="healthy"];
+  snap -> hold [label="stale"];
+  jev -> gate [label="valid"];
+  jev -> hold [label="timeout / invalid"];
+  gate -> fill [label="authorized"];
+  gate -> hold [label="rejected"];
+  fill -> notify;
+}

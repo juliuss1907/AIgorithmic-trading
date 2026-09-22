@@ -1,0 +1,11 @@
+.venv/
+.vendor/
+.cache/
+__pycache__/
+.pytest_cache/
+.env
+.env.*
+!.env.example
+data/
+runs/
+state/
