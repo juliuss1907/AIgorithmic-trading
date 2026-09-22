@@ -120,6 +120,61 @@ def test_structured_llm_client_uses_strict_json_schema_and_audits_call(tmp_path)
     assert "private-llm-key" not in call.model_dump_json()
 
 
+def test_structured_llm_client_supports_anthropic_messages(tmp_path):
+    requests = []
+
+    def transport(**request):
+        requests.append(request)
+        response = {
+            "id": "msg_01",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": assessment().model_dump_json()}],
+            "usage": {"input_tokens": 100, "output_tokens": 30},
+        }
+        return HttpResponse(200, {"request-id": "msg-request-1"}, json.dumps(response).encode())
+
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    current = ProviderProfile.create(
+        profile_id="llm-anthropic",
+        role=ProviderRole.LLM,
+        kind=ProviderKind.ANTHROPIC_MESSAGES,
+        base_url="https://api.anthropic.com/v1/messages",
+        model="claude-sonnet-4-5",
+        credential_version="credential-v1",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    store.sync_provider_profile(current)
+    client = StructuredLLMClient(
+        ProviderCredential(current, "anthropic-private"),
+        store=store,
+        transport=transport,
+    )
+
+    result = client.complete(
+        workflow="market_analyst",
+        response_model=AnalysisAssessment,
+        system_prompt="Analyze only the supplied market facts.",
+        input_payload={"price": 100_000},
+        now=NOW,
+    )
+
+    assert result.stance == "bullish"
+    request = requests[0]
+    assert request["url"] == "https://api.anthropic.com/v1/messages"
+    assert request["headers"]["x-api-key"] == "anthropic-private"
+    assert request["headers"]["anthropic-version"] == "2023-06-01"
+    body = json.loads(request["body"])
+    assert body["system"] == "Analyze only the supplied market facts."
+    assert body["messages"][0]["role"] == "user"
+    assert body["output_config"]["format"]["type"] == "json_schema"
+    assert body["output_config"]["format"]["schema"]["additionalProperties"] is False
+    call = store.list_model_calls()[0]
+    assert call.input_tokens == 100
+    assert call.output_tokens == 30
+    assert call.provider_request_id == "msg-request-1"
+
+
 def test_five_stage_pipeline_persists_reports_thesis_and_bounded_candidate(tmp_path):
     store = IntradayStore(tmp_path / "intraday.sqlite")
 

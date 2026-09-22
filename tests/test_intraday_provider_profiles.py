@@ -265,6 +265,53 @@ def test_provider_cli_add_and_list_redacts_api_key(monkeypatch, capsys, tmp_path
     assert json.loads(listed_output)[0]["has_secret"] is True
 
 
+def test_provider_setup_wizard_tests_and_activates_typesafe_profile(
+    monkeypatch, capsys, tmp_path
+):
+    database = tmp_path / "intraday.sqlite"
+    secrets_file = tmp_path / "providers.toml"
+    answers = iter(["jev", "typesafe-systemone", "jev-native", "jev-latest"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr(sys, "stdin", io.StringIO("native-private-key\n"))
+
+    class SuccessfulPreflight:
+        def test(self, credential):
+            from intraday.provider_client import ProviderPreflightResult
+
+            assert credential.profile.kind == ProviderKind.TYPESAFE_SYSTEMONE
+            assert credential.api_key == "native-private-key"
+            return ProviderPreflightResult(status="ok", latency_ms=17)
+
+    monkeypatch.setattr(
+        "intraday.__main__.ProviderPreflightClient", SuccessfulPreflight
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "intraday", "provider", "setup",
+            "--database", str(database),
+            "--secrets-file", str(secrets_file),
+            "--api-key-stdin",
+        ],
+    )
+
+    main()
+
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "profile_id": "jev-native",
+        "role": "jev",
+        "kind": "typesafe-systemone",
+        "status": "ok",
+        "latency_ms": 17,
+        "active": True,
+    }
+    assert "native-private-key" not in str(output)
+    assignment = IntradayStore(database).provider_assignment(ProviderRole.JEV)
+    assert assignment["profile_id"] == "jev-native"
+
+
 def test_jev_preflight_uses_decisions_wire_contract_without_leaking_key():
     requests = []
 
@@ -317,6 +364,103 @@ def test_llm_preflight_uses_openai_compatible_chat_completions():
     payload = json.loads(requests[0]["body"])
     assert payload["model"] == "example/model"
     assert payload["max_tokens"] == 1
+
+
+def test_typesafe_native_preflight_uses_systemone_wire_contract():
+    requests = []
+
+    def transport(**request):
+        requests.append(request)
+        return HttpResponse(
+            status_code=200,
+            headers={"x-request-id": "typesafe-request-1"},
+            body=b'{"answers":{"reachable":{"noul":1.0}}}',
+        )
+
+    from intraday.provider_profiles import ProviderCredential
+
+    current = ProviderProfile.create(
+        profile_id="jev-typesafe",
+        role=ProviderRole.JEV,
+        kind=ProviderKind.TYPESAFE_SYSTEMONE,
+        base_url="https://api.typesafe.ai/v1/systemone",
+        model="jev-latest",
+        credential_version="credential-v1",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    result = ProviderPreflightClient(transport=transport).test(
+        ProviderCredential(current, "typesafe-private")
+    )
+
+    assert result.status == "ok"
+    assert requests[0]["url"] == "https://api.typesafe.ai/v1/systemone"
+    payload = json.loads(requests[0]["body"])
+    assert payload["model"] == "jev-latest"
+    assert payload["questions"]["reachable"]["type"] == "noul"
+
+
+def test_anthropic_preflight_uses_messages_wire_contract():
+    requests = []
+
+    def transport(**request):
+        requests.append(request)
+        return HttpResponse(
+            status_code=200,
+            headers={"request-id": "anthropic-request-1"},
+            body=b'{"content":[{"type":"text","text":"ok"}]}',
+        )
+
+    from intraday.provider_profiles import ProviderCredential
+
+    current = ProviderProfile.create(
+        profile_id="llm-anthropic",
+        role=ProviderRole.LLM,
+        kind=ProviderKind.ANTHROPIC_MESSAGES,
+        base_url="https://api.anthropic.com/v1/messages",
+        model="claude-sonnet-4-5",
+        credential_version="credential-v1",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    result = ProviderPreflightClient(transport=transport).test(
+        ProviderCredential(current, "anthropic-private")
+    )
+
+    assert result.status == "ok"
+    request = requests[0]
+    assert request["url"] == "https://api.anthropic.com/v1/messages"
+    assert request["headers"]["x-api-key"] == "anthropic-private"
+    assert request["headers"]["anthropic-version"] == "2023-06-01"
+    assert "Authorization" not in request["headers"]
+    payload = json.loads(request["body"])
+    assert payload["messages"] == [{"role": "user", "content": "Reply with: ok"}]
+    assert payload["max_tokens"] == 1
+
+
+@pytest.mark.parametrize(
+    ("role", "kind", "base_url"),
+    [
+        (ProviderRole.LLM, ProviderKind.TYPESAFE_SYSTEMONE,
+         "https://api.typesafe.ai/v1/systemone"),
+        (ProviderRole.JEV, ProviderKind.ANTHROPIC_MESSAGES,
+         "https://api.anthropic.com/v1/messages"),
+        (ProviderRole.JEV, ProviderKind.OPENAI_COMPATIBLE,
+         "https://api.example.com/v1"),
+    ],
+)
+def test_provider_profile_rejects_protocol_role_mismatch(role, kind, base_url):
+    with pytest.raises(ValueError, match="role"):
+        ProviderProfile.create(
+            profile_id="wrong-role",
+            role=role,
+            kind=kind,
+            base_url=base_url,
+            model="example-model",
+            credential_version="credential-v1",
+            created_at=NOW,
+            updated_at=NOW,
+        )
 
 
 @pytest.mark.parametrize(

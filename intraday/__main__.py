@@ -89,6 +89,10 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--model", required=True)
     add.add_argument("--api-key-stdin", action="store_true")
     add.add_argument("--replace", action="store_true")
+    setup = provider_commands.add_parser("setup")
+    setup.add_argument("--database", default=None)
+    setup.add_argument("--secrets-file", default=None)
+    setup.add_argument("--api-key-stdin", action="store_true")
     activate = provider_commands.add_parser("activate")
     activate.add_argument("role", choices=[item.value for item in ProviderRole])
     activate.add_argument("profile_id")
@@ -112,12 +116,108 @@ def _provider_cli(arguments) -> None:
     store = IntradayStore(database)
     command = arguments.provider_command
 
+    if command == "setup":
+        try:
+            role = ProviderRole(input("Role [jev/llm]: ").strip().lower())
+        except ValueError as error:
+            raise SystemExit("role must be jev or llm") from error
+        allowed = {
+            ProviderRole.JEV: (
+                ProviderKind.TYPESAFE_SYSTEMONE,
+                ProviderKind.OPENROUTER_DECISIONS,
+            ),
+            ProviderRole.LLM: (
+                ProviderKind.OPENAI_COMPATIBLE,
+                ProviderKind.ANTHROPIC_MESSAGES,
+            ),
+        }[role]
+        default_kind = allowed[0]
+        kind_value = input(
+            f"Protocol [{'/'.join(item.value for item in allowed)}] "
+            f"(default {default_kind.value}): "
+        ).strip() or default_kind.value
+        try:
+            kind = ProviderKind(kind_value)
+        except ValueError as error:
+            raise SystemExit("unsupported provider protocol") from error
+        if kind not in allowed:
+            raise SystemExit(f"{kind.value} cannot be used for the {role.value} role")
+        profile_id = input("Profile id: ").strip()
+        model_default = "jev-latest" if kind == ProviderKind.TYPESAFE_SYSTEMONE else ""
+        model = input(
+            f"Model{f' (default {model_default})' if model_default else ''}: "
+        ).strip() or model_default
+        if not model:
+            raise SystemExit("model is required")
+        endpoints = {
+            ProviderKind.TYPESAFE_SYSTEMONE: "https://api.typesafe.ai/v1/systemone",
+            ProviderKind.OPENROUTER_DECISIONS: "https://openrouter.ai/api/alpha/decisions",
+            ProviderKind.ANTHROPIC_MESSAGES: "https://api.anthropic.com/v1/messages",
+        }
+        base_url = endpoints.get(kind)
+        if base_url is None:
+            base_url = input(
+                "OpenAI-compatible base URL "
+                "(for example https://api.openai.com/v1): "
+            ).strip()
+        if arguments.api_key_stdin:
+            api_key = sys.stdin.readline().rstrip("\r\n")
+        else:
+            api_key = getpass.getpass("Provider API key: ")
+        now = datetime.now(timezone.utc)
+        if store.provider_profile(profile_id) is not None:
+            raise SystemExit("provider profile already exists")
+        profile = ProviderProfile.create(
+            profile_id=profile_id,
+            role=role,
+            kind=kind,
+            base_url=base_url,
+            model=model,
+            credential_version=secrets.token_hex(16),
+            created_at=now,
+            updated_at=now,
+        )
+        secret_store.upsert(profile, api_key, replace=False)
+        store.sync_provider_profile(profile)
+        result = ProviderPreflightClient().test(secret_store.get(profile_id))
+        store.record_provider_test(
+            profile_id,
+            status=result.status,
+            tested_at=now,
+            latency_ms=result.latency_ms,
+            error_code=result.error_code,
+        )
+        active = False
+        if result.status == "ok":
+            store.activate_provider(role, profile_id, actor="cli", now=now)
+            active = True
+        print(
+            json.dumps(
+                {
+                    "profile_id": profile_id,
+                    "role": role.value,
+                    "kind": kind.value,
+                    "status": result.status,
+                    "latency_ms": result.latency_ms,
+                    "active": active,
+                },
+                indent=2,
+            )
+        )
+        if not active:
+            raise SystemExit(1)
+        return
+
     if command == "add":
         kind = ProviderKind(arguments.kind)
         role = ProviderRole(arguments.role)
         base_url = arguments.base_url
         if kind == ProviderKind.OPENROUTER_DECISIONS:
             base_url = base_url or "https://openrouter.ai/api/alpha/decisions"
+        elif kind == ProviderKind.TYPESAFE_SYSTEMONE:
+            base_url = base_url or "https://api.typesafe.ai/v1/systemone"
+        elif kind == ProviderKind.ANTHROPIC_MESSAGES:
+            base_url = base_url or "https://api.anthropic.com/v1/messages"
         elif not base_url:
             raise SystemExit("--base-url is required for OpenAI-compatible providers")
         if arguments.api_key_stdin:

@@ -54,7 +54,9 @@ class ProviderRole(str, Enum):
 
 class ProviderKind(str, Enum):
     OPENROUTER_DECISIONS = "openrouter-decisions"
+    TYPESAFE_SYSTEMONE = "typesafe-systemone"
     OPENAI_COMPATIBLE = "openai-compatible"
+    ANTHROPIC_MESSAGES = "anthropic-messages"
 
 
 class NewsSeverity(str, Enum):
@@ -413,8 +415,21 @@ class ProviderProfile(StrictContract):
                 raise ValueError("OpenRouter Decisions profiles must use the jev role")
             if self.base_url.rstrip("/") != "https://openrouter.ai/api/alpha/decisions":
                 raise ValueError("OpenRouter Decisions endpoint is fixed")
-        elif parsed.scheme != "https" or not parsed.hostname:
-            raise ValueError("OpenAI-compatible provider URL must use HTTPS")
+        elif self.kind == ProviderKind.TYPESAFE_SYSTEMONE:
+            if self.role != ProviderRole.JEV:
+                raise ValueError("TypeSafe System One profiles must use the jev role")
+            if self.base_url.rstrip("/") != "https://api.typesafe.ai/v1/systemone":
+                raise ValueError("TypeSafe System One endpoint is fixed")
+        elif self.kind == ProviderKind.ANTHROPIC_MESSAGES:
+            if self.role != ProviderRole.LLM:
+                raise ValueError("Anthropic Messages profiles must use the llm role")
+            if self.base_url.rstrip("/") != "https://api.anthropic.com/v1/messages":
+                raise ValueError("Anthropic Messages endpoint is fixed")
+        elif self.kind == ProviderKind.OPENAI_COMPATIBLE:
+            if self.role != ProviderRole.LLM:
+                raise ValueError("OpenAI-compatible profiles must use the llm role")
+            if parsed.scheme != "https" or not parsed.hostname:
+                raise ValueError("OpenAI-compatible provider URL must use HTTPS")
         expected = self._fingerprint_for(
             profile_id=self.profile_id,
             role=self.role,

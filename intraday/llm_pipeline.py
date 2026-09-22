@@ -20,6 +20,7 @@ from intraday.contracts import (
     FeatureSnapshot,
     MarketThesis,
     ModelCallRecord,
+    ProviderKind,
     ProviderRole,
     RuleCandidate,
     RuleParameters,
@@ -162,8 +163,10 @@ class StructuredLLMClient:
         request_id = None
         if response is not None:
             headers = {name.lower(): value for name, value in response.headers.items()}
-            request_id = headers.get("x-request-id") or headers.get(
-                "x-openrouter-request-id"
+            request_id = (
+                headers.get("x-request-id")
+                or headers.get("x-openrouter-request-id")
+                or headers.get("request-id")
             )
         if request_id is None and response_payload:
             candidate = response_payload.get("id")
@@ -207,39 +210,60 @@ class StructuredLLMClient:
         input_payload: dict,
         now: datetime,
     ) -> T:
-        request_payload = {
-            "model": self.credential.profile.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": json.dumps(input_payload, sort_keys=True, separators=(",", ":")),
+        input_text = json.dumps(input_payload, sort_keys=True, separators=(",", ":"))
+        schema = self._strict_schema(response_model)
+        if self.credential.profile.kind == ProviderKind.ANTHROPIC_MESSAGES:
+            request_url = self.credential.profile.base_url
+            request_headers = {
+                "x-api-key": self.credential.api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "AIgorithmic-Trading/0.1 structured-analysis",
+            }
+            request_payload = {
+                "model": self.credential.profile.model,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": input_text}],
+                "max_tokens": 4096,
+                "temperature": 0,
+                "output_config": {
+                    "format": {"type": "json_schema", "schema": schema}
                 },
-            ],
-            "temperature": 0,
-            "tools": [],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": workflow,
-                    "strict": True,
-                    "schema": self._strict_schema(response_model),
+            }
+        else:
+            request_url = self.credential.profile.base_url.rstrip("/") + "/chat/completions"
+            request_headers = {
+                "Authorization": f"Bearer {self.credential.api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "AIgorithmic-Trading/0.1 structured-analysis",
+            }
+            request_payload = {
+                "model": self.credential.profile.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": input_text},
+                ],
+                "temperature": 0,
+                "tools": [],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": workflow,
+                        "strict": True,
+                        "schema": schema,
+                    },
                 },
-            },
-        }
+            }
         body = json.dumps(request_payload, sort_keys=True, separators=(",", ":")).encode()
         request_hash = hashlib.sha256(body).hexdigest()
         started_clock = self._clock()
         response = None
         try:
             response = self._transport(
-                url=self.credential.profile.base_url.rstrip("/") + "/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.credential.api_key}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": "AIgorithmic-Trading/0.1 structured-analysis",
-                },
+                url=request_url,
+                headers=request_headers,
                 body=body,
                 timeout=self._timeout_seconds,
             )
@@ -248,7 +272,14 @@ class StructuredLLMClient:
             if len(response.body) > 2_000_000:
                 raise StructuredLLMError("invalid_response")
             response_payload = json.loads(response.body)
-            content = response_payload["choices"][0]["message"]["content"]
+            if self.credential.profile.kind == ProviderKind.ANTHROPIC_MESSAGES:
+                content = next(
+                    item["text"]
+                    for item in response_payload["content"]
+                    if item.get("type") == "text"
+                )
+            else:
+                content = response_payload["choices"][0]["message"]["content"]
             decoded = json.loads(content) if isinstance(content, str) else content
             result = response_model.model_validate(decoded)
         except StructuredLLMError as error:
@@ -257,7 +288,14 @@ class StructuredLLMClient:
             code = "timeout"
         except (urllib.error.URLError, OSError):
             code = "network_error"
-        except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError):
+        except (
+            KeyError,
+            IndexError,
+            StopIteration,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
             code = "invalid_response"
         else:
             latency = max(0, round((self._clock() - started_clock) * 1000))
