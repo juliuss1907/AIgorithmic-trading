@@ -83,7 +83,7 @@ flowchart LR
         BWS[Binance WebSocket]
         BREST[Binance REST / CCXT]
         NEWS[RSS news]
-        SOCIAL[Reddit / Fear & Greed / optional X]
+        POSITIONING[Funding / OI / long-short / cross-venue]
     end
 
     subgraph Data[Market data plane]
@@ -117,7 +117,7 @@ flowchart LR
     BREST --> CACHE
     INGEST --> CACHE --> FEATURES
     NEWS --> ANALYSTS
-    SOCIAL --> ANALYSTS
+    POSITIONING --> ANALYSTS
     FEATURES --> ANALYSTS --> MANAGER --> RULEGEN --> VALIDATOR --> REPLAY --> REGISTRY
     FEATURES --> JEV --> GATE --> PAPER
     REGISTRY --> GATE
@@ -216,12 +216,14 @@ sequenceDiagram
 
 1. The scheduler creates `decision_tick_id` from the UTC five-second bucket and symbol.
 2. The feature builder reads the latest stream state, closed 1h indicators, funding,
-   open interest, long/short ratio, and cached sentiment. It persists the exact input.
+   open interest, long/short ratio, and cached positioning sentiment. It persists the
+   exact input.
 3. Required features must meet per-field TTLs. A stale required field produces a
    persisted blocked decision without calling Jev.
-4. The Jev adapter calls OpenRouter using base URL `https://openrouter.ai/api/v1` and
-   pinned model `typesafe/jev-1.13`. It records latency, token usage, provider request
-   ID, model ID, and the raw typed response.
+4. The Jev adapter calls OpenRouter Decisions at
+   `https://openrouter.ai/api/alpha/decisions` with pinned model
+   `typesafe/jev-1.13`. It records latency, token usage, provider request ID, model ID,
+   and request/response hashes; raw prompts and responses are not persisted.
 5. The gate maps the response to a target exposure and evaluates it against the active
    immutable rule version and current hard-risk state.
 6. An authorized exposure transition becomes one idempotent simulated market order.
@@ -390,9 +392,12 @@ commands are:
 - Flatten the paper position with a reduce-only command.
 - Roll back to the immediately preceding champion.
 - Enable or disable non-critical Telegram notifications.
+- Test, activate, or deactivate redacted model-provider profiles through the worker
+  command queue. Provider secrets remain CLI-only.
 
-Commands are authenticated, CSRF-protected, idempotent, and appended to the audit log.
-The dashboard never reads or writes secret values.
+Commands use an explicit Bearer control token rather than cookie authentication, require
+idempotency keys for provider mutations, and are appended to the audit log. The dashboard
+never mounts, reads, or writes secret values.
 
 ## 7. Consistency, Idempotency, and Replay
 
@@ -414,19 +419,19 @@ latency. The system never silently substitutes receive time for a missing event 
 
 - The VPS exposes no public dashboard port. Operators connect through an SSH tunnel or
   private VPN; FastAPI binds to localhost by default.
-- API credentials live in a root-readable secrets file or container secret, outside
+- API credentials live in an owner-readable `0600` secrets file, outside
   the repository and database. Logs redact authorization headers and secret-shaped
   fields.
 - V1 does not store a Binance trading key. Public market-data access is sufficient for
   the paper venue.
-- RSS, Reddit, X, and all article bodies are untrusted text. They are length-limited,
+- RSS titles/summaries and all external text are untrusted data. They are length-limited,
   tagged by source, passed only in data fields, and prevented from selecting tools,
   schemas, models, URLs, or system prompts.
 - Generated rules use strict JSON schemas with unknown fields forbidden. No expression
   evaluation, dynamic imports, subprocesses, or generated Python are supported.
-- Operator commands use session authentication, CSRF protection, confirmation for
-  flatten/rollback, and immutable audit records.
-- Raw social/news content has a 30-day retention default; normalized evidence and
+- Operator commands use explicit Bearer authentication, idempotency, confirmation for
+  flatten/rollback, and immutable audit records. Cookie sessions are not used.
+- Raw news content has a 30-day retention default; normalized evidence and
   hashes are retained with the evaluation record. Trading/audit records are retained
   for the entire paper campaign.
 - Backups are encrypted in transit and at rest, tested monthly, and never include
@@ -474,7 +479,7 @@ Before a paper campaign starts, automated tests must cover:
 - Hyperliquid reconnect, frame checksums, cross-venue normalization, shadow isolation,
   and baseline-vs-overlay replay using identical decisions.
 - Prompt-injection attempts in every external-text field.
-- Dashboard secret redaction, authorization, CSRF, and command auditing.
+- Dashboard secret redaction, Bearer authorization, idempotency, and command auditing.
 
 The final pre-campaign gate is a 72-hour soak with zero duplicate fills, zero ledger
 reconciliation errors, no lost decision events, and successful fault injection for

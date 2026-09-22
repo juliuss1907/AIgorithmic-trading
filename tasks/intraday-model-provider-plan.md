@@ -17,7 +17,7 @@ fall back to HOLD; LLM failures retain the last valid thesis and champion.
 
 ## Delivery order
 
-1. Contracts, SQLite v2 migration, and secure profile file.
+1. Contracts, additive SQLite migrations, and secure profile file.
 2. Provider CLI, live preflight, assignments, and audit telemetry.
 3. Jev adapter and paper-runtime integration.
 4. Structured LLM reports, thesis, bounded rule candidate, and scheduler.

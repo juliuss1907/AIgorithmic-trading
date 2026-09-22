@@ -197,6 +197,15 @@ def test_secret_store_writes_mode_0600_and_never_exposes_key_in_repr(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_secret_store_can_initialize_a_precreated_empty_mount_file(tmp_path):
+    path = tmp_path / "providers.toml"
+    path.touch(mode=0o600)
+
+    ProviderSecretStore(path).upsert(profile(), "private-key")
+
+    assert ProviderSecretStore(path).get("jev-openrouter").api_key == "private-key"
+
+
 def test_secret_store_rejects_group_readable_files_and_symlinks(tmp_path):
     path = tmp_path / "providers.toml"
     secret_store = ProviderSecretStore(path)

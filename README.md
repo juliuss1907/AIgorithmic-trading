@@ -33,16 +33,20 @@ uv run --frozen python -m intraday serve
 Mở `http://127.0.0.1:8081`. Dữ liệu riêng nằm tại
 `state/intraday/intraday.sqlite3`; không dùng chung paper account với `lab/`.
 Thiết kế và các launch gate nằm ở
-[docs/crypto-intraday-system-design.md](docs/crypto-intraday-system-design.md).
+[docs/crypto-intraday-system-design.md](docs/crypto-intraday-system-design.md); thao tác
+credential/activation nằm trong
+[docs/intraday-provider-runbook.md](docs/intraday-provider-runbook.md).
 
 Triển khai Docker cần tạo `.env.intraday` từ `.env.example`, thay control token, rồi:
 
 ```bash
-docker compose -f deploy/intraday/compose.yaml up --build -d
+docker compose --env-file .env.intraday -f deploy/intraday/compose.yaml up --build -d
 ```
 
 Port dashboard chỉ publish trên loopback. Jev/LLM thật vẫn bị khóa cho tới khi hoàn tất
-replay và soak test; `OPENROUTER_API_KEY` trong file mẫu chưa được sử dụng ở milestone này.
+live preflight và activation có audit. Jev được phép tạo quyết định cho **paper account**;
+LLM chỉ tạo report/thesis và rule candidate, còn candidate phải qua replay 90 ngày rồi
+challenger tối thiểu 14 ngày/30 closed trades. Không có đường đặt lệnh thật.
 Cross-venue overlay cũng không thể chuyển sang `active` chỉ bằng sửa `.env`: SQLite phải
 có evaluation record `promote` sau tối thiểu 14 ngày, coverage 95%, 100 quyết định khác
 Hold và 30 closed trades. Replay baseline-vs-overlay dùng:
@@ -54,13 +58,55 @@ uv run --frozen python -m intraday cross-venue-evaluate \
   --evidence evidence/cross-venue-evaluation.json
 ```
 
+### Kết nối Jev và LLM qua CLI
+
+Secret được lưu trong TOML ngoài Git/SQLite, phải thuộc current user và có mode `0600`.
+Không có tham số `--api-key`; nhập ẩn tại prompt hoặc pipe qua stdin có chủ đích:
+
+```bash
+uv run --frozen python -m intraday provider add jev-openrouter \
+  --role jev --kind openrouter-decisions --model typesafe/jev-1.13
+uv run --frozen python -m intraday provider test jev-openrouter
+uv run --frozen python -m intraday provider activate jev jev-openrouter
+
+uv run --frozen python -m intraday provider add llm-main \
+  --role llm --kind openai-compatible \
+  --base-url https://api.openai.com/v1 --model YOUR_MODEL
+uv run --frozen python -m intraday provider test llm-main
+uv run --frozen python -m intraday provider activate llm llm-main
+uv run --frozen python -m intraday provider list
+```
+
+`test` thực hiện một request nhỏ có tính phí. `activate` chỉ chấp nhận preflight thành
+công trong 10 phút gần nhất. Assignment mới được worker đọc ở tick 5 giây kế tiếp.
+Jev lỗi/timeout/circuit-open luôn thành `Hold`; hard-risk exit vẫn chạy. LLM lỗi giữ
+thesis/champion hợp lệ gần nhất. Dashboard tại `/api/providers` và `/api/analysts` chỉ
+trả metadata đã che; mutation cần Bearer control token và `Idempotency-Key`.
+
+Với Docker, tạo file trước để bind mount không biến nó thành directory:
+
+```bash
+install -d -m 700 state/provider-secrets
+install -m 600 /dev/null state/provider-secrets/provider-secrets.toml
+docker compose --env-file .env.intraday -f deploy/intraday/compose.yaml \
+  --profile admin run --rm admin \
+  provider add jev-openrouter --role jev --kind openrouter-decisions \
+  --model typesafe/jev-1.13 --database /app/state/intraday/intraday.sqlite3 \
+  --secrets-file /run/provider-secrets/provider-secrets.toml
+```
+
+Service `admin` mount secret read-write để quản lý profile; `worker` mount read-only;
+`web` không mount file này. Sau khi thêm profile, chạy `provider test` rồi `provider
+activate` bằng cùng mẫu `docker compose ... run --rm admin`.
+
 News worker hiện allowlist RSS của SEC, CFTC, Fed, CoinDesk, Decrypt và Cointelegraph.
 The Block, Wu Blockchain và Binance announcements được hiện là `disabled` kèm lý do
 thay vì dùng scraper hoặc nguồn mirror không được xác minh.
 
-Hệ thống hiện là **bot thuật toán BTCUSDT + AI copilot chỉ đọc**. Quy tắc deterministic tạo signal
-và paper order; AI chỉ giải thích evidence, không thể đặt lệnh. Binance integration chỉ dùng public
-market-data API; dự án không có endpoint giao dịch thật.
+Hệ thống hiện là **bot thuật toán BTCUSDT + Jev paper-active + LLM có gate**. Jev đề xuất
+hướng đi nhưng deterministic risk kernel mới có quyền tạo paper fill; LLM chỉ tạo evidence
+và candidate bị giữ sau replay/promotion. Binance integration chỉ dùng public market-data API;
+dự án không có endpoint giao dịch thật.
 
 ## Kết quả BTC hiện tại
 

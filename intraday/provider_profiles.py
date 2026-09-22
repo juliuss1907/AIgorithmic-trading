@@ -39,7 +39,7 @@ class ProviderSecretStore:
             raise PermissionError("provider secret file must not be a symlink")
         if not stat.S_ISREG(details.st_mode):
             raise PermissionError("provider secret path must be a regular file")
-        if details.st_uid != os.getuid():
+        if os.geteuid() != 0 and details.st_uid != os.getuid():
             raise PermissionError("provider secret file must be owned by the current user")
         if stat.S_IMODE(details.st_mode) != 0o600:
             raise PermissionError("provider secret file permissions must be 0600")
@@ -47,6 +47,8 @@ class ProviderSecretStore:
     def _read_all(self) -> dict[str, ProviderCredential]:
         self._validate_existing_file()
         if not self.path.exists():
+            return {}
+        if self.path.stat().st_size == 0:
             return {}
         flags = os.O_RDONLY
         if hasattr(os, "O_NOFOLLOW"):

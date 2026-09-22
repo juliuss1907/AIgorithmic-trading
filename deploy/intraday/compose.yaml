@@ -6,8 +6,14 @@ services:
     command: ["run"]
     env_file:
       - ../../.env.intraday
+    environment:
+      INTRADAY_PROVIDER_SECRETS_FILE: /run/provider-secrets/provider-secrets.toml
     volumes:
       - intraday-state:/app/state/intraday
+      - type: bind
+        source: ${INTRADAY_PROVIDER_SECRETS_HOST_DIR:-../../state/provider-secrets}
+        target: /run/provider-secrets
+        read_only: true
     restart: unless-stopped
 
   web:
@@ -27,6 +33,22 @@ services:
       timeout: 5s
       retries: 3
     restart: unless-stopped
+
+  admin:
+    profiles: ["admin"]
+    build:
+      context: ../..
+      dockerfile: deploy/intraday/Dockerfile
+    env_file:
+      - ../../.env.intraday
+    environment:
+      INTRADAY_PROVIDER_SECRETS_FILE: /run/provider-secrets/provider-secrets.toml
+    volumes:
+      - intraday-state:/app/state/intraday
+      - type: bind
+        source: ${INTRADAY_PROVIDER_SECRETS_HOST_DIR:-../../state/provider-secrets}
+        target: /run/provider-secrets
+    command: ["doctor"]
 
 volumes:
   intraday-state:
