@@ -13,13 +13,33 @@ process is not root.
 
 ## Local setup
 
+Install the repository as an editable global tool once:
+
+```bash
+uv sync --frozen
+uv tool install --editable .
+uv tool update-shell
+aigt --version
+```
+
+The default paper database is
+`${XDG_STATE_HOME:-~/.local/state}/aigorithmic-trading/intraday.sqlite3`. To retain the
+legacy repository-local account, copy it once with SQLite integrity checks:
+
+```bash
+aigt migrate-state --from state/intraday/intraday.sqlite3
+```
+
+The migration never removes its source and refuses to overwrite an existing target.
+Stop the old worker before migrating, then use `aigt` for subsequent runs.
+
 Use the hidden prompt for normal interactive setup:
 
 ```bash
-uv run --frozen python -m intraday provider add jev-openrouter \
+aigt provider add jev-openrouter \
   --role jev --kind openrouter-decisions --model typesafe/jev-1.13
 
-uv run --frozen python -m intraday provider add llm-main \
+aigt provider add llm-main \
   --role llm --kind openai-compatible \
   --base-url https://api.openai.com/v1 --model YOUR_MODEL
 ```
@@ -30,12 +50,12 @@ argument, `.env`, shell history, issue, or log.
 Each profile must pass a live preflight before activation:
 
 ```bash
-uv run --frozen python -m intraday provider test jev-openrouter
-uv run --frozen python -m intraday provider activate jev jev-openrouter
-uv run --frozen python -m intraday provider test llm-main
-uv run --frozen python -m intraday provider activate llm llm-main
-uv run --frozen python -m intraday provider list
-uv run --frozen python -m intraday doctor
+aigt provider test jev-openrouter
+aigt provider activate jev jev-openrouter
+aigt provider test llm-main
+aigt provider activate llm llm-main
+aigt provider list
+aigt doctor
 ```
 
 Preflight success expires after 10 minutes. Jev activation is observed atomically at
@@ -46,8 +66,8 @@ To rotate a key, run `provider add ... --replace`, preflight the new fingerprint
 activate it. To stop model use without deleting metadata:
 
 ```bash
-uv run --frozen python -m intraday provider deactivate jev
-uv run --frozen python -m intraday provider deactivate llm
+aigt provider deactivate jev
+aigt provider deactivate llm
 ```
 
 An active profile cannot be removed. Deactivate it first, then use `provider remove`.
@@ -118,9 +138,9 @@ a temporary environment variable or invoke provider commands through the local C
 Inspect redacted status with:
 
 ```bash
-uv run --frozen python -m intraday doctor
-uv run --frozen python -m intraday provider list
-uv run --frozen python -m intraday analysis
+aigt doctor
+aigt provider list
+aigt analysis
 ```
 
 ## Protocol references

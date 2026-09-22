@@ -9,29 +9,50 @@ provider typed, chạy deterministic risk gate rồi mới mô phỏng perpetual
 Hyperliquid được thu thập như evidence liên thị trường ở chế độ `shadow`: WebSocket cho
 L2 book, REST 30 giây cho funding/OI/mark/oracle. Mất dữ liệu DEX không chặn Binance.
 
+Cài command global một lần từ repository:
+
+```bash
+uv sync --frozen
+uv tool install --editable .
+uv tool update-shell
+aigt --version
+```
+
+Sau khi mở terminal mới, `aigt` dùng được ở mọi thư mục. `python -m intraday` vẫn được
+giữ làm đường tương thích/debug trong project environment.
+
 Kiểm tra cấu hình an toàn và chạy một vòng stub:
 
 ```bash
-uv run --frozen python -m intraday doctor
-uv run --frozen python -m intraday run --once
-uv run --frozen python -m intraday cross-venue-status
+aigt doctor
+aigt run --once
+aigt cross-venue-status
 ```
 
 `stub` mặc định trả `Hold`. Muốn kiểm tra toàn bộ đường paper fill có chủ đích:
 
 ```bash
-uv run --frozen python -m intraday run --once --direction Buy
+aigt run --once --direction Buy
 ```
 
 Chạy worker liên tục và dashboard cục bộ trong hai terminal:
 
 ```bash
-uv run --frozen python -m intraday run
-uv run --frozen python -m intraday serve
+aigt run
+aigt serve
 ```
 
-Mở `http://127.0.0.1:8081`. Dữ liệu riêng nằm tại
-`state/intraday/intraday.sqlite3`; không dùng chung paper account với `lab/`.
+Mở `http://127.0.0.1:8081`. Mặc định dữ liệu nằm tại
+`${XDG_STATE_HOME:-~/.local/state}/aigorithmic-trading/intraday.sqlite3`; không dùng
+chung paper account với `lab/`. Để copy paper database cũ mà không xóa nguồn:
+
+```bash
+aigt migrate-state --from state/intraday/intraday.sqlite3
+```
+
+Migration từ chối ghi đè database đích đã tồn tại. Có thể chọn database khác bằng
+`--database`; mọi command dùng thứ tự ưu tiên `--database`, `INTRADAY_DATABASE`, rồi
+XDG state.
 Thiết kế và các launch gate nằm ở
 [docs/crypto-intraday-system-design.md](docs/crypto-intraday-system-design.md); thao tác
 credential/activation nằm trong
@@ -52,9 +73,9 @@ có evaluation record `promote` sau tối thiểu 14 ngày, coverage 95%, 100 qu
 Hold và 30 closed trades. Replay baseline-vs-overlay dùng:
 
 ```bash
-uv run --frozen python -m intraday cross-venue-replay \
+aigt cross-venue-replay \
   --output-dir state/intraday/cross-venue-replay
-uv run --frozen python -m intraday cross-venue-evaluate \
+aigt cross-venue-evaluate \
   --evidence evidence/cross-venue-evaluation.json
 ```
 
@@ -64,17 +85,17 @@ Secret được lưu trong TOML ngoài Git/SQLite, phải thuộc current user v
 Không có tham số `--api-key`; nhập ẩn tại prompt hoặc pipe qua stdin có chủ đích:
 
 ```bash
-uv run --frozen python -m intraday provider add jev-openrouter \
+aigt provider add jev-openrouter \
   --role jev --kind openrouter-decisions --model typesafe/jev-1.13
-uv run --frozen python -m intraday provider test jev-openrouter
-uv run --frozen python -m intraday provider activate jev jev-openrouter
+aigt provider test jev-openrouter
+aigt provider activate jev jev-openrouter
 
-uv run --frozen python -m intraday provider add llm-main \
+aigt provider add llm-main \
   --role llm --kind openai-compatible \
   --base-url https://api.openai.com/v1 --model YOUR_MODEL
-uv run --frozen python -m intraday provider test llm-main
-uv run --frozen python -m intraday provider activate llm llm-main
-uv run --frozen python -m intraday provider list
+aigt provider test llm-main
+aigt provider activate llm llm-main
+aigt provider list
 ```
 
 `test` thực hiện một request nhỏ có tính phí. `activate` chỉ chấp nhận preflight thành
