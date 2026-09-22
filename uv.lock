@@ -2377,7 +2377,7 @@ wheels = [
 [[package]]
 name = "system-trading-lab"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "exchange-calendars" },
     { name = "fastapi" },

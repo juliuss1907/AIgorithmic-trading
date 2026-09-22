@@ -2,7 +2,9 @@ import json
 import sqlite3
 import stat
 import sys
+import tomllib
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +16,7 @@ from intraday.store import IntradayStore
 
 
 NOW = datetime(2026, 9, 21, 2, 0, tzinfo=timezone.utc)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def snapshot(at=NOW):
@@ -26,6 +29,39 @@ def snapshot(at=NOW):
         features={"price": 100_000, "mark_price": 100_000},
         freshness={"candles": True, "order_book": True},
     )
+
+
+def test_project_exports_aigt_console_script():
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as handle:
+        project = tomllib.load(handle)
+
+    assert project["project"]["scripts"]["aigt"] == "intraday.__main__:main"
+    assert project["build-system"]["build-backend"] == "uv_build"
+    assert project["tool"]["uv"]["build-backend"]["module-name"] == [
+        "intraday",
+        "lab",
+    ]
+
+
+def test_bare_aigt_prints_help_and_exits_successfully(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["aigt"])
+
+    main()
+
+    output = capsys.readouterr().out
+    assert output.startswith("usage: aigt")
+    assert "provider" in output
+    assert "migrate-state" in output
+
+
+def test_aigt_version_uses_project_version(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["aigt", "--version"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        main()
+
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out == "aigt 0.1.0\n"
 
 
 def test_default_paths_use_xdg_directories(monkeypatch, tmp_path):

@@ -14,6 +14,7 @@ import time
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from intraday.config import (
@@ -42,9 +43,19 @@ from intraday.runtime import run_analysis_cycle, run_news_cycle, run_once
 from intraday.store import IntradayStore
 
 
+def _project_version() -> str:
+    try:
+        return version("system-trading-lab")
+    except PackageNotFoundError:
+        return "0.1.0"
+
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="intraday")
-    commands = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(prog="aigt")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {_project_version()}"
+    )
+    commands = parser.add_subparsers(dest="command")
     for name in (
         "doctor", "collect", "news", "analysis", "run", "cross-venue-status",
         "cross-venue-replay", "cross-venue-evaluate",
@@ -299,7 +310,11 @@ def _analysis_loop(config: IntradayConfig) -> None:
 
 
 def main() -> None:
-    arguments = _parser().parse_args()
+    parser = _parser()
+    arguments = parser.parse_args()
+    if arguments.command is None:
+        parser.print_help()
+        return
     if arguments.command == "migrate-state":
         print(json.dumps(_migrate_state(arguments.source, arguments.database), indent=2))
         return
