@@ -66,6 +66,7 @@ h2 { margin-bottom: 0.25rem; font-size: 0.875rem; font-weight: 600; letter-spaci
 .strip small span { display: block; }
 
 .ledger { padding: 3rem 0; }
+.intelligence { padding: 3rem 0 0; }
 .section-head { display: flex; justify-content: space-between; align-items: end; gap: 1rem; margin-bottom: 1rem; }
 .section-head h2 { font: 500 1.75rem/1.2 Georgia, serif; }
 .section-head small { color: var(--muted); }
@@ -77,7 +78,24 @@ tbody tr:last-child td { border-bottom: 0; }
 code { color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.8125rem; }
 .direction { display: inline-block; padding: 0.125rem 0.5rem; border: 1px solid var(--line); border-radius: 999px; }
 .empty { padding: 3rem 1.5rem; border: 1px dashed var(--line); border-radius: var(--radius); text-align: center; }
-.empty p { margin: 0.25rem 0 0; color: var(--muted); }
+.empty p { margin: 0.25rem 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.thesis {
+  display: grid;
+  grid-template-columns: minmax(10rem, 0.7fr) minmax(18rem, 2fr) auto;
+  gap: 1.5rem;
+  align-items: start;
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.thesis strong, .thesis small, .report-grid strong { display: block; }
+.thesis p { margin-bottom: 0; }
+.thesis small { color: var(--muted); text-align: right; }
+.label { color: var(--muted); font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; }
+.report-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin-top: 1px; background: var(--line); }
+.report-grid article { min-width: 0; padding: 1.25rem; background: var(--paper); }
+.report-grid strong { margin-top: 0.5rem; font: 500 1.25rem/1.2 Georgia, serif; }
+.report-grid p { margin: 0.75rem 0 0; color: var(--muted); }
 footer { padding: 1.5rem 0 3rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.875rem; }
 footer p { margin-bottom: 0; }
 
@@ -90,11 +108,15 @@ footer p { margin-bottom: 0; }
   .strip article:nth-child(4) { border-top: 1px solid var(--line); }
   .strip article:nth-child(5) { border-left: 0; border-top: 1px solid var(--line); }
   .section-head { align-items: start; flex-direction: column; }
+  .thesis { grid-template-columns: 1fr; }
+  .thesis small { text-align: left; }
+  .report-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 40rem) {
   .strip { grid-template-columns: 1fr; }
   .strip article + article { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
+  .empty { padding-inline: 1rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

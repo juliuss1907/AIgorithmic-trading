@@ -56,6 +56,80 @@
         </article>
       </section>
 
+      <section class="intelligence" aria-labelledby="intelligence-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Cold path · structured output</p>
+            <h2 id="intelligence-heading">Market intelligence</h2>
+          </div>
+          <small>UTC model cost today: ${{ "%.4f"|format(daily_model_cost) }}</small>
+        </div>
+        {% if thesis %}
+        <article class="thesis">
+          <div>
+            <span class="label">Current thesis</span>
+            <strong>{{ thesis.stance|capitalize }} · {{ "%.0f"|format(thesis.confidence * 100) }}%</strong>
+          </div>
+          <p>{{ thesis.summary }}</p>
+          <small>{{ thesis.horizon_minutes }} minute horizon · {{ thesis.generated_at.isoformat() }}</small>
+        </article>
+        <div class="report-grid">
+          {% for name in ("market", "news", "sentiment") %}
+          {% set report = analyst_reports.get(name) %}
+          <article>
+            <span class="label">{{ name|capitalize }} analyst</span>
+            {% if report %}
+            <strong>{{ report.assessment.stance|capitalize }} · {{ "%.0f"|format(report.assessment.confidence * 100) }}%</strong>
+            <p>{{ report.assessment.summary }}</p>
+            {% else %}
+            <strong>Waiting</strong>
+            <p>No schema-valid report has been recorded.</p>
+            {% endif %}
+          </article>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty" role="status">
+          <strong>No completed analysis cycle yet.</strong>
+          <p>Activate an LLM profile after its live preflight succeeds.</p>
+        </div>
+        {% endif %}
+      </section>
+
+      <section class="ledger" aria-labelledby="provider-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Redacted configuration</p>
+            <h2 id="provider-heading">Model providers</h2>
+          </div>
+          <small>Credentials are CLI-only and never enter this process</small>
+        </div>
+        {% if provider_profiles %}
+        <div class="table-wrap" tabindex="0" aria-label="Provider profiles">
+          <table>
+            <thead><tr><th>Role</th><th>Profile</th><th>Model</th><th>State</th><th>Preflight</th><th>Latency</th></tr></thead>
+            <tbody>
+              {% for provider in provider_profiles %}
+              <tr>
+                <td>{{ provider.role|upper }}</td>
+                <td><code>{{ provider.profile_id }}</code></td>
+                <td>{{ provider.model }}</td>
+                <td>{{ "Active" if provider_assignments.get(provider.role) and provider_assignments.get(provider.role).profile_id == provider.profile_id else "Standby" }}</td>
+                <td>{{ provider.last_test_status or "Not tested" }}</td>
+                <td>{{ (provider.latency_ms|string + " ms") if provider.latency_ms is not none else "—" }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty" role="status">
+          <strong>No provider profile configured.</strong>
+          <p>Add credentials with the local CLI; the dashboard only exposes redacted metadata.</p>
+        </div>
+        {% endif %}
+      </section>
+
       <section class="ledger" aria-labelledby="decision-heading">
         <div class="section-head">
           <div>

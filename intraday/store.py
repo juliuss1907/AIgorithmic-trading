@@ -451,17 +451,40 @@ class IntradayStore:
             for row in reversed(rows)
         ]
 
-    def enqueue_command(self, command_id: str, kind: str, created_at: datetime, *, actor: str):
-        allowed = {"pause_entries", "resume_entries", "flatten", "rollback", "toggle_notifications"}
+    def enqueue_command(
+        self,
+        command_id: str,
+        kind: str,
+        created_at: datetime,
+        *,
+        actor: str,
+        payload: dict | None = None,
+    ):
+        allowed = {
+            "pause_entries", "resume_entries", "flatten", "rollback",
+            "toggle_notifications", "provider_test", "provider_activate",
+            "provider_deactivate",
+        }
         if kind not in allowed:
             raise ValueError("unsupported operator command")
+        payload_json = (
+            json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            if payload is not None else None
+        )
         with self._connect() as connection:
             connection.execute(
                 "INSERT OR IGNORE INTO commands "
-                "(id, kind, actor, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
-                (command_id, kind, actor, created_at.isoformat()),
+                "(id, kind, actor, status, created_at, payload_json) "
+                "VALUES (?, ?, ?, 'pending', ?, ?)",
+                (command_id, kind, actor, created_at.isoformat(), payload_json),
             )
             row = connection.execute("SELECT * FROM commands WHERE id = ?", (command_id,)).fetchone()
+            if (
+                row["kind"] != kind
+                or row["actor"] != actor
+                or row["payload_json"] != payload_json
+            ):
+                raise ValueError("idempotency key conflicts with an existing command")
         return dict(row)
 
     def list_commands(self, *, status: str | None = None) -> list[dict]:
@@ -475,13 +498,34 @@ class IntradayStore:
             rows = connection.execute(query, parameters).fetchall()
         return [dict(row) for row in rows]
 
-    def finish_command(self, command_id: str, *, status: str) -> None:
+    def finish_command(
+        self,
+        command_id: str,
+        *,
+        status: str,
+        result: dict | None = None,
+        error_code: str | None = None,
+        applied_at: datetime | None = None,
+    ) -> None:
         if status not in {"applied", "rejected"}:
             raise ValueError("command status must be applied or rejected")
+        if status == "applied" and error_code is not None:
+            raise ValueError("applied command cannot have an error code")
+        result_json = (
+            json.dumps(result, sort_keys=True, separators=(",", ":"))
+            if result is not None else None
+        )
         with self._connect() as connection:
             cursor = connection.execute(
-                "UPDATE commands SET status = ? WHERE id = ? AND status = 'pending'",
-                (status, command_id),
+                "UPDATE commands SET status=?, result_json=?, error_code=?, applied_at=? "
+                "WHERE id=? AND status='pending'",
+                (
+                    status,
+                    result_json,
+                    error_code,
+                    (applied_at or datetime.now(timezone.utc)).isoformat(),
+                    command_id,
+                ),
             )
             if cursor.rowcount != 1:
                 raise ValueError("pending command not found")

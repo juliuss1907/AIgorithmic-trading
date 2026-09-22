@@ -323,9 +323,10 @@ def main() -> None:
 
     direction = Direction(arguments.direction)
     store = IntradayStore(config.database)
+    provider_secrets = ProviderSecretStore(config.provider_secrets_file)
     decision_provider = AssignedDecisionProvider(
         store,
-        ProviderSecretStore(config.provider_secrets_file),
+        provider_secrets,
         fallback=StubDecisionProvider(direction=direction),
     )
     if config.cross_venue_mode == "active" and not store.cross_venue_activation_allowed():
@@ -378,6 +379,7 @@ def main() -> None:
                 cross_venue_mode=config.cross_venue_mode,
                 cross_venue_policy=cross_venue_policy,
                 decision_provider=decision_provider,
+                secret_store=provider_secrets,
                 now=now,
             )
             print(json.dumps(result), flush=True)

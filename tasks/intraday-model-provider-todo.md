@@ -7,5 +7,5 @@
 - [x] Wire active Jev into the long-running paper worker.
 - [x] Add structured five-stage LLM analysis pipeline and hourly scheduling.
 - [x] Add bounded candidate generation and deferred replay/promotion lifecycle.
-- [ ] Add authenticated provider/analyst dashboard operations.
+- [x] Add authenticated provider/analyst dashboard operations.
 - [ ] Add Docker secret mounts, runbook, browser checks, and full verification.

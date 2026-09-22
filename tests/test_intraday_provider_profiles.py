@@ -21,6 +21,7 @@ from intraday.provider_client import (
     ProviderPreflightClient,
 )
 from intraday.__main__ import main
+from intraday.runtime import process_pending_commands
 
 
 NOW = datetime(2026, 9, 22, 10, 0, tzinfo=timezone.utc)
@@ -382,3 +383,46 @@ def test_provider_cli_test_activate_and_deactivate(monkeypatch, capsys, tmp_path
     main()
     assert json.loads(capsys.readouterr().out) == {"role": "jev", "active": False}
     assert IntradayStore(database).provider_assignment(ProviderRole.JEV) is None
+
+
+def test_worker_applies_queued_provider_test_and_activation(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    secrets = ProviderSecretStore(tmp_path / "providers.toml")
+    current = profile()
+    store.sync_provider_profile(current)
+    secrets.upsert(current, "private-key")
+    store.enqueue_command(
+        "web:test-1",
+        "provider_test",
+        NOW,
+        actor="dashboard",
+        payload={"profile_id": current.profile_id},
+    )
+
+    class SuccessfulPreflight:
+        def test(self, credential):
+            from intraday.provider_client import ProviderPreflightResult
+
+            assert credential.api_key == "private-key"
+            return ProviderPreflightResult(status="ok", latency_ms=25)
+
+    process_pending_commands(
+        store,
+        now=NOW,
+        secret_store=secrets,
+        preflight_client=SuccessfulPreflight(),
+    )
+    tested = store.list_commands()[0]
+    assert tested["status"] == "applied"
+    assert "private-key" not in str(tested)
+
+    store.enqueue_command(
+        "web:activate-1",
+        "provider_activate",
+        NOW,
+        actor="dashboard",
+        payload={"role": "jev", "profile_id": current.profile_id},
+    )
+    process_pending_commands(store, now=NOW, secret_store=secrets)
+
+    assert store.provider_assignment(ProviderRole.JEV)["profile_id"] == current.profile_id

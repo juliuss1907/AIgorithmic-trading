@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from intraday.contracts import Direction, FeatureSnapshot
+from intraday.contracts import Direction, FeatureSnapshot, ProviderRole
 from intraday.cross_venue import CrossVenuePolicy
 from intraday.engine import IntradayEngine
 from intraday.news import NewsIntelligence
@@ -17,9 +18,93 @@ from intraday.llm_pipeline import (
     should_generate_rule,
 )
 from intraday.provider_profiles import ProviderSecretStore
+from intraday.provider_client import ProviderPreflightClient
 from intraday.providers import DecisionProvider, StubDecisionProvider
 from intraday.rules import advance_rule_lifecycle
 from intraday.store import IntradayStore
+
+
+def process_pending_commands(
+    store: IntradayStore,
+    *,
+    now: datetime,
+    engine: IntradayEngine | None = None,
+    snapshot: FeatureSnapshot | None = None,
+    secret_store: ProviderSecretStore | None = None,
+    preflight_client: ProviderPreflightClient | None = None,
+) -> None:
+    for command in store.list_commands(status="pending"):
+        result = None
+        try:
+            payload = json.loads(command["payload_json"]) if command["payload_json"] else {}
+            if command["kind"] == "provider_test":
+                if secret_store is None:
+                    raise ValueError("provider secret store is unavailable")
+                profile_id = payload["profile_id"]
+                preflight = (preflight_client or ProviderPreflightClient()).test(
+                    secret_store.get(profile_id)
+                )
+                store.record_provider_test(
+                    profile_id,
+                    status=preflight.status,
+                    tested_at=now,
+                    latency_ms=preflight.latency_ms,
+                    error_code=preflight.error_code,
+                )
+                result = {
+                    "profile_id": profile_id,
+                    "status": preflight.status,
+                    "latency_ms": preflight.latency_ms,
+                    "error_code": preflight.error_code,
+                    "provider_request_id": preflight.provider_request_id,
+                }
+                if preflight.status != "ok":
+                    store.finish_command(
+                        command["id"], status="rejected", result=result,
+                        error_code=preflight.error_code, applied_at=now,
+                    )
+                    continue
+            elif command["kind"] == "provider_activate":
+                role = ProviderRole(payload["role"])
+                profile_id = payload["profile_id"]
+                if secret_store is None:
+                    raise ValueError("provider secret store is unavailable")
+                credential = secret_store.get(profile_id)
+                profile = store.provider_profile(profile_id)
+                if profile is None or credential.profile.fingerprint != profile.fingerprint:
+                    raise ValueError("provider profile secret mismatch")
+                result = store.activate_provider(
+                    role, profile_id, actor=command["actor"], now=now
+                )
+            elif command["kind"] == "provider_deactivate":
+                role = ProviderRole(payload["role"])
+                store.deactivate_provider(role)
+                result = {"role": role.value, "active": False}
+            elif engine is None or snapshot is None:
+                continue
+            elif command["kind"] == "pause_entries":
+                engine.pause_entries("operator_pause", now=now)
+            elif command["kind"] == "resume_entries":
+                engine.resume_entries(now=now)
+            elif command["kind"] == "rollback":
+                store.rollback_champion(now=now)
+                engine.reload_active_rule()
+            elif command["kind"] == "toggle_notifications":
+                engine.notifications_enabled = not engine.notifications_enabled
+                store.save_runtime_state(engine._runtime_state(), updated_at=now)
+            elif command["kind"] == "flatten":
+                engine.manual_flatten(snapshot, command_id=command["id"], now=now)
+            else:
+                raise ValueError("unsupported pending command")
+        except (ValueError, KeyError, json.JSONDecodeError) as error:
+            store.finish_command(
+                command["id"], status="rejected",
+                error_code=type(error).__name__, applied_at=now,
+            )
+        else:
+            store.finish_command(
+                command["id"], status="applied", result=result, applied_at=now
+            )
 
 
 def run_once(
@@ -31,6 +116,7 @@ def run_once(
     cross_venue_mode: str = "off",
     cross_venue_policy: CrossVenuePolicy | None = None,
     decision_provider: DecisionProvider | None = None,
+    secret_store: ProviderSecretStore | None = None,
     now: datetime | None = None,
 ) -> dict:
     store = IntradayStore(database)
@@ -41,32 +127,13 @@ def run_once(
         cross_venue_mode=cross_venue_mode,
         cross_venue_policy=cross_venue_policy,
     )
-    for command in store.list_commands(status="pending"):
-        try:
-            if command["kind"] == "pause_entries":
-                engine.pause_entries("operator_pause", now=now or snapshot.built_at)
-            elif command["kind"] == "resume_entries":
-                engine.resume_entries(now=now or snapshot.built_at)
-            elif command["kind"] == "rollback":
-                store.rollback_champion(now=now or snapshot.built_at)
-                engine.reload_active_rule()
-            elif command["kind"] == "toggle_notifications":
-                engine.notifications_enabled = not engine.notifications_enabled
-                store.save_runtime_state(
-                    engine._runtime_state(), updated_at=now or snapshot.built_at
-                )
-            elif command["kind"] == "flatten":
-                engine.manual_flatten(
-                    snapshot,
-                    command_id=command["id"],
-                    now=now or snapshot.built_at,
-                )
-            else:
-                continue
-        except (ValueError, KeyError):
-            store.finish_command(command["id"], status="rejected")
-        else:
-            store.finish_command(command["id"], status="applied")
+    process_pending_commands(
+        store,
+        now=now or snapshot.built_at,
+        engine=engine,
+        snapshot=snapshot,
+        secret_store=secret_store,
+    )
     result = engine.run_tick(snapshot, now=now or datetime.now(timezone.utc))
     return {
         "tick_id": result.decision.tick_id,
