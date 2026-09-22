@@ -28,6 +28,7 @@ from intraday.cross_venue_evaluation import (
 from intraday.hyperliquid import HyperliquidFeed
 from intraday.market import BinanceUsdMClient
 from intraday.notifications import TelegramNotifier, drain_outbox
+from intraday.provider_client import ProviderPreflightClient
 from intraday.provider_profiles import ProviderSecretStore
 from intraday.replay import compare_cross_venue
 from intraday.runtime import run_news_cycle, run_once
@@ -54,9 +55,9 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--database", default=None)
     provider = commands.add_parser("provider")
     provider_commands = provider.add_subparsers(dest="provider_command", required=True)
-    for name in ("add", "list", "show", "remove"):
+    for name in ("add", "list", "show", "remove", "test"):
         command = provider_commands.add_parser(name)
-        if name in {"add", "show", "remove"}:
+        if name in {"add", "show", "remove", "test"}:
             command.add_argument("profile_id")
         command.add_argument("--database", default=None)
         command.add_argument("--secrets-file", default=None)
@@ -67,6 +68,15 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--model", required=True)
     add.add_argument("--api-key-stdin", action="store_true")
     add.add_argument("--replace", action="store_true")
+    activate = provider_commands.add_parser("activate")
+    activate.add_argument("role", choices=[item.value for item in ProviderRole])
+    activate.add_argument("profile_id")
+    activate.add_argument("--database", default=None)
+    activate.add_argument("--secrets-file", default=None)
+    deactivate = provider_commands.add_parser("deactivate")
+    deactivate.add_argument("role", choices=[item.value for item in ProviderRole])
+    deactivate.add_argument("--database", default=None)
+    deactivate.add_argument("--secrets-file", default=None)
     return parser
 
 
@@ -129,6 +139,22 @@ def _provider_cli(arguments) -> None:
         print(json.dumps(profiles, indent=2))
         return
 
+    if command == "activate":
+        assignment = store.activate_provider(
+            ProviderRole(arguments.role),
+            arguments.profile_id,
+            actor="cli",
+            now=datetime.now(timezone.utc),
+        )
+        print(json.dumps({**assignment, "active": True}, indent=2))
+        return
+
+    if command == "deactivate":
+        role = ProviderRole(arguments.role)
+        store.deactivate_provider(role)
+        print(json.dumps({"role": role.value, "active": False}, indent=2))
+        return
+
     profile = store.provider_profile(arguments.profile_id)
     if profile is None:
         raise SystemExit("unknown provider profile")
@@ -144,6 +170,27 @@ def _provider_cli(arguments) -> None:
             if item["profile_id"] == arguments.profile_id
         )
         print(json.dumps({**metadata, "has_secret": has_secret}, indent=2))
+        return
+
+    if command == "test":
+        result = ProviderPreflightClient().test(secret_store.get(arguments.profile_id))
+        store.record_provider_test(
+            arguments.profile_id,
+            status=result.status,
+            tested_at=datetime.now(timezone.utc),
+            latency_ms=result.latency_ms,
+            error_code=result.error_code,
+        )
+        output = {
+            "profile_id": arguments.profile_id,
+            "status": result.status,
+            "latency_ms": result.latency_ms,
+            "error_code": result.error_code,
+            "provider_request_id": result.provider_request_id,
+        }
+        print(json.dumps(output, indent=2))
+        if result.status != "ok":
+            raise SystemExit(1)
         return
 
     for role in ProviderRole:

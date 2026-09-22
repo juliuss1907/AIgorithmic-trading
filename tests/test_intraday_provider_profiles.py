@@ -16,6 +16,10 @@ from intraday.contracts import (
 )
 from intraday.store import IntradayStore
 from intraday.provider_profiles import ProviderSecretStore
+from intraday.provider_client import (
+    HttpResponse,
+    ProviderPreflightClient,
+)
 from intraday.__main__ import main
 
 
@@ -246,3 +250,132 @@ def test_provider_cli_add_and_list_redacts_api_key(monkeypatch, capsys, tmp_path
 
     assert "sk-or-private" not in listed_output
     assert json.loads(listed_output)[0]["has_secret"] is True
+
+
+def test_jev_preflight_uses_decisions_wire_contract_without_leaking_key():
+    requests = []
+
+    def transport(**request):
+        requests.append(request)
+        return HttpResponse(
+            status_code=200,
+            headers={"x-request-id": "request-1"},
+            body=json.dumps(
+                {"answers": {"reachable": {"noul": 1.0, "confidence": 1.0}}}
+            ).encode(),
+        )
+
+    from intraday.provider_profiles import ProviderCredential
+
+    result = ProviderPreflightClient(transport=transport).test(
+        ProviderCredential(profile(), "sk-or-private")
+    )
+
+    assert result.status == "ok"
+    assert result.provider_request_id == "request-1"
+    assert requests[0]["url"] == "https://openrouter.ai/api/alpha/decisions"
+    assert requests[0]["headers"]["Authorization"] == "Bearer sk-or-private"
+    payload = json.loads(requests[0]["body"])
+    assert payload["model"] == "typesafe/jev-1.13"
+    assert payload["questions"]["reachable"]["type"] == "noul"
+    assert "sk-or-private" not in repr(result)
+
+
+def test_llm_preflight_uses_openai_compatible_chat_completions():
+    requests = []
+
+    def transport(**request):
+        requests.append(request)
+        return HttpResponse(
+            status_code=200,
+            headers={},
+            body=b'{"choices":[{"message":{"content":"ok"}}]}',
+        )
+
+    from intraday.provider_profiles import ProviderCredential
+
+    current = profile("llm-main", role=ProviderRole.LLM)
+    result = ProviderPreflightClient(transport=transport).test(
+        ProviderCredential(current, "llm-private")
+    )
+
+    assert result.status == "ok"
+    assert requests[0]["url"] == "https://api.example.com/v1/chat/completions"
+    payload = json.loads(requests[0]["body"])
+    assert payload["model"] == "example/model"
+    assert payload["max_tokens"] == 1
+
+
+@pytest.mark.parametrize(
+    ("status_code", "error_code"),
+    [(401, "auth_failed"), (402, "insufficient_credits"), (429, "rate_limited")],
+)
+def test_preflight_normalizes_provider_errors(status_code, error_code):
+    def transport(**request):
+        return HttpResponse(
+            status_code=status_code,
+            headers={},
+            body=b'{"error":{"message":"provider rejected request"}}',
+        )
+
+    from intraday.provider_profiles import ProviderCredential
+
+    result = ProviderPreflightClient(transport=transport).test(
+        ProviderCredential(profile(), "never-return-this")
+    )
+
+    assert result.status == "error"
+    assert result.error_code == error_code
+    assert "never-return-this" not in repr(result)
+
+
+def test_provider_cli_test_activate_and_deactivate(monkeypatch, capsys, tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    secrets_file = tmp_path / "providers.toml"
+    current = profile()
+    ProviderSecretStore(secrets_file).upsert(current, "private-key")
+    IntradayStore(database).sync_provider_profile(current)
+
+    class SuccessfulPreflight:
+        def test(self, credential):
+            from intraday.provider_client import ProviderPreflightResult
+
+            return ProviderPreflightResult(
+                status="ok",
+                latency_ms=42,
+                provider_request_id="request-safe",
+            )
+
+    monkeypatch.setattr(
+        "intraday.__main__.ProviderPreflightClient", SuccessfulPreflight
+    )
+    common = ["--database", str(database), "--secrets-file", str(secrets_file)]
+
+    monkeypatch.setattr(
+        sys, "argv", ["intraday", "provider", "test", current.profile_id, *common]
+    )
+    main()
+    tested = json.loads(capsys.readouterr().out)
+    assert tested == {
+        "profile_id": current.profile_id,
+        "status": "ok",
+        "latency_ms": 42,
+        "error_code": None,
+        "provider_request_id": "request-safe",
+    }
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["intraday", "provider", "activate", "jev", current.profile_id, *common],
+    )
+    main()
+    assert json.loads(capsys.readouterr().out)["profile_id"] == current.profile_id
+    assert IntradayStore(database).provider_assignment(ProviderRole.JEV) is not None
+
+    monkeypatch.setattr(
+        sys, "argv", ["intraday", "provider", "deactivate", "jev", *common]
+    )
+    main()
+    assert json.loads(capsys.readouterr().out) == {"role": "jev", "active": False}
+    assert IntradayStore(database).provider_assignment(ProviderRole.JEV) is None
