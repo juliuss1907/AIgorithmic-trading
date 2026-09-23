@@ -27,6 +27,11 @@ class Direction(str, Enum):
     STRONG_SELL = "Strong Sell"
 
 
+class DecisionScope(str, Enum):
+    SPOT_DAILY = "spot_daily"
+    PERP_INTRADAY = "perp_intraday"
+
+
 class Regime(str, Enum):
     TRENDING_UP = "Trending Up"
     TRENDING_DOWN = "Trending Down"
@@ -184,6 +189,22 @@ class JevDecision(StrictContract):
     provider_request_id: str | None = Field(default=None, max_length=200)
 
     _created_at_is_aware = field_validator("created_at")(_aware)
+
+
+class ScopedJevDecision(StrictContract):
+    scope: DecisionScope
+    workflow: Literal["spot_daily_entry", "perp_intraday_entry"]
+    decision: JevDecision
+
+    @model_validator(mode="after")
+    def workflow_matches_scope(self):
+        expected = {
+            DecisionScope.SPOT_DAILY: "spot_daily_entry",
+            DecisionScope.PERP_INTRADAY: "perp_intraday_entry",
+        }[self.scope]
+        if self.workflow != expected:
+            raise ValueError("workflow must match the decision scope")
+        return self
 
 
 class RiskState(StrictContract):
@@ -560,6 +581,63 @@ class MarketThesis(StrictContract):
     _thesis_time_is_aware = field_validator("generated_at")(_aware)
 
 
+class HorizonThesis(StrictContract):
+    scope: DecisionScope
+    summary: str = Field(min_length=20, max_length=3000)
+    stance: Literal["bullish", "bearish", "neutral"]
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    key_levels: KeyLevels
+    risk_factors: tuple[str, ...] = Field(min_length=1, max_length=10)
+    horizon_minutes: int = Field(ge=30, le=10_080)
+
+    @model_validator(mode="after")
+    def horizon_matches_scope(self):
+        if (
+            self.scope == DecisionScope.PERP_INTRADAY
+            and self.horizon_minutes > 1_440
+        ):
+            raise ValueError("perp intraday horizon cannot exceed 1440 minutes")
+        if (
+            self.scope == DecisionScope.SPOT_DAILY
+            and self.horizon_minutes < 1_440
+        ):
+            raise ValueError("spot daily horizon must be at least 1440 minutes")
+        return self
+
+
+class MarketThesisBundle(StrictContract):
+    thesis_id: str = Field(min_length=1, max_length=128)
+    intraday: HorizonThesis
+    daily_swing: HorizonThesis
+    source_report_ids: tuple[str, str, str]
+    generated_at: datetime
+    model_ref: str = Field(min_length=1, max_length=160)
+    prompt_version: str = Field(min_length=1, max_length=80)
+
+    _bundle_time_is_aware = field_validator("generated_at")(_aware)
+
+    @model_validator(mode="after")
+    def horizons_have_fixed_scopes(self):
+        if self.intraday.scope != DecisionScope.PERP_INTRADAY:
+            raise ValueError("intraday thesis must use the perp_intraday scope")
+        if self.daily_swing.scope != DecisionScope.SPOT_DAILY:
+            raise ValueError("daily_swing thesis must use the spot_daily scope")
+        return self
+
+
+class MarketThesisBundleAssessment(StrictContract):
+    intraday: HorizonThesis
+    daily_swing: HorizonThesis
+
+    @model_validator(mode="after")
+    def horizons_have_fixed_scopes(self):
+        if self.intraday.scope != DecisionScope.PERP_INTRADAY:
+            raise ValueError("intraday thesis must use the perp_intraday scope")
+        if self.daily_swing.scope != DecisionScope.SPOT_DAILY:
+            raise ValueError("daily_swing thesis must use the spot_daily scope")
+        return self
+
+
 class RuleParameters(StrictContract):
     """Only model-tunable filters; hard risk limits deliberately do not appear here."""
 
@@ -580,6 +658,46 @@ class RuleParameters(StrictContract):
         if not value or len(value) != len(set(value)):
             raise ValueError("allowed regimes must be nonempty and unique")
         return value
+
+
+class PerpRuleParameters(RuleParameters):
+    """Bounded model-tunable filters for the isolated 3x perpetual sleeve."""
+
+
+class SpotRuleParameters(StrictContract):
+    """Bounded Donchian/ATR parameters; hard portfolio limits live elsewhere."""
+
+    entry_window: int = Field(default=20, ge=15, le=60)
+    exit_window: int = Field(default=10, ge=5, le=30)
+    atr_period: int = Field(default=14, ge=7, le=28)
+    jev_confidence_threshold: float = Field(default=0.85, ge=0.85, le=0.98)
+    allowed_regimes: tuple[Regime, ...] = (
+        Regime.TRENDING_UP,
+        Regime.SIDEWAYS,
+    )
+
+    @field_validator("allowed_regimes")
+    @classmethod
+    def spot_regimes_are_unique_and_nonempty(cls, value):
+        if not value or len(value) != len(set(value)):
+            raise ValueError("allowed regimes must be nonempty and unique")
+        return value
+
+    @model_validator(mode="after")
+    def exit_window_is_shorter(self):
+        if self.exit_window >= self.entry_window:
+            raise ValueError("exit_window must be shorter than entry_window")
+        return self
+
+
+class PerpRuleProposal(StrictContract):
+    parameters: PerpRuleParameters
+    rationale: str = Field(min_length=20, max_length=2000)
+
+
+class SpotRuleProposal(StrictContract):
+    parameters: SpotRuleParameters
+    rationale: str = Field(min_length=20, max_length=2000)
 
 
 class RuleProposal(StrictContract):
@@ -607,6 +725,43 @@ class RuleCandidate(StrictContract):
             for key, value in values.items()
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+        return cls(content_hash=hashlib.sha256(encoded).hexdigest(), **values)
+
+
+class ScopedRuleCandidate(StrictContract):
+    rule_id: str = Field(min_length=1, max_length=128)
+    parent_rule_id: str = Field(min_length=1, max_length=128)
+    thesis_id: str = Field(min_length=1, max_length=128)
+    scope: DecisionScope
+    parameters: SpotRuleParameters | PerpRuleParameters
+    created_at: datetime
+    model_ref: str = Field(min_length=1, max_length=160)
+    prompt_version: str = Field(min_length=1, max_length=80)
+    rationale: str | None = Field(default=None, max_length=2000)
+    content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    _scoped_candidate_time_is_aware = field_validator("created_at")(_aware)
+
+    @model_validator(mode="after")
+    def parameters_match_scope(self):
+        expected = (
+            SpotRuleParameters
+            if self.scope == DecisionScope.SPOT_DAILY
+            else PerpRuleParameters
+        )
+        if type(self.parameters) is not expected:
+            raise ValueError("parameters must match the rule scope")
+        return self
+
+    @classmethod
+    def create(cls, **values) -> "ScopedRuleCandidate":
+        payload = {
+            key: (value.model_dump(mode="json") if isinstance(value, BaseModel) else value)
+            for key, value in values.items()
+        }
+        encoded = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), default=str
+        ).encode()
         return cls(content_hash=hashlib.sha256(encoded).hexdigest(), **values)
 
 

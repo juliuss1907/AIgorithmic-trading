@@ -4,14 +4,21 @@ from datetime import datetime, timedelta, timezone
 from intraday.contracts import (
     AnalysisAssessment,
     AnalystReport,
+    DecisionScope,
     FeatureSnapshot,
+    HorizonThesis,
     MarketThesis,
+    MarketThesisBundleAssessment,
     ModelCallRecord,
+    PerpRuleParameters,
+    PerpRuleProposal,
     ProviderKind,
     ProviderProfile,
     ProviderRole,
     RuleParameters,
     RuleProposal,
+    SpotRuleParameters,
+    SpotRuleProposal,
     ThesisAssessment,
 )
 from intraday.llm_pipeline import (
@@ -221,6 +228,80 @@ def test_five_stage_pipeline_persists_reports_thesis_and_bounded_candidate(tmp_p
     assert store.rule_registry()["champion_id"] == "rule-v1"
     assert store.rule_registry()["challenger_id"] is None
     assert store.rule_status(result.candidate.rule_id) == "queued"
+
+
+def test_shared_analysis_produces_two_horizons_and_independent_scoped_rules(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    workflows = []
+
+    class FakeClient:
+        model_ref = "llm-main@fingerprint"
+
+        def complete(self, *, workflow, **kwargs):
+            workflows.append(workflow)
+            if workflow in {"market_analyst", "news_analyst", "sentiment_analyst"}:
+                return assessment("neutral" if workflow == "news_analyst" else "bullish")
+            if workflow == "research_manager":
+                return MarketThesisBundleAssessment(
+                    intraday=HorizonThesis(
+                        scope=DecisionScope.PERP_INTRADAY,
+                        summary="Intraday momentum is constructive with bounded headline risk.",
+                        stance="bullish",
+                        confidence=0.71,
+                        key_levels={"support": 98_000, "resistance": 102_000},
+                        risk_factors=("Fast funding reversal",),
+                        horizon_minutes=240,
+                    ),
+                    daily_swing=HorizonThesis(
+                        scope=DecisionScope.SPOT_DAILY,
+                        summary="Daily structure remains constructive above established support.",
+                        stance="bullish",
+                        confidence=0.68,
+                        key_levels={"support": 95_000, "resistance": 110_000},
+                        risk_factors=("Macro regime reversal",),
+                        horizon_minutes=2_880,
+                    ),
+                )
+            if workflow == "spot_daily_rule_generator":
+                return SpotRuleProposal(
+                    parameters=SpotRuleParameters(
+                        entry_window=30,
+                        exit_window=12,
+                        atr_period=18,
+                        jev_confidence_threshold=0.9,
+                    ),
+                    rationale="Require a slower breakout plus strong Jev confirmation.",
+                )
+            if workflow == "perp_intraday_rule_generator":
+                return PerpRuleProposal(
+                    parameters=PerpRuleParameters(confidence_threshold=0.9),
+                    rationale="Raise confidence while retaining immutable hard risk limits.",
+                )
+            raise AssertionError(workflow)
+
+    result = LLMAnalysisPipeline(FakeClient(), store).run_scoped(
+        snapshot(),
+        now=NOW,
+        generate_scopes={DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY},
+    )
+
+    assert result.bundle.intraday.scope == DecisionScope.PERP_INTRADAY
+    assert result.bundle.daily_swing.scope == DecisionScope.SPOT_DAILY
+    assert {item.scope for item in result.candidates} == {
+        DecisionScope.SPOT_DAILY,
+        DecisionScope.PERP_INTRADAY,
+    }
+    assert workflows.count("market_analyst") == 1
+    assert workflows.count("research_manager") == 1
+    assert store.latest_market_thesis_bundle() == result.bundle
+    assert store.scoped_rule_registry(DecisionScope.SPOT_DAILY)["champion_id"] == (
+        "spot-rule-v1"
+    )
+    assert store.scoped_rule_registry(DecisionScope.PERP_INTRADAY)["champion_id"] == (
+        "perp-rule-v1"
+    )
+    assert store.has_open_scoped_rule_candidate(DecisionScope.SPOT_DAILY) is True
+    assert store.has_open_scoped_rule_candidate(DecisionScope.PERP_INTRADAY) is True
 
 
 def test_pipeline_keeps_champion_when_generated_parameters_are_unchanged(tmp_path):

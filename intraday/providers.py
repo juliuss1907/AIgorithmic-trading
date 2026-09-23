@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Callable, Protocol
 
 from intraday.contracts import (
+    DecisionScope,
     Direction,
     FeatureSnapshot,
     JevDecision,
@@ -18,6 +19,7 @@ from intraday.contracts import (
     ProviderRole,
     Regime,
     RiskLevel,
+    ScopedJevDecision,
 )
 from intraday.provider_client import HttpResponse, Transport, http_transport
 from intraday.provider_profiles import ProviderCredential, ProviderSecretStore
@@ -39,7 +41,7 @@ class ProviderDecisionError(RuntimeError):
 
 
 class JevDecisionProvider:
-    """Typed OpenRouter Decisions adapter with a small local circuit breaker."""
+    """Typed System One adapter with an isolated circuit per decision workflow."""
 
     def __init__(
         self,
@@ -57,25 +59,26 @@ class JevDecisionProvider:
         self._transport = transport or http_transport
         self._clock = clock
         self._timeout_seconds = timeout_seconds
-        self._consecutive_failures = 0
-        self._open_until = 0.0
+        self._circuits: dict[str, list[float]] = {}
         self.model_ref = (
             f"{credential.profile.profile_id}@{credential.profile.fingerprint[:12]}"
         )
 
     @staticmethod
-    def _questions() -> dict:
+    def _questions(scope: DecisionScope | None = None) -> dict:
+        market = "BTC spot" if scope == DecisionScope.SPOT_DAILY else "BTC perpetual"
+        horizon = "daily/swing" if scope == DecisionScope.SPOT_DAILY else "intraday"
         return {
             "direction": {
                 "type": "choice",
-                "instructions": "Choose the appropriate BTC perpetual trading action now.",
+                "instructions": f"Choose the appropriate {market} trading action now.",
                 "criteria": {
                     item.value: f"The action is {item.value}." for item in Direction
                 },
             },
             "regime": {
                 "type": "choice",
-                "instructions": "Classify the current short-horizon market regime.",
+                "instructions": f"Classify the current {horizon} market regime.",
                 "criteria": {
                     item.value: f"The regime is {item.value}." for item in Regime
                 },
@@ -109,8 +112,10 @@ class JevDecisionProvider:
         }
 
     @staticmethod
-    def _state(snapshot: FeatureSnapshot) -> dict:
-        return {
+    def _state(
+        snapshot: FeatureSnapshot, scope: DecisionScope | None = None
+    ) -> dict:
+        state = {
             "snapshot_id": snapshot.snapshot_id,
             "symbol": snapshot.symbol,
             "event_time": snapshot.event_time.isoformat(),
@@ -120,6 +125,9 @@ class JevDecisionProvider:
             "freshness": snapshot.freshness,
             "quality_flags": snapshot.quality_flags,
         }
+        if scope is not None:
+            state["decision_scope"] = scope.value
+        return state
 
     @staticmethod
     def _number(value, *, minimum: float = 0, maximum: float = 1) -> float:
@@ -181,6 +189,7 @@ class JevDecisionProvider:
         self,
         *,
         tick_id: str,
+        workflow: str,
         status: str,
         started_at: datetime,
         latency_ms: int,
@@ -213,12 +222,13 @@ class JevDecisionProvider:
         if completed_at < started_at:
             completed_at = started_at
         call_id = hashlib.sha256(
-            f"jev:{tick_id}:{self.credential.profile.fingerprint}:{status}:{error_code}".encode()
+            f"{workflow}:{tick_id}:{self.credential.profile.fingerprint}:"
+            f"{status}:{error_code}".encode()
         ).hexdigest()[:32]
         self.store.record_model_call(
             ModelCallRecord(
                 call_id=call_id,
-                workflow="jev_decision",
+                workflow=workflow,
                 role=ProviderRole.JEV,
                 profile_id=self.credential.profile.profile_id,
                 profile_fingerprint=self.credential.profile.fingerprint,
@@ -245,17 +255,20 @@ class JevDecisionProvider:
         code: str,
         *,
         tick_id: str,
+        workflow: str,
         started_at: datetime,
         started_clock: float,
         request_hash: str,
         response: HttpResponse | None = None,
         provider_request_id: str | None = None,
     ) -> None:
-        self._consecutive_failures += 1
-        if self._consecutive_failures >= 3:
-            self._open_until = self._clock() + 60
+        circuit = self._circuits.setdefault(workflow, [0, 0.0])
+        circuit[0] += 1
+        if circuit[0] >= 3:
+            circuit[1] = self._clock() + 60
         self._record(
             tick_id=tick_id,
+            workflow=workflow,
             status="error",
             started_at=started_at,
             latency_ms=max(0, round((self._clock() - started_clock) * 1000)),
@@ -266,19 +279,29 @@ class JevDecisionProvider:
         )
         raise ProviderDecisionError(code)
 
-    def decide(self, snapshot: FeatureSnapshot, tick_id: str, now) -> JevDecision:
+    def _decide(
+        self,
+        snapshot: FeatureSnapshot,
+        tick_id: str,
+        now,
+        *,
+        workflow: str,
+        scope: DecisionScope | None,
+    ) -> JevDecision:
         payload = {
             "model": self.credential.profile.model,
-            "state": self._state(snapshot),
-            "questions": self._questions(),
+            "state": self._state(snapshot, scope),
+            "questions": self._questions(scope),
         }
         body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         request_hash = hashlib.sha256(body).hexdigest()
         started_at = datetime.now(timezone.utc)
         started_clock = self._clock()
-        if started_clock < self._open_until:
+        circuit = self._circuits.setdefault(workflow, [0, 0.0])
+        if started_clock < circuit[1]:
             self._record(
                 tick_id=tick_id,
+                workflow=workflow,
                 status="error",
                 started_at=started_at,
                 latency_ms=0,
@@ -300,19 +323,20 @@ class JevDecisionProvider:
             )
         except (TimeoutError, socket.timeout):
             self._fail(
-                "timeout", tick_id=tick_id, started_at=started_at,
+                "timeout", tick_id=tick_id, workflow=workflow, started_at=started_at,
                 started_clock=started_clock, request_hash=request_hash,
             )
         except (urllib.error.URLError, OSError):
             self._fail(
-                "network_error", tick_id=tick_id, started_at=started_at,
+                "network_error", tick_id=tick_id, workflow=workflow,
+                started_at=started_at,
                 started_clock=started_clock, request_hash=request_hash,
             )
         request_id = self._request_id(response)
         if not 200 <= response.status_code < 300:
             self._fail(
                 self._http_error(response.status_code), tick_id=tick_id,
-                started_at=started_at, started_clock=started_clock,
+                workflow=workflow, started_at=started_at, started_clock=started_clock,
                 request_hash=request_hash, response=response,
                 provider_request_id=request_id,
             )
@@ -327,12 +351,14 @@ class JevDecisionProvider:
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             self._fail(
                 "invalid_response", tick_id=tick_id, started_at=started_at,
-                started_clock=started_clock, request_hash=request_hash,
+                workflow=workflow, started_clock=started_clock,
+                request_hash=request_hash,
                 response=response, provider_request_id=request_id,
             )
         latency_ms = max(0, round((self._clock() - started_clock) * 1000))
         self._record(
             tick_id=tick_id,
+            workflow=workflow,
             status="success",
             started_at=started_at,
             latency_ms=latency_ms,
@@ -341,8 +367,8 @@ class JevDecisionProvider:
             response_payload=response_payload,
             provider_request_id=request_id,
         )
-        self._consecutive_failures = 0
-        self._open_until = 0
+        circuit[0] = 0
+        circuit[1] = 0
         decision_id = hashlib.sha256(
             f"{self.model_ref}:{tick_id}:{snapshot.checksum}".encode()
         ).hexdigest()[:24]
@@ -360,6 +386,39 @@ class JevDecisionProvider:
             created_at=now,
             latency_ms=latency_ms,
             provider_request_id=request_id,
+        )
+
+    def decide(self, snapshot: FeatureSnapshot, tick_id: str, now) -> JevDecision:
+        return self._decide(
+            snapshot,
+            tick_id,
+            now,
+            workflow="jev_decision",
+            scope=None,
+        )
+
+    def decide_scoped(
+        self,
+        snapshot: FeatureSnapshot,
+        tick_id: str,
+        scope: DecisionScope,
+        now,
+    ) -> ScopedJevDecision:
+        workflow = {
+            DecisionScope.SPOT_DAILY: "spot_daily_entry",
+            DecisionScope.PERP_INTRADAY: "perp_intraday_entry",
+        }[scope]
+        decision = self._decide(
+            snapshot,
+            tick_id,
+            now,
+            workflow=workflow,
+            scope=scope,
+        )
+        return ScopedJevDecision(
+            scope=scope,
+            workflow=workflow,
+            decision=decision,
         )
 
 

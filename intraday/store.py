@@ -10,10 +10,12 @@ from pathlib import Path
 
 from intraday.contracts import (
     AnalystReport,
+    DecisionScope,
     FeatureSnapshot,
     GateDecision,
     JevDecision,
     MarketThesis,
+    MarketThesisBundle,
     NewsEvent,
     NewsIngestResult,
     PaperFill,
@@ -23,6 +25,7 @@ from intraday.contracts import (
     PromotionEvaluation,
     RuleCandidate,
     RuleReplayEvaluation,
+    ScopedRuleCandidate,
     VenueMarketFrame,
 )
 from intraday.cross_venue_evaluation import CrossVenuePromotionEvaluation
@@ -196,6 +199,33 @@ class IntradayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_market_theses_latest
                     ON market_theses(generated_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS market_thesis_bundles (
+                    id TEXT PRIMARY KEY,
+                    generated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_market_thesis_bundles_latest
+                    ON market_thesis_bundles(generated_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS scoped_rules (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    parent_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN (
+                        'queued', 'replay_passed', 'challenger', 'champion',
+                        'hall_of_fame', 'rejected'
+                    )),
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_scoped_rules_status
+                    ON scoped_rules(scope, status, created_at, id);
+                CREATE TABLE IF NOT EXISTS scoped_rule_registry (
+                    scope TEXT PRIMARY KEY CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    champion_id TEXT REFERENCES scoped_rules(id),
+                    challenger_id TEXT REFERENCES scoped_rules(id),
+                    rollback_id TEXT REFERENCES scoped_rules(id),
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS rule_evaluations (
                     id TEXT PRIMARY KEY,
                     candidate_id TEXT NOT NULL REFERENCES rules(id),
@@ -225,7 +255,7 @@ class IntradayStore:
                 if name not in command_columns:
                     connection.execute(f"ALTER TABLE commands ADD COLUMN {name} {definition}")
             connection.execute(
-                "UPDATE schema_meta SET value='4' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='5' WHERE key='schema_version'"
             )
 
     def record_tick(
@@ -669,6 +699,122 @@ class IntradayStore:
                 "ORDER BY generated_at DESC, id DESC LIMIT 1"
             ).fetchone()
         return None if row is None else MarketThesis.model_validate_json(row["payload_json"])
+
+    def record_scoped_analysis(
+        self,
+        reports: tuple[AnalystReport, AnalystReport, AnalystReport],
+        bundle: MarketThesisBundle,
+    ) -> None:
+        expected = {"market", "news", "sentiment"}
+        if {report.analyst for report in reports} != expected:
+            raise ValueError("analysis cycle requires market, news, and sentiment reports")
+        if set(bundle.source_report_ids) != {report.report_id for report in reports}:
+            raise ValueError("thesis bundle must reference the analysis cycle reports")
+        with self._connect() as connection:
+            for report in reports:
+                connection.execute(
+                    "INSERT OR IGNORE INTO analyst_reports VALUES (?, ?, ?, ?)",
+                    (
+                        report.report_id,
+                        report.analyst,
+                        report.generated_at.isoformat(),
+                        _json(report),
+                    ),
+                )
+            connection.execute(
+                "INSERT INTO market_thesis_bundles VALUES (?, ?, ?)",
+                (bundle.thesis_id, bundle.generated_at.isoformat(), _json(bundle)),
+            )
+
+    def latest_market_thesis_bundle(self) -> MarketThesisBundle | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM market_thesis_bundles "
+                "ORDER BY generated_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else MarketThesisBundle.model_validate_json(row["payload_json"])
+        )
+
+    def register_scoped_rule(
+        self, rule: ScopedRuleCandidate, *, status: str = "queued"
+    ) -> None:
+        allowed = {
+            "queued", "replay_passed", "challenger", "champion",
+            "hall_of_fame", "rejected",
+        }
+        if status not in allowed:
+            raise ValueError("invalid rule status")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO scoped_rules VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    rule.rule_id,
+                    rule.scope.value,
+                    rule.parent_rule_id,
+                    status,
+                    _json(rule),
+                    rule.created_at.isoformat(),
+                ),
+            )
+
+    def has_open_scoped_rule_candidate(self, scope: DecisionScope) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM scoped_rules WHERE scope=? AND status IN "
+                "('queued', 'replay_passed', 'challenger') LIMIT 1",
+                (scope.value,),
+            ).fetchone()
+        return row is not None
+
+    def scoped_rule_registry(self, scope: DecisionScope) -> dict:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT champion_id, challenger_id, rollback_id, updated_at "
+                "FROM scoped_rule_registry WHERE scope=?",
+                (scope.value,),
+            ).fetchone()
+        if row is None:
+            return {"champion_id": None, "challenger_id": None, "rollback_id": None}
+        return dict(row)
+
+    def activate_scoped_champion(
+        self, scope: DecisionScope, rule_id: str, *, now: datetime
+    ) -> dict:
+        with self._connect() as connection:
+            rule = connection.execute(
+                "SELECT scope FROM scoped_rules WHERE id=?", (rule_id,)
+            ).fetchone()
+            if rule is None or rule["scope"] != scope.value:
+                raise ValueError("unknown scoped rule")
+            connection.execute(
+                "UPDATE scoped_rules SET status='champion' WHERE id=?", (rule_id,)
+            )
+            connection.execute(
+                "INSERT INTO scoped_rule_registry VALUES (?, ?, NULL, NULL, ?) "
+                "ON CONFLICT(scope) DO UPDATE SET champion_id=excluded.champion_id, "
+                "challenger_id=NULL, rollback_id=NULL, updated_at=excluded.updated_at",
+                (scope.value, rule_id, now.isoformat()),
+            )
+        return self.scoped_rule_registry(scope)
+
+    def load_active_scoped_rule(
+        self, scope: DecisionScope
+    ) -> ScopedRuleCandidate | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT r.payload_json FROM scoped_rules r "
+                "JOIN scoped_rule_registry g ON g.champion_id=r.id "
+                "WHERE g.scope=?",
+                (scope.value,),
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else ScopedRuleCandidate.model_validate_json(row["payload_json"])
+        )
 
     def activate_champion(self, rule_id: str, *, now: datetime) -> dict:
         with self._connect() as connection:
