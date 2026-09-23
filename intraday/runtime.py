@@ -20,6 +20,7 @@ from intraday.llm_pipeline import (
 from intraday.provider_profiles import ProviderSecretStore
 from intraday.provider_client import ProviderPreflightClient
 from intraday.providers import DecisionProvider, StubDecisionProvider
+from intraday.portfolio_coordinator import apply_operator_command
 from intraday.store import IntradayStore
 
 
@@ -79,6 +80,23 @@ def process_pending_commands(
                 role = ProviderRole(payload["role"])
                 store.deactivate_provider(role)
                 result = {"role": role.value, "active": False}
+            elif command["kind"] in {
+                "portfolio_pause", "portfolio_resume", "portfolio_flatten"
+            }:
+                parent = store.load_parent_portfolio_state()
+                if parent is None:
+                    raise ValueError("parent paper portfolio is not initialized")
+                action = command["kind"].removeprefix("portfolio_")
+                parent = apply_operator_command(parent, action, now=now)
+                store.save_parent_portfolio_state(
+                    parent, event_kind=action, actor=command["actor"]
+                )
+                result = {
+                    "action": action,
+                    "entries_paused": parent.entries_paused,
+                    "spot_notional": parent.spot_notional,
+                    "perp_notional": parent.perp_notional,
+                }
             elif engine is None or snapshot is None:
                 continue
             elif command["kind"] == "pause_entries":

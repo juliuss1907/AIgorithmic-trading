@@ -29,6 +29,8 @@ from intraday.contracts import (
     VenueMarketFrame,
 )
 from intraday.cross_venue_evaluation import CrossVenuePromotionEvaluation
+from intraday.portfolio_coordinator import ParentPortfolioState
+from intraday.portfolio_soak import PortfolioSoakEvaluation
 
 
 def _json(model) -> str:
@@ -226,6 +228,35 @@ class IntradayStore:
                     rollback_id TEXT REFERENCES scoped_rules(id),
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS parent_portfolio_state (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS parent_portfolio_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS portfolio_soak_ticks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    status TEXT NOT NULL CHECK (status IN (
+                        'success', 'skipped_no_setup', 'provider_error', 'gate_error'
+                    )),
+                    hard_risk_violation INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_portfolio_soak_ticks_time
+                    ON portfolio_soak_ticks(created_at, scope);
+                CREATE TABLE IF NOT EXISTS portfolio_soak_evaluations (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL CHECK (status IN ('deferred', 'reject', 'pass')),
+                    evaluated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS rule_evaluations (
                     id TEXT PRIMARY KEY,
                     candidate_id TEXT NOT NULL REFERENCES rules(id),
@@ -255,7 +286,7 @@ class IntradayStore:
                 if name not in command_columns:
                     connection.execute(f"ALTER TABLE commands ADD COLUMN {name} {definition}")
             connection.execute(
-                "UPDATE schema_meta SET value='5' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='7' WHERE key='schema_version'"
             )
 
     def record_tick(
@@ -356,6 +387,121 @@ class IntradayStore:
                 "SELECT payload_json FROM portfolio_state WHERE singleton = 1"
             ).fetchone()
         return None if row is None else json.loads(row["payload_json"])
+
+    def save_parent_portfolio_state(
+        self,
+        state: ParentPortfolioState,
+        *,
+        event_kind: str,
+        actor: str,
+    ) -> None:
+        payload = _json(state)
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO parent_portfolio_state VALUES (1, ?, ?) "
+                "ON CONFLICT(singleton) DO UPDATE SET "
+                "payload_json=excluded.payload_json, updated_at=excluded.updated_at",
+                (payload, state.updated_at.isoformat()),
+            )
+            connection.execute(
+                "INSERT INTO parent_portfolio_events "
+                "(kind, actor, payload_json, created_at) VALUES (?, ?, ?, ?)",
+                (event_kind, actor, payload, state.updated_at.isoformat()),
+            )
+
+    def load_parent_portfolio_state(self) -> ParentPortfolioState | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM parent_portfolio_state WHERE singleton=1"
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else ParentPortfolioState.model_validate_json(row["payload_json"])
+        )
+
+    def list_parent_portfolio_events(self, limit: int = 100) -> list[dict]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, kind, actor, payload_json, created_at "
+                "FROM parent_portfolio_events ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_portfolio_soak_tick(
+        self,
+        *,
+        scope: DecisionScope,
+        status: str,
+        created_at: datetime,
+        hard_risk_violation: bool = False,
+    ) -> None:
+        if status not in {
+            "success", "skipped_no_setup", "provider_error", "gate_error"
+        }:
+            raise ValueError("invalid portfolio soak status")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO portfolio_soak_ticks "
+                "(scope, status, hard_risk_violation, created_at) VALUES (?, ?, ?, ?)",
+                (
+                    scope.value,
+                    status,
+                    int(hard_risk_violation),
+                    created_at.isoformat(),
+                ),
+            )
+
+    def list_portfolio_soak_ticks(self) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT scope, status, hard_risk_violation, created_at "
+                "FROM portfolio_soak_ticks ORDER BY created_at, id"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_portfolio_soak_evaluation(
+        self, evaluation: PortfolioSoakEvaluation
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO portfolio_soak_evaluations VALUES (?, ?, ?, ?)",
+                (
+                    evaluation.evaluation_id,
+                    evaluation.status,
+                    evaluation.evaluated_at.isoformat(),
+                    _json(evaluation),
+                ),
+            )
+
+    def portfolio_soak_evaluation(
+        self, evaluation_id: str
+    ) -> PortfolioSoakEvaluation | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM portfolio_soak_evaluations WHERE id=?",
+                (evaluation_id,),
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else PortfolioSoakEvaluation.model_validate_json(row["payload_json"])
+        )
+
+    def latest_portfolio_soak_evaluation(self) -> PortfolioSoakEvaluation | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM portfolio_soak_evaluations "
+                "ORDER BY evaluated_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else PortfolioSoakEvaluation.model_validate_json(row["payload_json"])
+        )
 
     @staticmethod
     def _save_runtime_state(connection, state: dict, updated_at: datetime) -> None:
@@ -493,7 +639,8 @@ class IntradayStore:
         allowed = {
             "pause_entries", "resume_entries", "flatten", "rollback",
             "toggle_notifications", "provider_test", "provider_activate",
-            "provider_deactivate",
+            "provider_deactivate", "portfolio_pause", "portfolio_resume",
+            "portfolio_flatten",
         }
         if kind not in allowed:
             raise ValueError("unsupported operator command")

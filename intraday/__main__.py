@@ -38,8 +38,15 @@ from intraday.notifications import TelegramNotifier, drain_outbox
 from intraday.provider_client import ProviderPreflightClient
 from intraday.provider_profiles import ProviderSecretStore
 from intraday.providers import AssignedDecisionProvider, StubDecisionProvider
+from intraday.portfolio_coordinator import apply_operator_command
+from intraday.portfolio_soak import evaluate_portfolio_soak, run_soak_cycle
 from intraday.replay import compare_cross_venue
-from intraday.runtime import run_analysis_cycle, run_news_cycle, run_once
+from intraday.runtime import (
+    process_pending_commands,
+    run_analysis_cycle,
+    run_news_cycle,
+    run_once,
+)
 from intraday.store import IntradayStore
 
 
@@ -57,7 +64,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command")
     for name in (
-        "doctor", "collect", "news", "analysis", "run", "cross-venue-status",
+        "doctor", "status", "collect", "news", "analysis", "run", "cross-venue-status",
         "cross-venue-replay", "cross-venue-evaluate",
     ):
         command = commands.add_parser(name)
@@ -102,6 +109,25 @@ def _parser() -> argparse.ArgumentParser:
     deactivate.add_argument("role", choices=[item.value for item in ProviderRole])
     deactivate.add_argument("--database", default=None)
     deactivate.add_argument("--secrets-file", default=None)
+    portfolio = commands.add_parser("portfolio")
+    portfolio_commands = portfolio.add_subparsers(
+        dest="portfolio_command", required=True
+    )
+    for name in ("status", "pause", "resume", "flatten"):
+        command = portfolio_commands.add_parser(name)
+        command.add_argument("--database", default=None)
+    soak = portfolio_commands.add_parser("soak")
+    soak_commands = soak.add_subparsers(dest="soak_command", required=True)
+    soak_evaluate = soak_commands.add_parser("evaluate")
+    soak_evaluate.add_argument("--database", default=None)
+    soak_evaluate.add_argument("--at", default=None)
+    soak_run = soak_commands.add_parser("run")
+    soak_run.add_argument("--database", default=None)
+    soak_run.add_argument("--secrets-file", default=None)
+    soak_run.add_argument("--once", action="store_true")
+    activate_paper = portfolio_commands.add_parser("activate-paper")
+    activate_paper.add_argument("--evaluation-id", required=True)
+    activate_paper.add_argument("--database", default=None)
     return parser
 
 
@@ -389,6 +415,103 @@ def _doctor(config: IntradayConfig) -> dict:
     }
 
 
+def _parent_portfolio_payload(state) -> dict:
+    equity = state.equity
+    spot_notional = state.spot_notional
+    perp_notional = state.perp_notional
+    return {
+        "mode": "paper",
+        "paper_active": state.paper_active,
+        "equity": equity,
+        "daily_return": state.daily_return,
+        "drawdown": state.drawdown,
+        "spot_notional": spot_notional,
+        "perp_notional": perp_notional,
+        "gross_exposure_pct": (spot_notional + abs(perp_notional)) / equity,
+        "net_delta_pct": (spot_notional + perp_notional) / equity,
+        "isolated_margin_pct": abs(perp_notional) / 3 / equity,
+        "leverage": 3,
+        "margin_mode": "isolated",
+        "entries_paused": state.entries_paused,
+        "halt_reason": state.halt_reason,
+        "soak_evaluation_id": state.soak_evaluation_id,
+        "updated_at": state.updated_at.isoformat(),
+    }
+
+
+def _portfolio_cli(arguments) -> None:
+    store = IntradayStore(resolve_database_path(arguments.database))
+    command = arguments.portfolio_command
+    if command == "soak":
+        if arguments.soak_command == "run":
+            secret_store = ProviderSecretStore(
+                arguments.secrets_file or _default_secrets_file()
+            )
+            provider = AssignedDecisionProvider(
+                store,
+                secret_store,
+                fallback=StubDecisionProvider(direction=Direction.HOLD),
+            )
+            market = BinanceUsdMClient()
+            interval = float(os.getenv("INTRADAY_INTERVAL_SECONDS", "5"))
+            while True:
+                now = datetime.now(timezone.utc)
+                process_pending_commands(store, now=now)
+                snapshot = market.snapshot("BTCUSDT", now=now)
+                result = run_soak_cycle(
+                    store, provider, snapshot, now=now
+                )
+                print(json.dumps(result), flush=True)
+                if arguments.once:
+                    return
+                time.sleep(max(1, interval))
+        evaluated_at = (
+            datetime.fromisoformat(arguments.at)
+            if arguments.at
+            else datetime.now(timezone.utc)
+        )
+        evaluation = evaluate_portfolio_soak(
+            store.list_portfolio_soak_ticks(), evaluated_at=evaluated_at
+        )
+        store.record_portfolio_soak_evaluation(evaluation)
+        print(evaluation.model_dump_json(indent=2))
+        return
+    state = store.load_parent_portfolio_state()
+    if state is None:
+        raise SystemExit("parent paper portfolio is not initialized")
+    if command == "activate-paper":
+        evaluation = store.portfolio_soak_evaluation(arguments.evaluation_id)
+        if evaluation is None or evaluation.status != "pass":
+            raise SystemExit("paper activation requires the exact id of a passing soak")
+        now = datetime.now(timezone.utc)
+        state = state.model_copy(
+            update={
+                "paper_active": True,
+                "entries_paused": False,
+                "halt_reason": None,
+                "soak_evaluation_id": evaluation.evaluation_id,
+                "updated_at": now,
+            }
+        )
+        store.save_parent_portfolio_state(
+            state, event_kind="activate_paper", actor="cli"
+        )
+        print(json.dumps(_parent_portfolio_payload(state), indent=2))
+        return
+    if command == "status":
+        print(json.dumps(_parent_portfolio_payload(state), indent=2))
+        return
+    now = datetime.now(timezone.utc)
+    try:
+        state = apply_operator_command(state, command, now=now)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    store.save_parent_portfolio_state(
+        state, event_kind=command, actor="cli"
+    )
+    print(json.dumps(_parent_portfolio_payload(state), indent=2))
+
+
 def _news_loop(config: IntradayConfig) -> None:
     store = IntradayStore(config.database)
     while True:
@@ -421,9 +544,21 @@ def main() -> None:
     if arguments.command == "provider":
         _provider_cli(arguments)
         return
+    if arguments.command == "portfolio":
+        _portfolio_cli(arguments)
+        return
     config = IntradayConfig.from_environment(database=arguments.database)
     if arguments.command == "doctor":
         print(json.dumps(_doctor(config), indent=2))
+        return
+    if arguments.command == "status":
+        store = IntradayStore(config.database)
+        result = _doctor(config)
+        parent = store.load_parent_portfolio_state()
+        result["portfolio"] = (
+            _parent_portfolio_payload(parent) if parent is not None else None
+        )
+        print(json.dumps(result, indent=2))
         return
     if arguments.command == "serve":
         import uvicorn

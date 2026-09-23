@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta http-equiv="refresh" content="10">
+    <title>Combined paper portfolio</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Đi tới nội dung chính</a>
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">BTC · Shared AI · Paper only</p>
+        <h1>Combined paper portfolio</h1>
+      </div>
+      <nav aria-label="Điều hướng chính">
+        <a class="nav-link" href="/">Intraday</a>
+        <span class="mode"><span aria-hidden="true"></span> 60 / 40</span>
+      </nav>
+    </header>
+
+    <main id="main">
+      {% if portfolio %}
+      <section class="strip portfolio-strip" aria-label="Tình trạng portfolio">
+        <article>
+          <h2>Parent equity</h2>
+          <strong>{{ "%.2f"|format(portfolio.equity) }} USDT</strong>
+          <small>Drawdown {{ "%+.2f"|format(portfolio.drawdown * 100) }}%</small>
+        </article>
+        <article>
+          <h2>Spot daily</h2>
+          <strong>{{ "%.0f"|format(portfolio.spot_notional) }} USDT</strong>
+          <small>60% sleeve · 30% parent cap</small>
+        </article>
+        <article>
+          <h2>Perp intraday</h2>
+          <strong>{{ "%+.0f"|format(portfolio.perp_notional) }} USDT</strong>
+          <small>40% sleeve · isolated 3×</small>
+        </article>
+        <article>
+          <h2>Entry state</h2>
+          <strong>{{ "Paused" if portfolio.entries_paused else "Enabled" }}</strong>
+          <small>{{ portfolio.halt_reason or "No active entry block" }}</small>
+        </article>
+      </section>
+
+      <section class="portfolio-layout" aria-labelledby="risk-heading">
+        <article class="risk-panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Deterministic parent gate</p>
+              <h2 id="risk-heading">Exposure limits</h2>
+            </div>
+            <small>Models cannot override these limits</small>
+          </div>
+          {% set gross = (portfolio.spot_notional + (portfolio.perp_notional|abs)) / portfolio.equity %}
+          {% set net = (portfolio.spot_notional + portfolio.perp_notional) / portfolio.equity %}
+          {% set margin = (portfolio.perp_notional|abs) / 3 / portfolio.equity %}
+          <dl class="risk-list">
+            <div><dt>Gross exposure</dt><dd>{{ "%.1f"|format(gross * 100) }}% / 50%</dd></div>
+            <div><dt>Net BTC delta</dt><dd>{{ "%+.1f"|format(net * 100) }}% / ±50%</dd></div>
+            <div><dt>Isolated margin</dt><dd>{{ "%.1f"|format(margin * 100) }}% / 10%</dd></div>
+            <div><dt>Daily return</dt><dd>{{ "%+.2f"|format(portfolio.daily_return * 100) }}% / −1.50%</dd></div>
+          </dl>
+        </article>
+
+        <article class="risk-panel" aria-labelledby="promotion-heading">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Manual promotion</p>
+              <h2 id="promotion-heading">72-hour soak</h2>
+            </div>
+          </div>
+          {% if soak %}
+          <p class="status-line"><strong>{{ soak.status|upper }}</strong> · {{ "%.1f"|format(soak.duration_hours) }} hours</p>
+          <p class="muted">{{ soak.reason_codes|join(", ") if soak.reason_codes else "All promotion checks passed." }}</p>
+          <code>{{ soak.evaluation_id }}</code>
+          {% else %}
+          <div class="empty" role="status">
+            <strong>No soak evaluation yet.</strong>
+            <p>Run both scoped decision workflows before activating paper fills.</p>
+          </div>
+          {% endif %}
+        </article>
+      </section>
+
+      <section class="ledger" aria-labelledby="rule-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Independent lifecycle</p>
+            <h2 id="rule-heading">Scoped champions</h2>
+          </div>
+          <small>One shared LLM profile · separate candidate queues</small>
+        </div>
+        <div class="table-wrap" tabindex="0" aria-label="Scoped rule registry">
+          <table>
+            <thead><tr><th>Scope</th><th>Champion</th><th>Challenger</th><th>Rollback</th></tr></thead>
+            <tbody>
+              <tr><td>Spot daily</td><td><code>{{ spot_registry.champion_id or "Not initialized" }}</code></td><td>{{ spot_registry.challenger_id or "—" }}</td><td>{{ spot_registry.rollback_id or "—" }}</td></tr>
+              <tr><td>Perp intraday</td><td><code>{{ perp_registry.champion_id or "Not initialized" }}</code></td><td>{{ perp_registry.challenger_id or "—" }}</td><td>{{ perp_registry.rollback_id or "—" }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="ledger" aria-labelledby="operator-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Authenticated command inbox</p>
+            <h2 id="operator-heading">Operator controls</h2>
+          </div>
+          <small>Use <code>aigt portfolio pause|resume|flatten</code></small>
+        </div>
+        {% if events %}
+        <div class="table-wrap" tabindex="0" aria-label="Portfolio event log">
+          <table>
+            <thead><tr><th>Time (UTC)</th><th>Action</th><th>Actor</th></tr></thead>
+            <tbody>
+              {% for event in events %}
+              <tr><td>{{ event.created_at }}</td><td>{{ event.kind }}</td><td>{{ event.actor }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+      </section>
+      {% else %}
+      <div class="empty page-empty" role="status">
+        <strong>Parent portfolio is not initialized.</strong>
+        <p>Complete the decision-only soak and activate it with a passing evaluation ID.</p>
+      </div>
+      {% endif %}
+    </main>
+
+    <footer>
+      <p>No real exchange credentials or live-order path exist in this build.</p>
+    </footer>
+  </body>
+</html>

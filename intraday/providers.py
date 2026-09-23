@@ -443,10 +443,12 @@ class AssignedDecisionProvider:
         )
         self._providers: dict[str, DecisionProvider] = {}
 
-    def decide(self, snapshot: FeatureSnapshot, tick_id: str, now) -> JevDecision:
+    def _active_provider(self, *, allow_fallback: bool = True):
         assignment = self.store.provider_assignment(ProviderRole.JEV)
         if assignment is None:
-            return self.fallback.decide(snapshot, tick_id, now)
+            if allow_fallback:
+                return self.fallback
+            raise ProviderDecisionError("no_active_provider")
         profile = self.store.provider_profile(assignment["profile_id"])
         if profile is None or profile.fingerprint != assignment["profile_fingerprint"]:
             raise ProviderDecisionError("profile_metadata_mismatch")
@@ -457,7 +459,23 @@ class AssignedDecisionProvider:
         if provider is None:
             provider = self._provider_factory(credential)
             self._providers[profile.fingerprint] = provider
-        return provider.decide(snapshot, tick_id, now)
+        return provider
+
+    def decide(self, snapshot: FeatureSnapshot, tick_id: str, now) -> JevDecision:
+        return self._active_provider().decide(snapshot, tick_id, now)
+
+    def decide_scoped(
+        self,
+        snapshot: FeatureSnapshot,
+        tick_id: str,
+        scope: DecisionScope,
+        now,
+    ) -> ScopedJevDecision:
+        provider = self._active_provider(allow_fallback=False)
+        decide_scoped = getattr(provider, "decide_scoped", None)
+        if decide_scoped is None:
+            raise ProviderDecisionError("scoped_workflow_unsupported")
+        return decide_scoped(snapshot, tick_id, scope, now)
 
 
 class StubDecisionProvider:

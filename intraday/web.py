@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
@@ -12,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 
-from intraday.contracts import ProviderRole
+from intraday.contracts import DecisionScope, ProviderRole
 from intraday.store import IntradayStore
 
 
@@ -30,6 +31,11 @@ class ProviderAssignmentRequest(BaseModel):
     profile_id: str = Field(
         min_length=3, max_length=80, pattern=r"^[a-z0-9][a-z0-9._-]*$"
     )
+
+
+class PortfolioCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["pause", "resume", "flatten"]
 
 
 def create_app(
@@ -107,6 +113,25 @@ def create_app(
             },
         )
 
+    @app.get("/portfolio", response_class=HTMLResponse)
+    def portfolio_page(request: Request):
+        parent = store.load_parent_portfolio_state()
+        bundle = store.latest_market_thesis_bundle()
+        return templates.TemplateResponse(
+            request=request,
+            name="portfolio.html",
+            context={
+                "portfolio": parent,
+                "bundle": bundle,
+                "spot_registry": store.scoped_rule_registry(DecisionScope.SPOT_DAILY),
+                "perp_registry": store.scoped_rule_registry(
+                    DecisionScope.PERP_INTRADAY
+                ),
+                "soak": store.latest_portfolio_soak_evaluation(),
+                "events": store.list_parent_portfolio_events(limit=20),
+            },
+        )
+
     @app.get("/healthz")
     def health():
         return {"status": "ok", "mode": "paper"}
@@ -123,6 +148,28 @@ def create_app(
             "cross_venue_evaluation": (
                 store.latest_cross_venue_evaluation().model_dump(mode="json")
                 if store.latest_cross_venue_evaluation() else None
+            ),
+        }
+
+    @app.get("/api/portfolio")
+    def parent_portfolio():
+        parent = store.load_parent_portfolio_state()
+        return {
+            "portfolio": parent.model_dump(mode="json") if parent else None,
+            "limits": {
+                "spot_budget_pct": 0.60,
+                "perp_budget_pct": 0.40,
+                "spot_max_parent_equity_pct": 0.30,
+                "perp_max_parent_equity_pct": 0.20,
+                "gross_exposure_pct": 0.50,
+                "abs_net_delta_pct": 0.50,
+                "isolated_margin_pct": 0.10,
+                "leverage": 3,
+            },
+            "soak": (
+                store.latest_portfolio_soak_evaluation().model_dump(mode="json")
+                if store.latest_portfolio_soak_evaluation()
+                else None
             ),
         }
 
@@ -195,6 +242,20 @@ def create_app(
             idempotency_key=idempotency_key,
             kind="provider_deactivate",
             payload={"role": role.value},
+        )
+
+    @app.post(
+        "/api/portfolio/commands", status_code=status.HTTP_202_ACCEPTED
+    )
+    def parent_portfolio_command(
+        request: PortfolioCommandRequest,
+        _: None = Depends(require_control),
+        idempotency_key: str = Header(alias="Idempotency-Key"),
+    ):
+        return queue_provider_command(
+            idempotency_key=idempotency_key,
+            kind=f"portfolio_{request.kind}",
+            payload={},
         )
 
     @app.post("/api/commands", status_code=status.HTTP_202_ACCEPTED)
