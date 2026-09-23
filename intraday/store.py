@@ -62,6 +62,17 @@ class IntradayStore:
                     event_time TEXT NOT NULL,
                     payload_json TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_snapshots_event_time
+                    ON snapshots(event_time, id);
+                CREATE TABLE IF NOT EXISTS scheduler_runs (
+                    job_name TEXT NOT NULL,
+                    scheduled_for TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('running', 'success', 'error')),
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    error_code TEXT,
+                    PRIMARY KEY (job_name, scheduled_for)
+                );
                 CREATE TABLE IF NOT EXISTS decisions (
                     id TEXT PRIMARY KEY,
                     tick_id TEXT NOT NULL UNIQUE,
@@ -367,8 +378,68 @@ class IntradayStore:
                 if name not in command_columns:
                     connection.execute(f"ALTER TABLE commands ADD COLUMN {name} {definition}")
             connection.execute(
-                "UPDATE schema_meta SET value='9' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='10' WHERE key='schema_version'"
             )
+
+    def claim_scheduler_run(
+        self, job_name: str, scheduled_for: datetime, *, started_at: datetime | None = None
+    ) -> bool:
+        if not job_name:
+            raise ValueError("scheduler job name is required")
+        if scheduled_for.tzinfo is None or scheduled_for.utcoffset() is None:
+            raise ValueError("scheduler slot must be timezone-aware")
+        started_at = started_at or datetime.now(timezone.utc)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO scheduler_runs "
+                "(job_name, scheduled_for, status, started_at) VALUES (?, ?, 'running', ?)",
+                (
+                    job_name,
+                    scheduled_for.astimezone(timezone.utc).isoformat(),
+                    started_at.astimezone(timezone.utc).isoformat(),
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def finish_scheduler_run(
+        self,
+        job_name: str,
+        scheduled_for: datetime,
+        *,
+        status: str,
+        error_code: str | None = None,
+        finished_at: datetime | None = None,
+    ) -> None:
+        if status not in {"success", "error"}:
+            raise ValueError("scheduler status must be success or error")
+        if status == "success" and error_code is not None:
+            raise ValueError("successful scheduler run cannot have an error code")
+        finished_at = finished_at or datetime.now(timezone.utc)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE scheduler_runs SET status=?, finished_at=?, error_code=? "
+                "WHERE job_name=? AND scheduled_for=? AND status='running'",
+                (
+                    status,
+                    finished_at.astimezone(timezone.utc).isoformat(),
+                    error_code,
+                    job_name,
+                    scheduled_for.astimezone(timezone.utc).isoformat(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("running scheduler slot not found")
+
+    def scheduler_run(self, job_name: str, scheduled_for: datetime) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM scheduler_runs WHERE job_name=? AND scheduled_for=?",
+                (
+                    job_name,
+                    scheduled_for.astimezone(timezone.utc).isoformat(),
+                ),
+            ).fetchone()
+        return None if row is None else dict(row)
 
     def record_tick(
         self,

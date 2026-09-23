@@ -90,9 +90,15 @@ def run_parent_paper_cycle(
     *,
     spot_rule: SpotRuleParameters | ScopedRuleCandidate,
     perp_rule: PerpRuleParameters | ScopedRuleCandidate,
+    decision_scopes: tuple[DecisionScope, ...] = (
+        DecisionScope.SPOT_DAILY,
+        DecisionScope.PERP_INTRADAY,
+    ),
+    record_snapshot: bool = True,
     now: datetime,
 ) -> dict:
-    store.record_snapshot(snapshot)
+    if record_snapshot:
+        store.record_snapshot(snapshot)
     state = store.load_parent_portfolio_state()
     if state is None:
         raise ValueError("parent paper portfolio is not initialized")
@@ -176,7 +182,11 @@ def run_parent_paper_cycle(
                 )
 
     if state.paper_active:
-        if state.spot_quantity == 0 and spot_observation.entry:
+        if (
+            DecisionScope.SPOT_DAILY in decision_scopes
+            and state.spot_quantity == 0
+            and spot_observation.entry
+        ):
             try:
                 scoped = provider.decide_scoped(
                     snapshot,
@@ -212,53 +222,54 @@ def run_parent_paper_cycle(
                         signal_id=signal_id,
                         direction=scoped.decision.direction,
                     )
-        try:
-            scoped = provider.decide_scoped(
-                snapshot,
-                f"{snapshot.symbol}:perp_intraday:{int(now.timestamp() * 1000)}",
-                DecisionScope.PERP_INTRADAY,
-                now,
-            )
-        except RuntimeError:
-            provider_errors.append(DecisionScope.PERP_INTRADAY.value)
-        else:
-            authorization = gate.perp_entry(
-                state, scoped.decision, perp_parameters
-            )
-            signal_id = record_scoped_signal(
-                store,
-                snapshot,
-                scoped,
-                gate_passed=authorization.allowed,
-                gate_reason=(
-                    None
-                    if authorization.allowed
-                    else ";".join(authorization.reason_codes)
-                ),
-                rule_id=perp_rule_id,
-            )
-            if authorization.allowed:
-                reducing = authorization.reduce_only
-                reason = None
-                if reducing:
-                    reason = (
-                        "take_profit"
-                        if scoped.decision.direction == Direction.TAKE_PROFIT
-                        else (
-                            "no_same_tick_flip"
-                            if "no_same_tick_flip" in authorization.reason_codes
-                            else "model_exit"
-                        )
-                    )
-                execute(
-                    authorization,
-                    signal_id=None if reducing else signal_id,
-                    direction=None if reducing else scoped.decision.direction,
-                    stop_distance_pct=(
-                        None if reducing else perp_parameters.stop_distance_pct
-                    ),
-                    close_reason=reason,
+        if DecisionScope.PERP_INTRADAY in decision_scopes:
+            try:
+                scoped = provider.decide_scoped(
+                    snapshot,
+                    f"{snapshot.symbol}:perp_intraday:{int(now.timestamp() * 1000)}",
+                    DecisionScope.PERP_INTRADAY,
+                    now,
                 )
+            except RuntimeError:
+                provider_errors.append(DecisionScope.PERP_INTRADAY.value)
+            else:
+                authorization = gate.perp_entry(
+                    state, scoped.decision, perp_parameters
+                )
+                signal_id = record_scoped_signal(
+                    store,
+                    snapshot,
+                    scoped,
+                    gate_passed=authorization.allowed,
+                    gate_reason=(
+                        None
+                        if authorization.allowed
+                        else ";".join(authorization.reason_codes)
+                    ),
+                    rule_id=perp_rule_id,
+                )
+                if authorization.allowed:
+                    reducing = authorization.reduce_only
+                    reason = None
+                    if reducing:
+                        reason = (
+                            "take_profit"
+                            if scoped.decision.direction == Direction.TAKE_PROFIT
+                            else (
+                                "no_same_tick_flip"
+                                if "no_same_tick_flip" in authorization.reason_codes
+                                else "model_exit"
+                            )
+                        )
+                    execute(
+                        authorization,
+                        signal_id=None if reducing else signal_id,
+                        direction=None if reducing else scoped.decision.direction,
+                        stop_distance_pct=(
+                            None if reducing else perp_parameters.stop_distance_pct
+                        ),
+                        close_reason=reason,
+                    )
 
     state = state.model_copy(update={"updated_at": now})
     store.save_parent_portfolio_state(
@@ -274,3 +285,26 @@ def run_parent_paper_cycle(
         "perp_notional": state.perp_notional,
         "entries_paused": state.entries_paused,
     }
+
+
+def run_parent_risk_cycle(
+    store,
+    snapshot: FeatureSnapshot,
+    spot_observation: DonchianObservation,
+    *,
+    spot_rule: SpotRuleParameters | ScopedRuleCandidate,
+    perp_rule: PerpRuleParameters | ScopedRuleCandidate,
+    now: datetime,
+) -> dict:
+    """Run marks and deterministic exits without crossing the provider boundary."""
+    return run_parent_paper_cycle(
+        store,
+        None,
+        snapshot,
+        spot_observation,
+        spot_rule=spot_rule,
+        perp_rule=perp_rule,
+        decision_scopes=(),
+        record_snapshot=False,
+        now=now,
+    )

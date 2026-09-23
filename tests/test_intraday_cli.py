@@ -111,6 +111,19 @@ def test_default_paths_use_xdg_directories(monkeypatch, tmp_path):
     )
 
 
+def test_multi_cadence_defaults_are_safe_and_explicit():
+    config = IntradayConfig()
+
+    assert config.risk_interval_seconds == 5
+    assert config.order_book_interval_seconds == 15
+    assert config.perp_decision_interval_seconds == 30
+    assert config.derivatives_interval_seconds == 60
+    assert config.compact_shadow_interval_seconds == 900
+    assert config.news_interval_seconds == 1800
+    assert config.llm_analysis_interval_seconds == 3600
+    assert config.retrospective_hour_vietnam == 9
+
+
 def test_explicit_database_precedes_environment_and_xdg(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
     monkeypatch.setenv("INTRADAY_DATABASE", str(tmp_path / "environment.sqlite"))

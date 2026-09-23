@@ -44,7 +44,7 @@ from intraday.journal import (
     export_training_data,
     training_output_path,
 )
-from intraday.market import BinanceUsdMClient
+from intraday.market import BinanceUsdMClient, MultiCadenceMarketCache, StaleMarketData
 from intraday.notifications import TelegramNotifier, drain_outbox
 from intraday.provider_client import ProviderPreflightClient
 from intraday.provider_profiles import ProviderSecretStore
@@ -56,6 +56,7 @@ from intraday.portfolio_coordinator import (
 from intraday.portfolio_soak import evaluate_portfolio_soak, run_soak_cycle
 from intraday.parent_runtime import (
     flatten_parent_paper_positions,
+    run_parent_risk_cycle,
     run_parent_paper_cycle,
 )
 from intraday.replay import compare_cross_venue
@@ -67,6 +68,7 @@ from intraday.runtime import (
 )
 from intraday.store import IntradayStore
 from intraday.spot_signal import BinanceSpotDailyClient, evaluate_donchian
+from intraday.scheduler import claim_cadence
 
 
 def _project_version() -> str:
@@ -486,14 +488,21 @@ def _portfolio_cli(arguments) -> None:
                 secret_store,
                 fallback=StubDecisionProvider(direction=Direction.HOLD),
             )
-            market = BinanceUsdMClient()
+            market = MultiCadenceMarketCache(BinanceUsdMClient())
             config = IntradayConfig.from_environment(database=arguments.database)
-            interval = config.interval_seconds
+            interval = config.risk_interval_seconds
             background_started = False
             while True:
                 now = datetime.now(timezone.utc)
                 process_pending_commands(store, now=now)
-                snapshot = market.snapshot("BTCUSDT", now=now)
+                try:
+                    snapshot = market.snapshot("BTCUSDT", now=now)
+                except StaleMarketData as error:
+                    print(json.dumps({"status": "degraded", "error": str(error)}), flush=True)
+                    if arguments.once:
+                        return
+                    time.sleep(max(1, interval))
+                    continue
                 if store.load_parent_portfolio_state() is None:
                     initial = ParentPortfolioState(
                         mark_price=float(snapshot.features["mark_price"]),
@@ -507,9 +516,27 @@ def _portfolio_cli(arguments) -> None:
                     store.save_parent_portfolio_state(
                         initial, event_kind="initialized", actor="soak_worker"
                     )
-                result = run_soak_cycle(
-                    store, provider, snapshot, now=now
+                slot = claim_cadence(
+                    store, "portfolio_soak_perp", now,
+                    config.perp_decision_interval_seconds,
                 )
+                result = {"status": "waiting_for_next_slot"}
+                if slot is not None:
+                    try:
+                        result = run_soak_cycle(
+                            store, provider, snapshot, now=now,
+                            scopes=(DecisionScope.PERP_INTRADAY,),
+                        )
+                    except Exception as error:
+                        store.finish_scheduler_run(
+                            "portfolio_soak_perp", slot, status="error",
+                            error_code=type(error).__name__, finished_at=now,
+                        )
+                        raise
+                    else:
+                        store.finish_scheduler_run(
+                            "portfolio_soak_perp", slot, status="success", finished_at=now
+                        )
                 print(json.dumps(result), flush=True)
                 if arguments.once:
                     return
@@ -550,10 +577,10 @@ def _portfolio_cli(arguments) -> None:
             secret_store,
             fallback=StubDecisionProvider(direction=Direction.HOLD),
         )
-        market = BinanceUsdMClient()
+        market = MultiCadenceMarketCache(BinanceUsdMClient())
         spot_market = BinanceSpotDailyClient()
         config = IntradayConfig.from_environment(database=arguments.database)
-        interval = config.interval_seconds
+        interval = config.risk_interval_seconds
         if not arguments.once:
             if config.news_enabled:
                 threading.Thread(
@@ -562,32 +589,84 @@ def _portfolio_cli(arguments) -> None:
             threading.Thread(
                 target=_analysis_loop, args=(config,), daemon=True
             ).start()
-        cached_day = None
+        cached_daily_close = None
+        last_spot_check_day = None
         spot_observation = None
         while True:
             now = datetime.now(timezone.utc)
-            snapshot = market.snapshot("BTCUSDT", now=now)
+            try:
+                snapshot = market.snapshot("BTCUSDT", now=now)
+            except StaleMarketData as error:
+                print(json.dumps({"status": "degraded", "error": str(error)}), flush=True)
+                if arguments.once:
+                    return
+                time.sleep(max(1, interval))
+                continue
             process_pending_commands(store, now=now, snapshot=snapshot)
-            if cached_day != now.date() or spot_observation is None:
+            spot_event = False
+            utc_day = now.astimezone(timezone.utc).date()
+            if last_spot_check_day != utc_day:
                 limit = max(
                     spot_rule.parameters.entry_window,
                     spot_rule.parameters.exit_window,
                     spot_rule.parameters.atr_period,
                 ) + 2
                 daily = spot_market.candles(limit=max(35, limit), now=now)
-                spot_observation = evaluate_donchian(
-                    daily, spot_rule.parameters
-                )
-                cached_day = now.date()
-            result = run_parent_paper_cycle(
-                store,
-                provider,
-                snapshot,
-                spot_observation,
-                spot_rule=spot_rule,
-                perp_rule=perp_rule,
-                now=now,
+                if daily:
+                    closed_at = datetime.fromtimestamp(
+                        int(daily[-1][6]) / 1000, tz=timezone.utc
+                    )
+                    if cached_daily_close != closed_at:
+                        spot_observation = evaluate_donchian(
+                            daily, spot_rule.parameters
+                        )
+                        cached_daily_close = closed_at
+                        spot_event = True
+                last_spot_check_day = utc_day
+            if spot_observation is None:
+                raise RuntimeError("no closed daily candle is available")
+            risk_result = run_parent_risk_cycle(
+                store, snapshot, spot_observation,
+                spot_rule=spot_rule, perp_rule=perp_rule, now=now,
             )
+            slots = {}
+            perp_slot = claim_cadence(
+                store, "paper_perp_numeric", now,
+                config.perp_decision_interval_seconds,
+            )
+            if perp_slot is not None:
+                slots[DecisionScope.PERP_INTRADAY] = (
+                    "paper_perp_numeric", perp_slot
+                )
+            if spot_event and spot_observation.entry:
+                if store.claim_scheduler_run(
+                    "paper_spot_daily", cached_daily_close, started_at=now
+                ):
+                    slots[DecisionScope.SPOT_DAILY] = (
+                        "paper_spot_daily", cached_daily_close
+                    )
+            result = risk_result
+            if slots:
+                try:
+                    result = run_parent_paper_cycle(
+                        store, provider, snapshot, spot_observation,
+                        spot_rule=spot_rule, perp_rule=perp_rule,
+                        decision_scopes=tuple(slots), now=now,
+                    )
+                except Exception as error:
+                    for job, slot in slots.values():
+                        store.finish_scheduler_run(
+                            job, slot, status="error",
+                            error_code=type(error).__name__, finished_at=now,
+                        )
+                    raise
+                else:
+                    for job, slot in slots.values():
+                        store.finish_scheduler_run(
+                            job, slot, status="success", finished_at=now
+                        )
+            result["risk_fills"] = risk_result["fills"]
+            result["decision_scopes"] = [scope.value for scope in slots]
             print(json.dumps(result), flush=True)
             if arguments.once:
                 return

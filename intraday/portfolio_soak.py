@@ -40,11 +40,15 @@ def run_soak_cycle(
     snapshot: FeatureSnapshot,
     *,
     now: datetime,
+    scopes: tuple[DecisionScope, ...] = (
+        DecisionScope.SPOT_DAILY,
+        DecisionScope.PERP_INTRADAY,
+    ),
 ) -> dict[str, str]:
     """Exercise both Jev workflows and persist health only; never mutate positions."""
     store.record_snapshot(snapshot)
     result = {}
-    for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY):
+    for scope in scopes:
         tick_id = f"{snapshot.symbol}:{scope.value}:{int(now.timestamp() * 1000)}"
         try:
             scoped = provider.decide_scoped(snapshot, tick_id, scope, now)

@@ -45,6 +45,11 @@ class IntradayConfig:
     symbol: str = "BTCUSDT"
     initial_equity: float = 10_000.0
     interval_seconds: float = 5.0
+    order_book_interval_seconds: float = 15.0
+    perp_decision_interval_seconds: float = 30.0
+    derivatives_interval_seconds: float = 60.0
+    compact_shadow_interval_seconds: float = 900.0
+    retrospective_hour_vietnam: int = 9
     provider: str = "stub"
     provider_secrets_file: Path = field(default_factory=default_provider_secrets_path)
     llm_analysis_interval_seconds: float = 3600
@@ -68,6 +73,16 @@ class IntradayConfig:
             raise ValueError("initial equity must be positive")
         if self.interval_seconds < 1:
             raise ValueError("interval must be at least one second")
+        if self.order_book_interval_seconds < self.interval_seconds:
+            raise ValueError("order-book interval must not be faster than risk")
+        if self.perp_decision_interval_seconds < self.interval_seconds:
+            raise ValueError("Perp decision interval must not be faster than risk")
+        if self.derivatives_interval_seconds < self.interval_seconds:
+            raise ValueError("derivatives interval must not be faster than risk")
+        if self.compact_shadow_interval_seconds < self.perp_decision_interval_seconds:
+            raise ValueError("compact shadow interval must not be faster than primary")
+        if not 0 <= self.retrospective_hour_vietnam <= 23:
+            raise ValueError("retrospective hour must be between 0 and 23")
         if self.provider != "stub":
             raise ValueError("only the stub provider is enabled before soak acceptance")
         if self.llm_analysis_interval_seconds < 300:
@@ -92,6 +107,21 @@ class IntradayConfig:
             symbol=os.getenv("INTRADAY_SYMBOL", "BTCUSDT"),
             initial_equity=float(os.getenv("INTRADAY_PAPER_BALANCE", "10000")),
             interval_seconds=float(os.getenv("INTRADAY_INTERVAL_SECONDS", "5")),
+            order_book_interval_seconds=float(
+                os.getenv("INTRADAY_ORDER_BOOK_INTERVAL_SECONDS", "15")
+            ),
+            perp_decision_interval_seconds=float(
+                os.getenv("INTRADAY_PERP_DECISION_INTERVAL_SECONDS", "30")
+            ),
+            derivatives_interval_seconds=float(
+                os.getenv("INTRADAY_DERIVATIVES_INTERVAL_SECONDS", "60")
+            ),
+            compact_shadow_interval_seconds=float(
+                os.getenv("INTRADAY_COMPACT_SHADOW_INTERVAL_SECONDS", "900")
+            ),
+            retrospective_hour_vietnam=int(
+                os.getenv("INTRADAY_RETROSPECTIVE_HOUR_VIETNAM", "9")
+            ),
             provider=os.getenv("INTRADAY_PROVIDER", "stub"),
             provider_secrets_file=Path(
                 os.getenv("INTRADAY_PROVIDER_SECRETS_FILE")
@@ -115,3 +145,8 @@ class IntradayConfig:
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN") or None,
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID") or None,
         )
+
+    @property
+    def risk_interval_seconds(self) -> float:
+        """Named alias preserving INTRADAY_INTERVAL_SECONDS compatibility."""
+        return self.interval_seconds

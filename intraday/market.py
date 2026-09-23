@@ -228,3 +228,103 @@ class BinanceUsdMClient:
             built_at=now,
             sentiment_score=sentiment_score,
         )
+
+
+class StaleMarketData(RuntimeError):
+    """A required cached component is absent or too old for safe decisions."""
+
+
+class MultiCadenceMarketCache:
+    """Refresh public market components independently and assemble one snapshot."""
+
+    def __init__(
+        self,
+        client: BinanceUsdMClient,
+        *,
+        premium_interval_seconds: float = 5,
+        book_interval_seconds: float = 15,
+        derivatives_interval_seconds: float = 60,
+    ):
+        self.client = client
+        self.intervals = {
+            "premium": premium_interval_seconds,
+            "book": book_interval_seconds,
+            "open_interest": derivatives_interval_seconds,
+            "long_short": derivatives_interval_seconds,
+        }
+        self._values: dict[str, object] = {}
+        self._updated: dict[str, datetime] = {}
+        self._candle_slot: datetime | None = None
+
+    def _due(self, name: str, now: datetime) -> bool:
+        updated = self._updated.get(name)
+        return updated is None or (now - updated).total_seconds() >= self.intervals[name]
+
+    def _refresh(self, name: str, now: datetime, fetch) -> None:
+        if not self._due(name, now):
+            return
+        try:
+            value = fetch()
+        except Exception:
+            return
+        if value is not None:
+            self._values[name] = value
+            self._updated[name] = now
+
+    def snapshot(
+        self,
+        symbol: str = "BTCUSDT",
+        *,
+        now: datetime | None = None,
+        sentiment_score: float | None = 0.0,
+    ) -> FeatureSnapshot:
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("market cache time must be timezone-aware")
+        now = now.astimezone(timezone.utc)
+        candle_slot = now.replace(minute=0, second=0, microsecond=0)
+        if self._candle_slot != candle_slot or "candles" not in self._values:
+            try:
+                rows = [
+                    row
+                    for row in self.client.candles(symbol, interval="1h", limit=100)
+                    if int(row[6]) <= int(now.timestamp() * 1000)
+                ]
+            except Exception:
+                rows = None
+            if rows:
+                self._values["candles"] = rows
+                self._updated["candles"] = now
+                self._candle_slot = candle_slot
+        self._refresh("premium", now, lambda: self.client.premium(symbol))
+        self._refresh("book", now, lambda: self.client.order_book(symbol, limit=20))
+        self._refresh("open_interest", now, lambda: self.client.open_interest(symbol))
+        self._refresh("long_short", now, lambda: self.client.long_short_ratio(symbol))
+
+        maximum_age = {
+            "premium": 10,
+            "book": 30,
+            "open_interest": 120,
+            "long_short": 120,
+            "candles": 7200,
+        }
+        stale = [
+            name
+            for name, age in maximum_age.items()
+            if name not in self._values
+            or name not in self._updated
+            or (now - self._updated[name]).total_seconds() > age
+        ]
+        if stale:
+            raise StaleMarketData("stale market components: " + ",".join(stale))
+        return build_feature_snapshot(
+            symbol=symbol,
+            candles=self._values["candles"],
+            book=self._values["book"],
+            premium=self._values["premium"],
+            open_interest=self._values["open_interest"],
+            long_short=self._values["long_short"],
+            event_time=now,
+            built_at=now,
+            sentiment_score=sentiment_score,
+        )

@@ -16,6 +16,7 @@ from intraday.contracts import (
 )
 from intraday.parent_runtime import (
     flatten_parent_paper_positions,
+    run_parent_risk_cycle,
     run_parent_paper_cycle,
 )
 from intraday.portfolio_coordinator import ParentPortfolioState
@@ -277,3 +278,55 @@ def test_deterministic_spot_exit_runs_even_when_provider_is_down(tmp_path):
     assert result["fills"] == 1
     assert result["provider_errors"] == ["perp_intraday"]
     assert store.load_parent_portfolio_state().spot_quantity == 0
+
+
+def test_risk_cycle_closes_positions_without_accepting_a_provider(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    store.save_parent_portfolio_state(
+        active_state(spot_quantity=0.02, spot_entry_price=90_000),
+        event_kind="seed",
+        actor="test",
+    )
+
+    result = run_parent_risk_cycle(
+        store,
+        snapshot(),
+        observation(entry=False, exit=True),
+        spot_rule=SpotRuleParameters(),
+        perp_rule=PerpRuleParameters(),
+        now=NOW,
+    )
+
+    assert result["fills"] == 1
+    assert result["provider_errors"] == []
+    assert store.load_parent_portfolio_state().spot_quantity == 0
+
+
+def test_parent_cycle_can_limit_provider_calls_to_due_scope(tmp_path):
+    class CountingProvider(Provider):
+        def __init__(self):
+            super().__init__()
+            self.scopes = []
+
+        def decide_scoped(self, market, tick_id, scope, now):
+            self.scopes.append(scope)
+            return super().decide_scoped(market, tick_id, scope, now)
+
+    provider = CountingProvider()
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    store.save_parent_portfolio_state(
+        active_state(), event_kind="activated", actor="test"
+    )
+
+    run_parent_paper_cycle(
+        store,
+        provider,
+        snapshot(),
+        observation(),
+        spot_rule=SpotRuleParameters(),
+        perp_rule=PerpRuleParameters(),
+        decision_scopes=(DecisionScope.PERP_INTRADAY,),
+        now=NOW,
+    )
+
+    assert provider.scopes == [DecisionScope.PERP_INTRADAY]

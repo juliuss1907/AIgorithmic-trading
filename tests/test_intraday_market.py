@@ -1,9 +1,15 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
 
-from intraday.market import BinanceUsdMClient, build_feature_snapshot, compute_indicators
+from intraday.market import (
+    BinanceUsdMClient,
+    MultiCadenceMarketCache,
+    StaleMarketData,
+    build_feature_snapshot,
+    compute_indicators,
+)
 
 
 def candles(count: int = 60):
@@ -135,3 +141,50 @@ def test_snapshot_checksum_rejects_tampered_persisted_payload():
 
     with pytest.raises(ValidationError, match="checksum"):
         type(original).model_validate(payload)
+
+
+def test_market_cache_fetches_each_component_at_its_own_cadence():
+    class Client:
+        def __init__(self):
+            self.calls = {name: 0 for name in ("candles", "book", "premium", "oi", "ratio")}
+
+        def candles(self, *args, **kwargs):
+            self.calls["candles"] += 1
+            return candles(100)
+
+        def order_book(self, *args, **kwargs):
+            self.calls["book"] += 1
+            return {"bids": [["40589", "2"]], "asks": [["40590", "1"]]}
+
+        def premium(self, *args, **kwargs):
+            self.calls["premium"] += 1
+            return {"markPrice": "40589.5", "indexPrice": "40580", "lastFundingRate": "0.0001"}
+
+        def open_interest(self, *args, **kwargs):
+            self.calls["oi"] += 1
+            return {"openInterest": "123"}
+
+        def long_short_ratio(self, *args, **kwargs):
+            self.calls["ratio"] += 1
+            return {"longShortRatio": "1.2"}
+
+    now = datetime(2026, 9, 21, 12, 10, tzinfo=timezone.utc)
+    client = Client()
+    cache = MultiCadenceMarketCache(client)
+
+    for offset in (0, 5, 15, 60):
+        snapshot = cache.snapshot("BTCUSDT", now=now + timedelta(seconds=offset))
+
+    assert snapshot.features["open_interest"] == 123
+    assert client.calls == {"candles": 1, "book": 3, "premium": 4, "oi": 2, "ratio": 2}
+
+
+def test_market_cache_fails_closed_when_required_data_is_stale():
+    class BrokenClient:
+        def premium(self, *args, **kwargs):
+            raise TimeoutError
+
+    cache = MultiCadenceMarketCache(BrokenClient())
+
+    with pytest.raises(StaleMarketData, match="premium"):
+        cache.snapshot("BTCUSDT", now=datetime(2026, 9, 21, tzinfo=timezone.utc))

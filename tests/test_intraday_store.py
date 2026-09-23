@@ -110,3 +110,17 @@ def test_news_events_round_trip_without_duplicates(tmp_path):
     loaded = store.list_news_events(limit=10)
     assert len(loaded) == 1
     assert loaded[0].event_id == "news-1"
+
+
+def test_scheduler_slots_are_claimed_once_across_store_instances(tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    first = IntradayStore(database)
+    restarted = IntradayStore(database)
+
+    assert first.claim_scheduler_run("perp_numeric", NOW) is True
+    assert restarted.claim_scheduler_run("perp_numeric", NOW) is False
+
+    first.finish_scheduler_run("perp_numeric", NOW, status="success")
+    record = restarted.scheduler_run("perp_numeric", NOW)
+    assert record["status"] == "success"
+    assert record["finished_at"] is not None
