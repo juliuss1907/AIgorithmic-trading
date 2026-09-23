@@ -264,6 +264,74 @@ class IntradayStore:
                     filled_at TEXT NOT NULL,
                     payload_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS signals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    decision_id TEXT NOT NULL UNIQUE,
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    state_snapshot TEXT NOT NULL,
+                    raw_signals TEXT NOT NULL,
+                    jev_answers TEXT NOT NULL,
+                    gate_passed INTEGER NOT NULL CHECK (gate_passed IN (0, 1)),
+                    gate_reason TEXT,
+                    rules_version TEXT NOT NULL,
+                    llm_thesis TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_signals_time_scope
+                    ON signals(timestamp, symbol, scope);
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trade_key TEXT NOT NULL UNIQUE,
+                    signal_id INTEGER NOT NULL REFERENCES signals(id),
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    entry_fill_id TEXT NOT NULL,
+                    exit_fill_id TEXT NOT NULL,
+                    timestamp_open TEXT NOT NULL,
+                    timestamp_close TEXT,
+                    direction TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    exit_price REAL,
+                    stop_loss REAL,
+                    take_profit REAL,
+                    position_size REAL NOT NULL,
+                    pnl_abs REAL,
+                    pnl_pct REAL,
+                    close_reason TEXT,
+                    duration_sec INTEGER,
+                    is_paper INTEGER NOT NULL DEFAULT 1 CHECK (is_paper IN (0, 1))
+                );
+                CREATE INDEX IF NOT EXISTS idx_trades_signal
+                    ON trades(signal_id, timestamp_close);
+                CREATE TABLE IF NOT EXISTS open_trade_context (
+                    scope TEXT PRIMARY KEY CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    trade_key TEXT NOT NULL UNIQUE,
+                    signal_id INTEGER NOT NULL REFERENCES signals(id),
+                    entry_fill_id TEXT NOT NULL,
+                    timestamp_open TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    position_size REAL NOT NULL,
+                    entry_fee REAL NOT NULL,
+                    stop_loss REAL,
+                    take_profit REAL
+                );
+                CREATE TRIGGER IF NOT EXISTS signals_append_only_update
+                BEFORE UPDATE ON signals BEGIN
+                    SELECT RAISE(ABORT, 'signals are append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS signals_append_only_delete
+                BEFORE DELETE ON signals BEGIN
+                    SELECT RAISE(ABORT, 'signals are append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS trades_append_only_update
+                BEFORE UPDATE ON trades BEGIN
+                    SELECT RAISE(ABORT, 'trades are append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS trades_append_only_delete
+                BEFORE DELETE ON trades BEGIN
+                    SELECT RAISE(ABORT, 'trades are append-only');
+                END;
                 CREATE TABLE IF NOT EXISTS rule_evaluations (
                     id TEXT PRIMARY KEY,
                     candidate_id TEXT NOT NULL REFERENCES rules(id),
@@ -293,7 +361,7 @@ class IntradayStore:
                 if name not in command_columns:
                     connection.execute(f"ALTER TABLE commands ADD COLUMN {name} {definition}")
             connection.execute(
-                "UPDATE schema_meta SET value='8' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='9' WHERE key='schema_version'"
             )
 
     def record_tick(
@@ -528,6 +596,140 @@ class IntradayStore:
                     _json(fill),
                 ),
             )
+
+    def record_journal_signal(
+        self,
+        *,
+        decision_id: str,
+        timestamp: datetime,
+        symbol: str,
+        scope: DecisionScope,
+        state_snapshot: str,
+        raw_signals: dict[str, float | None],
+        jev_answers: dict,
+        gate_passed: bool,
+        gate_reason: str | None,
+        rules_version: str,
+        llm_thesis: str | None,
+    ) -> int:
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise ValueError("signal timestamp must be timezone-aware")
+        if not decision_id or not symbol or not state_snapshot or not rules_version:
+            raise ValueError("signal identity and snapshots must be nonempty")
+        if not raw_signals or any(
+            isinstance(value, bool) or (
+                value is not None and not isinstance(value, (int, float))
+            )
+            for value in raw_signals.values()
+        ):
+            raise ValueError("raw_signals must contain named numeric values")
+        if not jev_answers:
+            raise ValueError("jev_answers must not be empty")
+        if gate_passed and gate_reason is not None:
+            raise ValueError("a passed gate cannot have a rejection reason")
+        if not gate_passed and not gate_reason:
+            raise ValueError("a rejected gate requires a reason")
+        values = (
+            decision_id,
+            timestamp.astimezone(timezone.utc).isoformat(),
+            symbol,
+            scope.value,
+            state_snapshot,
+            json.dumps(raw_signals, sort_keys=True, separators=(",", ":")),
+            json.dumps(jev_answers, sort_keys=True, separators=(",", ":")),
+            int(gate_passed),
+            gate_reason,
+            rules_version,
+            llm_thesis,
+        )
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO signals "
+                "(decision_id, timestamp, symbol, scope, state_snapshot, raw_signals, "
+                "jev_answers, gate_passed, gate_reason, rules_version, llm_thesis) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+            row = connection.execute(
+                "SELECT id, timestamp, symbol, scope, state_snapshot, raw_signals, "
+                "jev_answers, gate_passed, gate_reason, rules_version, llm_thesis "
+                "FROM signals WHERE decision_id=?",
+                (decision_id,),
+            ).fetchone()
+            if tuple(row[1:]) != values[1:]:
+                raise ValueError("decision_id was reused with different journal data")
+            return int(row["id"])
+
+    def record_completed_trade(
+        self,
+        *,
+        trade_key: str,
+        signal_id: int,
+        scope: DecisionScope,
+        entry_fill_id: str,
+        exit_fill_id: str,
+        timestamp_open: datetime,
+        timestamp_close: datetime,
+        direction: str,
+        entry_price: float,
+        exit_price: float,
+        stop_loss: float | None,
+        take_profit: float | None,
+        position_size: float,
+        pnl_abs: float,
+        pnl_pct: float,
+        close_reason: str,
+        duration_sec: int,
+        is_paper: bool = True,
+    ) -> int:
+        if timestamp_open.tzinfo is None or timestamp_open.utcoffset() is None:
+            raise ValueError("trade open timestamp must be timezone-aware")
+        if timestamp_close.tzinfo is None or timestamp_close.utcoffset() is None:
+            raise ValueError("trade close timestamp must be timezone-aware")
+        if timestamp_close < timestamp_open or duration_sec < 0:
+            raise ValueError("trade close must not precede its open")
+        if min(entry_price, exit_price, position_size) <= 0:
+            raise ValueError("trade prices and position size must be positive")
+        values = (
+            trade_key,
+            signal_id,
+            scope.value,
+            entry_fill_id,
+            exit_fill_id,
+            timestamp_open.astimezone(timezone.utc).isoformat(),
+            timestamp_close.astimezone(timezone.utc).isoformat(),
+            direction,
+            entry_price,
+            exit_price,
+            stop_loss,
+            take_profit,
+            position_size,
+            pnl_abs,
+            pnl_pct,
+            close_reason,
+            duration_sec,
+            int(is_paper),
+        )
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO trades "
+                "(trade_key, signal_id, scope, entry_fill_id, exit_fill_id, "
+                "timestamp_open, timestamp_close, direction, entry_price, exit_price, "
+                "stop_loss, take_profit, position_size, pnl_abs, pnl_pct, close_reason, "
+                "duration_sec, is_paper) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?, ?, ?, ?, ?)",
+                values,
+            )
+            row = connection.execute(
+                "SELECT id, trade_key, signal_id, scope, entry_fill_id, exit_fill_id, "
+                "timestamp_open, timestamp_close, direction, entry_price, exit_price, "
+                "stop_loss, take_profit, position_size, pnl_abs, pnl_pct, close_reason, "
+                "duration_sec, is_paper FROM trades WHERE trade_key=?",
+                (trade_key,),
+            ).fetchone()
+            if tuple(row[1:]) != values:
+                raise ValueError("trade_key was reused with different journal data")
+            return int(row["id"])
 
     def list_parent_paper_fills(self, limit: int = 100) -> list[ParentPaperFill]:
         if not 1 <= limit <= 1000:
