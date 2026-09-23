@@ -15,6 +15,7 @@ from intraday.contracts import (
     Direction,
     FeatureSnapshot,
     JevDecision,
+    JevDecisionTrace,
     ModelCallRecord,
     ProviderRole,
     Regime,
@@ -287,10 +288,12 @@ class JevDecisionProvider:
         *,
         workflow: str,
         scope: DecisionScope | None,
-    ) -> JevDecision:
+    ) -> tuple[JevDecision, JevDecisionTrace]:
+        state = self._state(snapshot, scope)
+        state_snapshot = json.dumps(state, sort_keys=True, separators=(",", ":"))
         payload = {
             "model": self.credential.profile.model,
-            "state": self._state(snapshot, scope),
+            "state": state,
             "questions": self._questions(scope),
         }
         body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -372,7 +375,7 @@ class JevDecisionProvider:
         decision_id = hashlib.sha256(
             f"{self.model_ref}:{tick_id}:{snapshot.checksum}".encode()
         ).hexdigest()[:24]
-        return JevDecision(
+        decision = JevDecision(
             decision_id=decision_id,
             tick_id=tick_id,
             snapshot_id=snapshot.snapshot_id,
@@ -387,15 +390,26 @@ class JevDecisionProvider:
             latency_ms=latency_ms,
             provider_request_id=request_id,
         )
+        trace = JevDecisionTrace(
+            state_snapshot=state_snapshot,
+            raw_signals={
+                **snapshot.features,
+                "bid": float(snapshot.bid),
+                "ask": float(snapshot.ask),
+            },
+            jev_answers=response_payload["answers"],
+        )
+        return decision, trace
 
     def decide(self, snapshot: FeatureSnapshot, tick_id: str, now) -> JevDecision:
-        return self._decide(
+        decision, _ = self._decide(
             snapshot,
             tick_id,
             now,
             workflow="jev_decision",
             scope=None,
         )
+        return decision
 
     def decide_scoped(
         self,
@@ -408,7 +422,7 @@ class JevDecisionProvider:
             DecisionScope.SPOT_DAILY: "spot_daily_entry",
             DecisionScope.PERP_INTRADAY: "perp_intraday_entry",
         }[scope]
-        decision = self._decide(
+        decision, trace = self._decide(
             snapshot,
             tick_id,
             now,
@@ -419,6 +433,7 @@ class JevDecisionProvider:
             scope=scope,
             workflow=workflow,
             decision=decision,
+            trace=trace,
         )
 
 

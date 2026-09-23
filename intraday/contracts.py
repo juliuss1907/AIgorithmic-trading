@@ -191,10 +191,32 @@ class JevDecision(StrictContract):
     _created_at_is_aware = field_validator("created_at")(_aware)
 
 
+class JevDecisionTrace(StrictContract):
+    state_snapshot: str = Field(min_length=2)
+    raw_signals: dict[str, float | None]
+    jev_answers: dict[str, dict]
+
+    @model_validator(mode="after")
+    def trace_is_complete_and_canonical(self):
+        try:
+            state = json.loads(self.state_snapshot)
+        except json.JSONDecodeError as error:
+            raise ValueError("state_snapshot must be valid JSON") from error
+        if not isinstance(state, dict):
+            raise ValueError("state_snapshot must contain a JSON object")
+        canonical = json.dumps(state, sort_keys=True, separators=(",", ":"))
+        if self.state_snapshot != canonical:
+            raise ValueError("state_snapshot must use canonical JSON encoding")
+        if not self.raw_signals or not self.jev_answers:
+            raise ValueError("decision trace must include signals and Jev answers")
+        return self
+
+
 class ScopedJevDecision(StrictContract):
     scope: DecisionScope
     workflow: Literal["spot_daily_entry", "perp_intraday_entry"]
     decision: JevDecision
+    trace: JevDecisionTrace | None = None
 
     @model_validator(mode="after")
     def workflow_matches_scope(self):
