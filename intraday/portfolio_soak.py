@@ -40,6 +40,7 @@ def run_soak_cycle(
     now: datetime,
 ) -> dict[str, str]:
     """Exercise both Jev workflows and persist health only; never mutate positions."""
+    store.record_snapshot(snapshot)
     result = {}
     for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY):
         tick_id = f"{snapshot.symbol}:{scope.value}:{int(now.timestamp() * 1000)}"

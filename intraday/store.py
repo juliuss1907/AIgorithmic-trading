@@ -368,6 +368,13 @@ class IntradayStore:
                 self._save_runtime_state(connection, runtime_state, gate.evaluated_at)
         return {"id": decision.decision_id, "tick_id": decision.tick_id}
 
+    def record_snapshot(self, snapshot: FeatureSnapshot) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO snapshots VALUES (?, ?, ?)",
+                (snapshot.snapshot_id, snapshot.event_time.isoformat(), _json(snapshot)),
+            )
+
     def get_tick(self, tick_id: str):
         with self._connect() as connection:
             row = connection.execute(

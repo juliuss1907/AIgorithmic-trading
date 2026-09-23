@@ -470,7 +470,9 @@ def _portfolio_cli(arguments) -> None:
                 fallback=StubDecisionProvider(direction=Direction.HOLD),
             )
             market = BinanceUsdMClient()
-            interval = float(os.getenv("INTRADAY_INTERVAL_SECONDS", "5"))
+            config = IntradayConfig.from_environment(database=arguments.database)
+            interval = config.interval_seconds
+            background_started = False
             while True:
                 now = datetime.now(timezone.utc)
                 process_pending_commands(store, now=now)
@@ -494,6 +496,15 @@ def _portfolio_cli(arguments) -> None:
                 print(json.dumps(result), flush=True)
                 if arguments.once:
                     return
+                if not background_started:
+                    if config.news_enabled:
+                        threading.Thread(
+                            target=_news_loop, args=(config,), daemon=True
+                        ).start()
+                    threading.Thread(
+                        target=_analysis_loop, args=(config,), daemon=True
+                    ).start()
+                    background_started = True
                 time.sleep(max(1, interval))
         evaluated_at = (
             datetime.fromisoformat(arguments.at)
@@ -569,7 +580,13 @@ def _portfolio_cli(arguments) -> None:
         raise SystemExit("parent paper portfolio is not initialized")
     if command == "activate-paper":
         evaluation = store.portfolio_soak_evaluation(arguments.evaluation_id)
-        if evaluation is None or evaluation.status != "pass":
+        latest_evaluation = store.latest_portfolio_soak_evaluation()
+        if (
+            evaluation is None
+            or evaluation.status != "pass"
+            or latest_evaluation is None
+            or latest_evaluation.evaluation_id != evaluation.evaluation_id
+        ):
             raise SystemExit("paper activation requires the exact id of a passing soak")
         now = datetime.now(timezone.utc)
         state = state.model_copy(

@@ -44,6 +44,7 @@ def run_parent_paper_cycle(
     perp_rule: PerpRuleParameters,
     now: datetime,
 ) -> dict:
+    store.record_snapshot(snapshot)
     state = store.load_parent_portfolio_state()
     if state is None:
         raise ValueError("parent paper portfolio is not initialized")
