@@ -24,6 +24,25 @@ def test_dashboard_and_status_are_available_without_control_credentials(tmp_path
     assert status.json()["cross_venue"]["venue"] == "hyperliquid"
 
 
+def test_system_plan_and_architecture_are_public_read_only_pages(tmp_path):
+    client = TestClient(create_app(database=tmp_path / "intraday.sqlite"))
+
+    plan = client.get("/system-plan")
+    architecture = client.get("/static/system-trading-architecture.html")
+    dashboard = client.get("/")
+    portfolio = client.get("/portfolio")
+
+    assert plan.status_code == 200
+    assert "System plan" in plan.text
+    assert "Một bot paper-trading an toàn" in plan.text
+    assert "system-trading-architecture.html" in plan.text
+    assert 'http-equiv="refresh"' not in plan.text
+    assert architecture.status_code == 200
+    assert "AIgorithmic Trading" in architecture.text
+    assert 'href="/system-plan"' in dashboard.text
+    assert 'href="/system-plan"' in portfolio.text
+
+
 def test_control_endpoint_is_token_protected_and_deduplicated(tmp_path):
     client = TestClient(
         create_app(database=tmp_path / "intraday.sqlite", control_token="correct-token")

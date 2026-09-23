@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>System plan · AIgorithmic Trading</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Đi tới nội dung chính</a>
+    <header class="masthead plan-masthead">
+      <div>
+        <p class="eyebrow">BTC/USDT · Binance paper · isolated 3×</p>
+        <h1>System plan</h1>
+      </div>
+      <nav aria-label="Điều hướng chính">
+        <a class="nav-link" href="/">Intraday</a>
+        <a class="nav-link" href="/portfolio">Portfolio</a>
+        <span class="mode"><span aria-hidden="true"></span> Target blueprint</span>
+      </nav>
+    </header>
+
+    <main id="main" class="plan-main">
+      <section class="plan-intro" aria-labelledby="plan-summary-heading">
+        <div>
+          <p class="eyebrow">Mục tiêu hệ thống</p>
+          <h2 id="plan-summary-heading">Một bot paper-trading an toàn, audit được và có vòng học có kiểm soát.</h2>
+        </div>
+        <div class="plan-intro-copy">
+          <p>Jev xử lý quyết định nhanh. LLM phân tích thị trường và đề xuất rule ở cold path. Mọi fill vẫn phải đi qua hard-risk deterministic; không model nào có quyền đặt lệnh thật hoặc tự kích hoạt rule.</p>
+          <ul class="status-key" aria-label="Chú giải trạng thái">
+            <li><span class="status-dot status-current" aria-hidden="true"></span>Hiện có</li>
+            <li><span class="status-dot status-next" aria-hidden="true"></span>Kế tiếp</li>
+            <li><span class="status-dot status-boundary" aria-hidden="true"></span>Ranh giới bắt buộc</li>
+          </ul>
+        </div>
+      </section>
+
+      <nav class="plan-toc" aria-label="Mục lục kế hoạch">
+        <a href="#architecture">Kiến trúc</a>
+        <a href="#cadence">Nhịp chạy</a>
+        <a href="#strategies">Spot &amp; Perp</a>
+        <a href="#risk">Risk</a>
+        <a href="#learning">Vòng học</a>
+        <a href="#roadmap">Roadmap</a>
+        <a href="#cost">Chi phí</a>
+      </nav>
+
+      <section id="architecture" class="plan-section" aria-labelledby="architecture-heading">
+        <div class="section-head plan-section-head">
+          <div>
+            <p class="eyebrow">01 · Architecture map</p>
+            <h2 id="architecture-heading">Hệ thống hoạt động như thế nào</h2>
+          </div>
+          <a class="text-link" href="{{ url_for('static', path='/system-trading-architecture.html') }}" target="_blank" rel="noopener">Mở sơ đồ toàn màn hình <span aria-hidden="true">↗</span></a>
+        </div>
+        <p class="plan-note"><strong>Đây là kiến trúc mục tiêu.</strong> Các node gắn nhãn “kế tiếp” chưa được xem là đang chạy cho tới khi hoàn thành rollout và kiểm thử tương ứng.</p>
+        <div class="diagram-frame">
+          <iframe
+            src="{{ url_for('static', path='/system-trading-architecture.html') }}"
+            title="Sơ đồ tương tác kiến trúc mục tiêu AIgorithmic Trading"
+            loading="eager"
+          ></iframe>
+        </div>
+      </section>
+
+      <section id="cadence" class="plan-section" aria-labelledby="cadence-heading">
+        <div class="section-head plan-section-head">
+          <div>
+            <p class="eyebrow">02 · Multi-clock scheduler</p>
+            <h2 id="cadence-heading">Mỗi tác vụ chạy đúng nhịp cần thiết</h2>
+          </div>
+          <small>Risk loop không chờ AI</small>
+        </div>
+        <div class="table-wrap" tabindex="0" aria-label="Nhịp vận hành của hệ thống">
+          <table class="cadence-table">
+            <thead>
+              <tr><th>Nhịp</th><th>Thành phần</th><th>Vai trò</th><th>AI call</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><strong>5 giây</strong></td><td>Mark price + risk loop</td><td>P&amp;L, stop, target, drawdown, operator commands</td><td>Không</td></tr>
+              <tr><td><strong>15 giây</strong></td><td>Order book</td><td>Imbalance, spread, buy pressure</td><td>Không</td></tr>
+              <tr><td><strong>30 giây</strong></td><td>Perp Jev primary</td><td>Entry, hold hoặc model exit</td><td>Jev</td></tr>
+              <tr><td><strong>60 giây</strong></td><td>Derivatives data</td><td>Funding, OI, long/short ratio</td><td>Không</td></tr>
+              <tr><td><strong>15 phút</strong></td><td>Compact Jev shadow</td><td>A/B với numeric state, không tạo fill</td><td>Jev</td></tr>
+              <tr><td><strong>30 phút</strong></td><td>News ingestion</td><td>RSS fetch, normalize, deduplicate</td><td>Không</td></tr>
+              <tr><td><strong>60 phút</strong></td><td>Market analysis</td><td>Ba analyst + Research Manager khi evidence đổi</td><td>LLM</td></tr>
+              <tr><td><strong>09:00 VN</strong></td><td>Retrospective</td><td>Đánh giá outcome và tạo challenger shadow</td><td>LLM đề xuất</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="strategies" class="plan-section" aria-labelledby="strategies-heading">
+        <div class="section-head plan-section-head">
+          <div>
+            <p class="eyebrow">03 · Two trading scopes</p>
+            <h2 id="strategies-heading">Một thesis chung, hai vòng đời độc lập</h2>
+          </div>
+          <small>Rule, risk budget, signal và trade tách riêng</small>
+        </div>
+        <div class="strategy-compare">
+          <article>
+            <span class="plan-index">A</span>
+            <div>
+              <p class="eyebrow">Spot daily</p>
+              <h3>Donchian tìm setup, Jev quyết định nhận hay bỏ.</h3>
+              <p>Chỉ đánh giá khi nến ngày đóng và trạng thái Donchian thay đổi. Không leverage; exit và position sizing luôn deterministic.</p>
+            </div>
+          </article>
+          <article>
+            <span class="plan-index">B</span>
+            <div>
+              <p class="eyebrow">Perp intraday</p>
+              <h3>Jev đọc snapshot mới nhất mỗi 30 giây.</h3>
+              <p>Binance USD-M perpetual, isolated 3×. Notional co giãn theo volatility, stop distance, drawdown và hạn mức parent portfolio.</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="risk" class="plan-section" aria-labelledby="risk-heading">
+        <div class="section-head plan-section-head">
+          <div>
+            <p class="eyebrow">04 · Safety boundary</p>
+            <h2 id="risk-heading">Model đề xuất; hệ thống deterministic quyết định quyền thực thi</h2>
+          </div>
+        </div>
+        <ol class="guardrail-list">
+          <li><span>01</span><div><strong>Fail closed</strong><p>Provider timeout, schema lỗi hoặc dữ liệu stale đều trả về <code>hold</code>; risk loop vẫn chạy.</p></div></li>
+          <li><span>02</span><div><strong>Hard limits bất biến</strong><p>Leverage, liquidation buffer, drawdown, gross exposure và margin cap không nằm trong quyền sửa của LLM.</p></div></li>
+          <li><span>03</span><div><strong>Paper only</strong><p>Không có exchange credential hoặc live-order adapter trong milestone này.</p></div></li>
+          <li><span>04</span><div><strong>Manual promotion</strong><p>Rule phải qua replay, 72 giờ soak và một evaluation ID cụ thể trước khi người vận hành kích hoạt.</p></div></li>
+        </ol>
+      </section>
+
+      <section id="learning" class="plan-section" aria-labelledby="learning-heading">
+        <div class="section-head plan-section-head">
+          <div>
+            <p class="eyebrow">05 · Evidence loop</p>
+            <h2 id="learning-heading">Mọi quyết định trở thành dữ liệu có outcome</h2>
+          </div>
+          <small>Append-only · không look-ahead</small>
+        </div>
+        <div class="learning-flow" role="list" aria-label="Vòng học của hệ thống">
+          <article role="listitem"><span>1</span><strong>Record</strong><p>Lưu exact state, raw signals, full Jev answers, gate result và rule version.</p></article>
+          <article role="listitem"><span>2</span><strong>Mature</strong><p>Tính forward return, MFE và MAE tại các horizon của Spot và Perp.</p></article>
+          <article role="listitem"><span>3</span><strong>Compare</strong><p>Đo agreement, accuracy, calibration, latency và token cost giữa numeric và compact.</p></article>
+          <article role="listitem"><span>4</span><strong>Review</strong><p>Gom high-confidence mistakes, missed opportunities và disagreements lúc 09:00.</p></article>
+          <article role="listitem"><span>5</span><strong>Propose</strong><p>LLM tạo bounded challenger; không browse web, không gọi tool và không auto-promote.</p></article>
+        </div>
+        <div class="experiment-gate">
+          <h3>Compact state chỉ được xem xét sau khi đủ evidence</h3>
+          <dl>
+            <div><dt>Thời gian</dt><dd>≥ 14 ngày liên tục</dd></div>
+            <div><dt>Mẫu mature</dt><dd>≥ 1.000 cặp Perp</dd></div>
+            <div><dt>Availability</dt><dd>≥ 95%</dd></div>
+            <div><dt>Accuracy</dt><dd>Không thấp hơn quá 2 điểm %</dd></div>
+            <div><dt>Brier score</dt><dd>Không xấu hơn quá 0,02</dd></div>
+            <div><dt>Token input</dt><dd>Giảm ít nhất 15%</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section id="roadmap" class="plan-section" aria-labelledby="roadmap-heading">
+        <div class="section-head plan-section-head">
+          <div>
+            <p class="eyebrow">06 · Delivery sequence</p>
+            <h2 id="roadmap-heading">Năm lát cắt có thể kiểm chứng độc lập</h2>
+          </div>
+        </div>
+        <ol class="roadmap">
+          <li><span class="roadmap-number">01</span><div><strong>Tách scheduler và cache</strong><p>Risk loop 5 giây không gọi Jev; Spot chuyển sang event-driven.</p></div><span class="roadmap-state">Ưu tiên kế tiếp</span></li>
+          <li><span class="roadmap-number">02</span><div><strong>Compact shadow</strong><p>Encoder versioned, paired experiment và shadow-only enforcement.</p></div><span class="roadmap-state">Sau scheduler</span></li>
+          <li><span class="roadmap-number">03</span><div><strong>Outcome engine</strong><p>Forward return, MFE, MAE và migration append-only.</p></div><span class="roadmap-state">Evidence</span></li>
+          <li><span class="roadmap-number">04</span><div><strong>Retrospective + rule proposal</strong><p>Daily disagreement report và bounded challenger lúc 09:00.</p></div><span class="roadmap-state">Cold path</span></li>
+          <li><span class="roadmap-number">05</span><div><strong>Operational rollout</strong><p>72 giờ soak, sau đó thu thập A/B tối thiểu 14–30 ngày.</p></div><span class="roadmap-state">Manual gate</span></li>
+        </ol>
+      </section>
+
+      <section id="cost" class="plan-section plan-cost" aria-labelledby="cost-heading">
+        <div>
+          <p class="eyebrow">07 · Expected operating cost</p>
+          <h2 id="cost-heading">Khoảng 6 USD mỗi tháng cho AI ở mức cơ sở</h2>
+          <p>Ước tính chưa gồm VPS. Telemetry trong <code>model_calls</code> sẽ thay estimate bằng số thực sau 24 giờ vận hành.</p>
+        </div>
+        <dl>
+          <div><dt>Jev / ngày</dt><dd>$0.062–0.083</dd></div>
+          <div><dt>LLM / ngày</dt><dd>$0.07–0.25</dd></div>
+          <div><dt>Base total / ngày</dt><dd>≈ $0.20</dd></div>
+          <div><dt>Base total / tháng</dt><dd>≈ $6</dd></div>
+        </dl>
+      </section>
+
+      <section class="plan-section acceptance" aria-labelledby="acceptance-heading">
+        <div>
+          <p class="eyebrow">Definition of done</p>
+          <h2 id="acceptance-heading">Milestone hoàn thành khi hệ thống chạy paper 72 giờ an toàn.</h2>
+        </div>
+        <ul>
+          <li>Không bỏ risk tick hoặc tạo duplicate signal/outcome.</li>
+          <li>Provider failure luôn fail-closed và không cản deterministic exits.</li>
+          <li>Dashboard/CLI hiển thị đúng cadence, cost, outcome coverage và A/B evidence.</li>
+          <li>Không rule hoặc compact state nào được tự động promote.</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer>
+      <p>Blueprint v1 · Paper trading only · Live execution, on-chain wallet và auto-promotion nằm ngoài phạm vi.</p>
+    </footer>
+  </body>
+</html>

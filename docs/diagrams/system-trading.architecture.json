@@ -1,0 +1,305 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AIgorithmic Trading — Kiến trúc mục tiêu",
+    "quality_profile": "showcase",
+    "viewBox": [1348, 740],
+    "views": [
+      {
+        "id": "trade-flow",
+        "label": "Luồng giao dịch",
+        "focus": ["market_sources", "collectors", "snapshot_cache", "spot_setup", "jev_primary", "risk_gate", "paper_portfolio"],
+        "note": "Theo dõi dữ liệu thị trường đi qua quyết định, risk gate và paper portfolio."
+      },
+      {
+        "id": "learning-loop",
+        "label": "Vòng học",
+        "focus": ["jev_primary", "jev_shadow", "journal", "retrospective", "llm_analysis", "manual_approval"],
+        "note": "Mọi quyết định trở thành evidence; rule mới chỉ được đề xuất và duyệt thủ công."
+      },
+      {
+        "id": "safety-boundary",
+        "label": "Ranh giới an toàn",
+        "focus": ["risk_gate", "paper_portfolio", "journal", "manual_approval"],
+        "note": "Model không thể vượt hard-risk, đặt lệnh thật hoặc tự kích hoạt rule."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "market_sources",
+      "type": "external",
+      "label": "Nguồn thị trường",
+      "sublabel": "Binance · Hyperliquid · RSS",
+      "tag": "hiện có",
+      "pos": [38, 284],
+      "size": [150, 68]
+    },
+    {
+      "id": "collectors",
+      "type": "backend",
+      "label": "Collectors đa nhịp",
+      "sublabel": "5s · 15s · 60s · 30m",
+      "tag": "kế tiếp",
+      "pos": [218, 284],
+      "size": [160, 68]
+    },
+    {
+      "id": "snapshot_cache",
+      "type": "database",
+      "label": "Snapshot cache",
+      "sublabel": "freshness + checksum",
+      "tag": "kế tiếp",
+      "pos": [407, 284],
+      "size": [150, 68]
+    },
+    {
+      "id": "spot_setup",
+      "type": "backend",
+      "label": "Spot Donchian",
+      "sublabel": "event-driven · daily close",
+      "tag": "hiện có",
+      "pos": [596, 100],
+      "size": [158, 68]
+    },
+    {
+      "id": "jev_primary",
+      "type": "cloud",
+      "label": "Jev numeric",
+      "sublabel": "Perp primary · 30 giây",
+      "tag": "hiện có",
+      "pos": [596, 284],
+      "size": [158, 68]
+    },
+    {
+      "id": "jev_shadow",
+      "type": "cloud",
+      "label": "Jev compact",
+      "sublabel": "shadow A/B · 15 phút",
+      "tag": "kế tiếp",
+      "pos": [596, 468],
+      "size": [158, 68]
+    },
+    {
+      "id": "risk_gate",
+      "type": "security",
+      "label": "Deterministic gate",
+      "sublabel": "risk · sizing · exits",
+      "tag": "hard boundary",
+      "pos": [785, 284],
+      "size": [166, 68]
+    },
+    {
+      "id": "paper_portfolio",
+      "type": "backend",
+      "label": "Paper portfolio",
+      "sublabel": "Spot + Perp isolated 3×",
+      "tag": "paper only",
+      "pos": [979, 284],
+      "size": [166, 68]
+    },
+    {
+      "id": "journal",
+      "type": "database",
+      "label": "Journal + outcomes",
+      "sublabel": "append-only evidence",
+      "tag": "kế tiếp",
+      "pos": [1175, 284],
+      "size": [150, 68]
+    },
+    {
+      "id": "llm_analysis",
+      "type": "cloud",
+      "label": "LLM analysis",
+      "sublabel": "thesis mỗi 60 phút",
+      "tag": "hiện có",
+      "pos": [785, 580],
+      "size": [166, 68]
+    },
+    {
+      "id": "retrospective",
+      "type": "backend",
+      "label": "Retrospective",
+      "sublabel": "09:00 Asia/Ho_Chi_Minh",
+      "tag": "kế tiếp",
+      "pos": [979, 580],
+      "size": [166, 68]
+    },
+    {
+      "id": "manual_approval",
+      "type": "security",
+      "label": "Manual approval",
+      "sublabel": "replay + 72h soak",
+      "tag": "bắt buộc",
+      "pos": [1175, 580],
+      "size": [150, 68]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "HOT PATH · quyết định và quản trị rủi ro",
+      "wraps": ["collectors", "snapshot_cache", "spot_setup", "jev_primary", "jev_shadow", "risk_gate", "paper_portfolio"],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "COLD PATH · phân tích và đề xuất rule",
+      "wraps": ["llm_analysis", "retrospective", "manual_approval"],
+      "pad": 20
+    },
+    {
+      "kind": "security-group",
+      "label": "EVIDENCE · append-only",
+      "wraps": ["journal"],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "id": "source_to_collectors",
+      "from": "market_sources",
+      "to": "collectors",
+      "label": "REST + RSS",
+      "variant": "emphasis",
+      "labelAt": [195, 280]
+    },
+    {
+      "id": "collectors_to_cache",
+      "from": "collectors",
+      "to": "snapshot_cache",
+      "label": "normalize + cache",
+      "variant": "emphasis",
+      "labelAt": [384, 368]
+    },
+    {
+      "id": "cache_to_spot",
+      "from": "snapshot_cache",
+      "to": "spot_setup",
+      "label": "daily close",
+      "variant": "emphasis",
+      "labelAt": [562, 214]
+    },
+    {
+      "id": "cache_to_primary",
+      "from": "snapshot_cache",
+      "to": "jev_primary",
+      "label": "numeric_v1",
+      "variant": "emphasis",
+      "labelAt": [630, 260]
+    },
+    {
+      "id": "cache_to_shadow",
+      "from": "snapshot_cache",
+      "to": "jev_shadow",
+      "label": "compact_v1",
+      "variant": "dashed",
+      "labelAt": [562, 446]
+    },
+    {
+      "id": "spot_to_gate",
+      "from": "spot_setup",
+      "to": "risk_gate",
+      "label": "eligible setup",
+      "variant": "emphasis",
+      "labelAt": [761, 210]
+    },
+    {
+      "id": "primary_to_gate",
+      "from": "jev_primary",
+      "to": "risk_gate",
+      "label": "typed decision",
+      "variant": "emphasis",
+      "labelAt": [761, 368]
+    },
+    {
+      "id": "gate_to_portfolio",
+      "from": "risk_gate",
+      "to": "paper_portfolio",
+      "label": "approved paper fill",
+      "variant": "security",
+      "labelAt": [957, 368]
+    },
+    {
+      "id": "portfolio_to_journal",
+      "from": "paper_portfolio",
+      "to": "journal",
+      "label": "signals + trades",
+      "variant": "emphasis",
+      "labelAt": [1053, 260]
+    },
+    {
+      "id": "shadow_to_journal",
+      "from": "jev_shadow",
+      "to": "journal",
+      "label": "observation only",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[1155, 502], [1155, 318]],
+      "labelAt": [945, 528]
+    },
+    {
+      "id": "sources_to_llm",
+      "from": "market_sources",
+      "to": "llm_analysis",
+      "label": "ingested evidence",
+      "variant": "dashed",
+      "labelAt": [403, 656]
+    },
+    {
+      "id": "journal_to_retro",
+      "from": "journal",
+      "to": "retrospective",
+      "label": "mature outcomes",
+      "variant": "dashed",
+      "labelAt": [1071, 472]
+    },
+    {
+      "id": "llm_to_retro",
+      "from": "llm_analysis",
+      "to": "retrospective",
+      "label": "thesis + proposal",
+      "variant": "dashed",
+      "labelAt": [957, 664]
+    },
+    {
+      "id": "retro_to_manual",
+      "from": "retrospective",
+      "to": "manual_approval",
+      "label": "challenger",
+      "variant": "security",
+      "labelAt": [1142, 664]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "An toàn trước tiên",
+      "items": [
+        "Risk loop 5 giây không phụ thuộc AI",
+        "Provider lỗi luôn fail-closed về hold",
+        "Không có live-order path trong giai đoạn này"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Hai nhịp AI",
+      "items": [
+        "Jev xử lý hot path mỗi 30 giây",
+        "LLM phân tích tối đa một lần mỗi giờ",
+        "Compact Jev chỉ tạo evidence A/B"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Promotion có kiểm soát",
+      "items": [
+        "Rule mới bắt đầu ở trạng thái shadow",
+        "Replay và 72 giờ soak trước khi xem xét",
+        "Kích hoạt luôn cần người vận hành phê duyệt"
+      ]
+    }
+  ]
+}

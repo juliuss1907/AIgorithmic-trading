@@ -132,6 +132,14 @@ def create_app(
             },
         )
 
+    @app.get("/system-plan", response_class=HTMLResponse)
+    def system_plan(request: Request):
+        return templates.TemplateResponse(
+            request=request,
+            name="system_plan.html",
+            context={},
+        )
+
     @app.get("/healthz")
     def health():
         return {"status": "ok", "mode": "paper"}
