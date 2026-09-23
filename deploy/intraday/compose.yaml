@@ -3,9 +3,9 @@ services:
     build:
       context: ../..
       dockerfile: deploy/intraday/Dockerfile
-    command: ["run"]
+    command: ["portfolio", "${PORTFOLIO_WORKER_MODE:-soak}", "run"]
     env_file:
-      - ../../.env.intraday
+      - ${INTRADAY_ENV_FILE:-../../.env.intraday}
     environment:
       INTRADAY_PROVIDER_SECRETS_FILE: /run/provider-secrets/provider-secrets.toml
     volumes:
@@ -22,7 +22,7 @@ services:
       dockerfile: deploy/intraday/Dockerfile
     command: ["serve"]
     env_file:
-      - ../../.env.intraday
+      - ${INTRADAY_ENV_FILE:-../../.env.intraday}
     volumes:
       - intraday-state:/app/state/intraday
     ports:
@@ -40,7 +40,7 @@ services:
       context: ../..
       dockerfile: deploy/intraday/Dockerfile
     env_file:
-      - ../../.env.intraday
+      - ${INTRADAY_ENV_FILE:-../../.env.intraday}
     environment:
       INTRADAY_PROVIDER_SECRETS_FILE: /run/provider-secrets/provider-secrets.toml
     volumes:

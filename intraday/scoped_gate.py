@@ -51,6 +51,7 @@ class ScopedEntryGate:
         rule: SpotRuleParameters,
         *,
         donchian_entry: bool,
+        size_multiplier: float = 1,
     ) -> PortfolioAuthorization:
         scope = DecisionScope.SPOT_DAILY
         if not donchian_entry:
@@ -68,11 +69,20 @@ class ScopedEntryGate:
             reasons.append("toxic_flow")
         if reasons:
             return self._deny(state, scope, tuple(reasons))
-        target = (
+        if not 0 <= size_multiplier <= 1:
+            raise ValueError("spot size multiplier must be between zero and one")
+        sleeve_target = (
             state.equity
             * self.coordinator.policy.spot_budget_pct
             * self.coordinator.policy.spot_sleeve_target_pct
+            * size_multiplier
         )
+        gross_room = max(
+            0,
+            state.equity * self.coordinator.policy.max_gross_exposure_pct
+            - abs(state.perp_notional),
+        )
+        target = min(sleeve_target, gross_room)
         return self.coordinator.authorize_target(
             state, scope=scope, target_notional=target
         )
@@ -105,12 +115,17 @@ class ScopedEntryGate:
         if reasons:
             return self._deny(state, scope, tuple(reasons))
         side = 1 if decision.direction in {Direction.BUY, Direction.STRONG_BUY} else -1
-        target = (
-            side
-            * state.equity
+        sleeve_target = (
+            state.equity
             * self.coordinator.policy.perp_budget_pct
             * self.coordinator.policy.perp_sleeve_notional_pct
         )
+        gross_room = max(
+            0,
+            state.equity * self.coordinator.policy.max_gross_exposure_pct
+            - state.spot_notional,
+        )
+        target = side * min(sleeve_target, gross_room)
         return self.coordinator.authorize_target(
             state, scope=scope, target_notional=target
         )

@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.11.14"
+          enable-cache: true
+      - name: Install Python and locked dependencies
+        run: uv sync --frozen --python 3.12
+      - name: Run test suite
+        run: uv run --frozen pytest -q
+      - name: Validate Docker Compose configuration
+        run: INTRADAY_ENV_FILE=../../.env.example docker compose --env-file .env.example -f deploy/intraday/compose.yaml config --quiet
+      - name: Build paper-only image
+        run: docker build -f deploy/intraday/Dockerfile .

@@ -22,7 +22,13 @@ from intraday.config import (
     default_provider_secrets_path,
     resolve_database_path,
 )
-from intraday.contracts import Direction, ProviderKind, ProviderProfile, ProviderRole
+from intraday.contracts import (
+    DecisionScope,
+    Direction,
+    ProviderKind,
+    ProviderProfile,
+    ProviderRole,
+)
 from intraday.cross_venue import (
     CrossVenuePolicy,
     derive_cross_venue_thresholds,
@@ -38,8 +44,12 @@ from intraday.notifications import TelegramNotifier, drain_outbox
 from intraday.provider_client import ProviderPreflightClient
 from intraday.provider_profiles import ProviderSecretStore
 from intraday.providers import AssignedDecisionProvider, StubDecisionProvider
-from intraday.portfolio_coordinator import apply_operator_command
+from intraday.portfolio_coordinator import (
+    ParentPortfolioState,
+    apply_operator_command,
+)
 from intraday.portfolio_soak import evaluate_portfolio_soak, run_soak_cycle
+from intraday.parent_runtime import run_parent_paper_cycle
 from intraday.replay import compare_cross_venue
 from intraday.runtime import (
     process_pending_commands,
@@ -48,6 +58,7 @@ from intraday.runtime import (
     run_once,
 )
 from intraday.store import IntradayStore
+from intraday.spot_signal import BinanceSpotDailyClient, evaluate_donchian
 
 
 def _project_version() -> str:
@@ -128,6 +139,12 @@ def _parser() -> argparse.ArgumentParser:
     activate_paper = portfolio_commands.add_parser("activate-paper")
     activate_paper.add_argument("--evaluation-id", required=True)
     activate_paper.add_argument("--database", default=None)
+    paper = portfolio_commands.add_parser("paper")
+    paper_commands = paper.add_subparsers(dest="paper_command", required=True)
+    paper_run = paper_commands.add_parser("run")
+    paper_run.add_argument("--database", default=None)
+    paper_run.add_argument("--secrets-file", default=None)
+    paper_run.add_argument("--once", action="store_true")
     return parser
 
 
@@ -458,6 +475,19 @@ def _portfolio_cli(arguments) -> None:
                 now = datetime.now(timezone.utc)
                 process_pending_commands(store, now=now)
                 snapshot = market.snapshot("BTCUSDT", now=now)
+                if store.load_parent_portfolio_state() is None:
+                    initial = ParentPortfolioState(
+                        mark_price=float(snapshot.features["mark_price"]),
+                        day_start_equity=10_000,
+                        high_water_mark=10_000,
+                        entries_paused=True,
+                        halt_reason="soak_not_promoted",
+                        paper_active=False,
+                        updated_at=now,
+                    )
+                    store.save_parent_portfolio_state(
+                        initial, event_kind="initialized", actor="soak_worker"
+                    )
                 result = run_soak_cycle(
                     store, provider, snapshot, now=now
                 )
@@ -476,6 +506,64 @@ def _portfolio_cli(arguments) -> None:
         store.record_portfolio_soak_evaluation(evaluation)
         print(evaluation.model_dump_json(indent=2))
         return
+    if command == "paper":
+        state = store.load_parent_portfolio_state()
+        if state is None or not state.paper_active:
+            raise SystemExit("paper worker requires a promoted parent portfolio")
+        spot_rule = store.load_active_scoped_rule(DecisionScope.SPOT_DAILY)
+        perp_rule = store.load_active_scoped_rule(DecisionScope.PERP_INTRADAY)
+        if spot_rule is None or perp_rule is None:
+            raise SystemExit("paper worker requires both scoped champion rules")
+        secret_store = ProviderSecretStore(
+            arguments.secrets_file or _default_secrets_file()
+        )
+        provider = AssignedDecisionProvider(
+            store,
+            secret_store,
+            fallback=StubDecisionProvider(direction=Direction.HOLD),
+        )
+        market = BinanceUsdMClient()
+        spot_market = BinanceSpotDailyClient()
+        config = IntradayConfig.from_environment(database=arguments.database)
+        interval = config.interval_seconds
+        if not arguments.once:
+            if config.news_enabled:
+                threading.Thread(
+                    target=_news_loop, args=(config,), daemon=True
+                ).start()
+            threading.Thread(
+                target=_analysis_loop, args=(config,), daemon=True
+            ).start()
+        cached_day = None
+        spot_observation = None
+        while True:
+            now = datetime.now(timezone.utc)
+            process_pending_commands(store, now=now)
+            snapshot = market.snapshot("BTCUSDT", now=now)
+            if cached_day != now.date() or spot_observation is None:
+                limit = max(
+                    spot_rule.parameters.entry_window,
+                    spot_rule.parameters.exit_window,
+                    spot_rule.parameters.atr_period,
+                ) + 2
+                daily = spot_market.candles(limit=max(35, limit), now=now)
+                spot_observation = evaluate_donchian(
+                    daily, spot_rule.parameters
+                )
+                cached_day = now.date()
+            result = run_parent_paper_cycle(
+                store,
+                provider,
+                snapshot,
+                spot_observation,
+                spot_rule=spot_rule.parameters,
+                perp_rule=perp_rule.parameters,
+                now=now,
+            )
+            print(json.dumps(result), flush=True)
+            if arguments.once:
+                return
+            time.sleep(max(1, interval))
     state = store.load_parent_portfolio_state()
     if state is None:
         raise SystemExit("parent paper portfolio is not initialized")

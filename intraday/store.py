@@ -31,6 +31,7 @@ from intraday.contracts import (
 from intraday.cross_venue_evaluation import CrossVenuePromotionEvaluation
 from intraday.portfolio_coordinator import ParentPortfolioState
 from intraday.portfolio_soak import PortfolioSoakEvaluation
+from intraday.parent_paper import ParentPaperFill
 
 
 def _json(model) -> str:
@@ -257,6 +258,12 @@ class IntradayStore:
                     evaluated_at TEXT NOT NULL,
                     payload_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS parent_paper_fills (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    filled_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS rule_evaluations (
                     id TEXT PRIMARY KEY,
                     candidate_id TEXT NOT NULL REFERENCES rules(id),
@@ -286,7 +293,7 @@ class IntradayStore:
                 if name not in command_columns:
                     connection.execute(f"ALTER TABLE commands ADD COLUMN {name} {definition}")
             connection.execute(
-                "UPDATE schema_meta SET value='7' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='8' WHERE key='schema_version'"
             )
 
     def record_tick(
@@ -502,6 +509,31 @@ class IntradayStore:
             if row is None
             else PortfolioSoakEvaluation.model_validate_json(row["payload_json"])
         )
+
+    def record_parent_paper_fill(self, fill: ParentPaperFill) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO parent_paper_fills VALUES (?, ?, ?, ?)",
+                (
+                    fill.fill_id,
+                    fill.scope.value,
+                    fill.filled_at.isoformat(),
+                    _json(fill),
+                ),
+            )
+
+    def list_parent_paper_fills(self, limit: int = 100) -> list[ParentPaperFill]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM parent_paper_fills "
+                "ORDER BY filled_at DESC, id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            ParentPaperFill.model_validate_json(row["payload_json"]) for row in rows
+        ]
 
     @staticmethod
     def _save_runtime_state(connection, state: dict, updated_at: datetime) -> None:

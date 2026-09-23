@@ -181,9 +181,15 @@ class ParentPortfolioCoordinator:
             * self.policy.perp_budget_pct
             * self.policy.perp_sleeve_notional_pct
         )
-        if spot_target > spot_limit + 1e-9:
+        if (
+            scope == DecisionScope.SPOT_DAILY
+            and spot_target > spot_limit + 1e-9
+        ):
             entry_reasons.append("spot_sleeve_limit")
-        if abs(perp_target) > perp_limit + 1e-9:
+        if (
+            scope == DecisionScope.PERP_INTRADAY
+            and abs(perp_target) > perp_limit + 1e-9
+        ):
             entry_reasons.append("perp_sleeve_limit")
 
         gross = (spot_target + abs(perp_target)) / equity

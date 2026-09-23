@@ -2,12 +2,17 @@
 
 ## Phòng thử nghiệm trading
 
-## Intraday BTCUSDT — paper isolated 3×
+## BTC shared-AI portfolio — paper only
 
-Package `intraday/` là hệ thống mới, độc lập với bot Donchian hằng ngày trong `lab/`.
-Nó thu dữ liệu public của Binance USD-M, tạo snapshot 20 feature, lấy quyết định từ
-provider typed, chạy deterministic risk gate rồi mới mô phỏng perpetual fill. V1 cố định
-`BTCUSDT`, one-way, isolated 3×, tối đa hai tranche và **không có code đặt lệnh thật**.
+Package `intraday/` chạy một parent portfolio 10.000 USDT gồm spot daily 60% budget và
+perp intraday 40% budget. Spot dùng Donchian + ATR volatility sizing rồi mới hỏi Jev;
+perp dùng rule intraday + Jev. Một LLM profile tạo market thesis hai horizon và rule
+candidate có schema riêng cho từng sleeve. Hard-risk coordinator vẫn là lớp có quyền cuối:
+gross ≤50%, |net BTC delta| ≤50%, isolated margin ≤10%, daily loss −1,5%, drawdown −8%.
+
+Perp cố định isolated 3×. Spot không được short; perp không được flip trong cùng tick.
+Deterministic exit luôn chạy được khi Jev/LLM lỗi. Hệ thống **không có code đặt lệnh thật**.
+Promoted Donchian campaign trong `lab/` vẫn là control độc lập và không bị migration này sửa đổi.
 Hyperliquid được thu thập như evidence liên thị trường ở chế độ `shadow`: WebSocket cho
 L2 book, REST 30 giây cho funding/OI/mark/oracle. Mất dữ liệu DEX không chặn Binance.
 
@@ -23,28 +28,31 @@ aigt --version
 Sau khi mở terminal mới, `aigt` dùng được ở mọi thư mục. `python -m intraday` vẫn được
 giữ làm đường tương thích/debug trong project environment.
 
-Kiểm tra cấu hình an toàn và chạy một vòng stub:
+Kiểm tra cấu hình và trạng thái:
 
 ```bash
 aigt doctor
-aigt run --once
+aigt status
 aigt cross-venue-status
 ```
 
-`stub` mặc định trả `Hold`. Muốn kiểm tra toàn bộ đường paper fill có chủ đích:
+Luồng cũ `aigt run` vẫn được giữ để replay intraday tương thích. Luồng portfolio mới bắt
+đầu bằng decision-only soak, chưa tạo fill:
 
 ```bash
-aigt run --once --direction Buy
+aigt portfolio soak run
+aigt portfolio soak evaluate
 ```
 
-Chạy worker liên tục và dashboard cục bộ trong hai terminal:
+Sau 72 giờ và evaluation pass, activation phải dùng đúng ID rồi mới chạy paper worker:
 
 ```bash
-aigt run
+aigt portfolio activate-paper --evaluation-id EVALUATION_ID
+aigt portfolio paper run
 aigt serve
 ```
 
-Mở `http://127.0.0.1:8081`. Mặc định dữ liệu nằm tại
+Mở `http://127.0.0.1:8081/portfolio`. Mặc định dữ liệu nằm tại
 `${XDG_STATE_HOME:-~/.local/state}/aigorithmic-trading/intraday.sqlite3`; không dùng
 chung paper account với `lab/`. Để copy paper database cũ mà không xóa nguồn:
 
@@ -55,7 +63,9 @@ aigt migrate-state --from state/intraday/intraday.sqlite3
 Migration từ chối ghi đè database đích đã tồn tại. Có thể chọn database khác bằng
 `--database`; mọi command dùng thứ tự ưu tiên `--database`, `INTRADAY_DATABASE`, rồi
 XDG state.
-Thiết kế và các launch gate nằm ở
+Runbook portfolio/VPS nằm tại
+[docs/shared-ai-portfolio-runbook.md](docs/shared-ai-portfolio-runbook.md). Thiết kế và
+các launch gate intraday cũ nằm ở
 [docs/crypto-intraday-system-design.md](docs/crypto-intraday-system-design.md); thao tác
 credential/activation nằm trong
 [docs/intraday-provider-runbook.md](docs/intraday-provider-runbook.md).
@@ -66,10 +76,10 @@ Triển khai Docker cần tạo `.env.intraday` từ `.env.example`, thay contro
 docker compose --env-file .env.intraday -f deploy/intraday/compose.yaml up --build -d
 ```
 
-Port dashboard chỉ publish trên loopback. Jev/LLM thật vẫn bị khóa cho tới khi hoàn tất
-live preflight và activation có audit. Jev được phép tạo quyết định cho **paper account**;
-LLM chỉ tạo report/thesis và rule candidate, còn candidate phải qua replay 90 ngày rồi
-challenger tối thiểu 14 ngày/30 closed trades. Không có đường đặt lệnh thật.
+Port dashboard chỉ publish trên loopback. Worker mặc định chạy `soak`; chuyển
+`PORTFOLIO_WORKER_MODE=paper` chỉ sau evaluation 72 giờ pass và manual activation.
+Jev được phép đề xuất quyết định cho **paper account**; LLM chỉ tạo report/thesis và bounded
+rule candidate. Không có đường đặt lệnh thật.
 Cross-venue overlay cũng không thể chuyển sang `active` chỉ bằng sửa `.env`: SQLite phải
 có evaluation record `promote` sau tối thiểu 14 ngày, coverage 95%, 100 quyết định khác
 Hold và 30 closed trades. Replay baseline-vs-overlay dùng:
@@ -87,21 +97,14 @@ Secret được lưu trong TOML ngoài Git/SQLite, phải thuộc current user v
 Không có tham số `--api-key`; nhập ẩn tại prompt hoặc pipe qua stdin có chủ đích:
 
 ```bash
-aigt provider add jev-openrouter \
-  --role jev --kind openrouter-decisions --model typesafe/jev-1.13
-aigt provider test jev-openrouter
-aigt provider activate jev jev-openrouter
-
-aigt provider add llm-main \
-  --role llm --kind openai-compatible \
-  --base-url https://api.openai.com/v1 --model YOUR_MODEL
-aigt provider test llm-main
-aigt provider activate llm llm-main
+aigt provider setup  # jev: typesafe-systemone or openrouter-decisions
+aigt provider setup  # llm: openai-compatible or anthropic-messages
 aigt provider list
 ```
 
-`test` thực hiện một request nhỏ có tính phí. `activate` chỉ chấp nhận preflight thành
-công trong 10 phút gần nhất. Assignment mới được worker đọc ở tick 5 giây kế tiếp.
+Wizard thực hiện một request nhỏ có tính phí rồi activate khi preflight thành công.
+Các lệnh `add/test/activate/deactivate` chi tiết vẫn được giữ cho automation. Assignment
+mới được worker đọc ở tick 5 giây kế tiếp.
 Jev lỗi/timeout/circuit-open luôn thành `Hold`; hard-risk exit vẫn chạy. LLM lỗi giữ
 thesis/champion hợp lệ gần nhất. Dashboard tại `/api/providers` và `/api/analysts` chỉ
 trả metadata đã che; mutation cần Bearer control token và `Idempotency-Key`.

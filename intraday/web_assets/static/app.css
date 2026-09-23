@@ -32,7 +32,7 @@ body {
 
 .skip-link:focus { top: 1rem; }
 
-.masthead, main, footer { width: min(100% - 2rem, 76rem); margin-inline: auto; }
+.masthead, main, footer { width: min(calc(100% - 2rem), 76rem); margin-inline: auto; }
 
 .masthead {
   display: flex;
