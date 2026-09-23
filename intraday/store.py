@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -725,12 +726,17 @@ class IntradayStore:
         if not decision_id or not symbol or not state_snapshot or not rules_version:
             raise ValueError("signal identity and snapshots must be nonempty")
         if not raw_signals or any(
-            isinstance(value, bool) or (
-                value is not None and not isinstance(value, (int, float))
+            isinstance(value, bool)
+            or (
+                value is not None
+                and (
+                    not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                )
             )
             for value in raw_signals.values()
         ):
-            raise ValueError("raw_signals must contain named numeric values")
+            raise ValueError("raw_signals must contain finite numeric values")
         if not jev_answers:
             raise ValueError("jev_answers must not be empty")
         if gate_passed and gate_reason is not None:

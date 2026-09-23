@@ -102,6 +102,25 @@ def test_signal_and_trade_rows_are_idempotent_and_immutable(tmp_path):
             connection.execute("DELETE FROM trades WHERE id=?", (trade_id,))
 
 
+def test_signal_rejects_non_finite_raw_numeric_values(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+
+    with pytest.raises(ValueError, match="finite numeric"):
+        store.record_journal_signal(
+            decision_id="decision-nan",
+            timestamp=NOW,
+            symbol="BTCUSDT",
+            scope=DecisionScope.PERP_INTRADAY,
+            state_snapshot='{"decision_scope":"perp_intraday"}',
+            raw_signals={"rsi14": float("nan")},
+            jev_answers={"direction": {"choice": "Hold"}},
+            gate_passed=False,
+            gate_reason="hold",
+            rules_version="perp-champion-v3",
+            llm_thesis=None,
+        )
+
+
 def test_export_labels_winners_and_losers_and_skips_ambiguous_trades(tmp_path):
     database = tmp_path / "intraday.sqlite"
     store = IntradayStore(database)

@@ -179,8 +179,9 @@ def test_existing_v1_database_is_migrated_additively(tmp_path):
     assert {
         "provider_profiles", "provider_assignments", "model_calls",
         "analyst_reports", "market_theses", "rule_evaluations",
+        "signals", "trades", "open_trade_context",
     } <= provider_tables
-    assert version == "8"
+    assert version == "9"
 
 
 def test_secret_store_writes_mode_0600_and_never_exposes_key_in_repr(tmp_path):
