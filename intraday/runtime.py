@@ -20,6 +20,7 @@ from intraday.llm_pipeline import (
 from intraday.provider_profiles import ProviderSecretStore
 from intraday.provider_client import ProviderPreflightClient
 from intraday.providers import DecisionProvider, StubDecisionProvider
+from intraday.parent_runtime import flatten_parent_paper_positions
 from intraday.portfolio_coordinator import apply_operator_command
 from intraday.store import IntradayStore
 
@@ -87,10 +88,20 @@ def process_pending_commands(
                 if parent is None:
                     raise ValueError("parent paper portfolio is not initialized")
                 action = command["kind"].removeprefix("portfolio_")
-                parent = apply_operator_command(parent, action, now=now)
-                store.save_parent_portfolio_state(
-                    parent, event_kind=action, actor=command["actor"]
-                )
+                if action == "flatten":
+                    parent = flatten_parent_paper_positions(
+                        store,
+                        parent,
+                        now=now,
+                        bid=snapshot.bid if snapshot is not None else None,
+                        ask=snapshot.ask if snapshot is not None else None,
+                        actor=command["actor"],
+                    )
+                else:
+                    parent = apply_operator_command(parent, action, now=now)
+                    store.save_parent_portfolio_state(
+                        parent, event_kind=action, actor=command["actor"]
+                    )
                 result = {
                     "action": action,
                     "entries_paused": parent.entries_paused,

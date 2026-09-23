@@ -2,18 +2,99 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from intraday.contracts import (
     DecisionScope,
+    Direction,
     FeatureSnapshot,
+    JevDecisionTrace,
     PerpRuleParameters,
+    ScopedRuleCandidate,
     SpotRuleParameters,
 )
 from intraday.parent_paper import apply_paper_target
 from intraday.portfolio_coordinator import ParentPortfolioState
 from intraday.scoped_gate import ScopedEntryGate
 from intraday.spot_signal import DonchianObservation
+
+
+def _rule_parts(rule, fallback_id: str):
+    if isinstance(rule, ScopedRuleCandidate):
+        return rule.parameters, rule.rule_id
+    return rule, fallback_id
+
+
+def _fallback_trace(snapshot, scoped) -> JevDecisionTrace:
+    decision = scoped.decision
+    state = {
+        "snapshot_id": snapshot.snapshot_id,
+        "symbol": snapshot.symbol,
+        "event_time": snapshot.event_time.isoformat(),
+        "bid": snapshot.bid,
+        "ask": snapshot.ask,
+        "features": snapshot.features,
+        "freshness": snapshot.freshness,
+        "quality_flags": snapshot.quality_flags,
+        "decision_scope": scoped.scope.value,
+    }
+    return JevDecisionTrace(
+        state_snapshot=json.dumps(state, sort_keys=True, separators=(",", ":")),
+        raw_signals={
+            **snapshot.features,
+            "bid": float(snapshot.bid),
+            "ask": float(snapshot.ask),
+        },
+        jev_answers={
+            "direction": {
+                "choice": decision.direction.value,
+                "probabilities": {
+                    decision.direction.value: decision.direction_confidence
+                },
+            },
+            "regime": {"choice": decision.regime.value},
+            "toxic_flow": {"noul": decision.toxic_flow},
+            "entry_quality": {"score": decision.entry_quality - 1},
+            "risk_level": {"choice": decision.risk_level.value},
+        },
+    )
+
+
+def _record_signal(
+    store,
+    snapshot,
+    scoped,
+    authorization,
+    *,
+    rule_id: str,
+) -> int:
+    trace = scoped.trace or _fallback_trace(snapshot, scoped)
+    thesis_bundle = store.latest_market_thesis_bundle()
+    thesis = None
+    if thesis_bundle is not None:
+        horizon = (
+            thesis_bundle.daily_swing
+            if scoped.scope == DecisionScope.SPOT_DAILY
+            else thesis_bundle.intraday
+        )
+        thesis = json.dumps(
+            horizon.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        )
+    passed = authorization.allowed
+    return store.record_journal_signal(
+        decision_id=scoped.decision.decision_id,
+        timestamp=scoped.decision.created_at,
+        symbol=snapshot.symbol,
+        scope=scoped.scope,
+        state_snapshot=trace.state_snapshot,
+        raw_signals=trace.raw_signals,
+        jev_answers=trace.jev_answers,
+        gate_passed=passed,
+        gate_reason=None if passed else ";".join(authorization.reason_codes),
+        rules_version=rule_id,
+        llm_thesis=thesis,
+    )
 
 
 def _mark_state(
@@ -34,14 +115,53 @@ def _mark_state(
     )
 
 
+def flatten_parent_paper_positions(
+    store,
+    state: ParentPortfolioState,
+    *,
+    now: datetime,
+    bid: float | None = None,
+    ask: float | None = None,
+    actor: str,
+) -> ParentPortfolioState:
+    """Flatten both paper sleeves through fills so open trades remain auditable."""
+    bid = state.mark_price if bid is None else bid
+    ask = state.mark_price if ask is None else ask
+    gate = ScopedEntryGate()
+    current = state
+    for scope, quantity in (
+        (DecisionScope.SPOT_DAILY, current.spot_quantity),
+        (DecisionScope.PERP_INTRADAY, current.perp_quantity),
+    ):
+        if not quantity:
+            continue
+        authorization = gate.deterministic_exit(current, scope, "manual")
+        current, fill = apply_paper_target(
+            current, authorization, bid=bid, ask=ask, now=now
+        )
+        if fill is not None:
+            store.record_parent_paper_fill(fill, close_reason="manual")
+    current = current.model_copy(
+        update={
+            "entries_paused": True,
+            "halt_reason": "operator_flatten",
+            "updated_at": now,
+        }
+    )
+    store.save_parent_portfolio_state(
+        current, event_kind="flatten", actor=actor
+    )
+    return current
+
+
 def run_parent_paper_cycle(
     store,
     provider,
     snapshot: FeatureSnapshot,
     spot_observation: DonchianObservation,
     *,
-    spot_rule: SpotRuleParameters,
-    perp_rule: PerpRuleParameters,
+    spot_rule: SpotRuleParameters | ScopedRuleCandidate,
+    perp_rule: PerpRuleParameters | ScopedRuleCandidate,
     now: datetime,
 ) -> dict:
     store.record_snapshot(snapshot)
@@ -50,10 +170,19 @@ def run_parent_paper_cycle(
         raise ValueError("parent paper portfolio is not initialized")
     state = _mark_state(state, snapshot, now)
     gate = ScopedEntryGate()
+    spot_parameters, spot_rule_id = _rule_parts(spot_rule, "spot_rule_parameters")
+    perp_parameters, perp_rule_id = _rule_parts(perp_rule, "perp_rule_parameters")
     fills = []
     provider_errors = []
 
-    def execute(authorization):
+    def execute(
+        authorization,
+        *,
+        signal_id=None,
+        direction=None,
+        stop_distance_pct=None,
+        close_reason=None,
+    ):
         nonlocal state
         state, fill = apply_paper_target(
             state,
@@ -63,36 +192,60 @@ def run_parent_paper_cycle(
             now=now,
         )
         if fill is not None:
-            store.record_parent_paper_fill(fill)
+            stop_loss = None
+            if signal_id is not None and stop_distance_pct is not None:
+                long_entry = direction in {Direction.BUY, Direction.STRONG_BUY}
+                stop_loss = fill.price * (
+                    1 - stop_distance_pct if long_entry else 1 + stop_distance_pct
+                )
+            store.record_parent_paper_fill(
+                fill,
+                entry_signal_id=signal_id,
+                direction=direction.value if direction is not None else None,
+                stop_loss=stop_loss,
+                close_reason=close_reason,
+            )
             fills.append(fill)
 
     # Hard exits always run before any provider call.
     if state.drawdown <= -gate.coordinator.policy.max_drawdown_pct:
         if state.spot_quantity:
-            execute(gate.deterministic_exit(
-                state, DecisionScope.SPOT_DAILY, "parent_drawdown_limit"
-            ))
+            execute(
+                gate.deterministic_exit(
+                    state, DecisionScope.SPOT_DAILY, "parent_drawdown_limit"
+                ),
+                close_reason="parent_drawdown_limit",
+            )
         if state.perp_quantity:
-            execute(gate.deterministic_exit(
-                state, DecisionScope.PERP_INTRADAY, "parent_drawdown_limit"
-            ))
+            execute(
+                gate.deterministic_exit(
+                    state, DecisionScope.PERP_INTRADAY, "parent_drawdown_limit"
+                ),
+                close_reason="parent_drawdown_limit",
+            )
         state = state.model_copy(
             update={"entries_paused": True, "halt_reason": "parent_drawdown_limit"}
         )
     else:
         if state.spot_quantity and spot_observation.exit:
-            execute(gate.deterministic_exit(
-                state, DecisionScope.SPOT_DAILY, "donchian_exit"
-            ))
+            execute(
+                gate.deterministic_exit(
+                    state, DecisionScope.SPOT_DAILY, "donchian_exit"
+                ),
+                close_reason="donchian_exit",
+            )
         if state.perp_quantity and state.perp_entry_price is not None:
             signed_return = (
                 (state.mark_price / state.perp_entry_price - 1)
                 * (1 if state.perp_quantity > 0 else -1)
             )
-            if signed_return <= -perp_rule.stop_distance_pct:
-                execute(gate.deterministic_exit(
-                    state, DecisionScope.PERP_INTRADAY, "perp_stop_loss"
-                ))
+            if signed_return <= -perp_parameters.stop_distance_pct:
+                execute(
+                    gate.deterministic_exit(
+                        state, DecisionScope.PERP_INTRADAY, "perp_stop_loss"
+                    ),
+                    close_reason="stop_loss",
+                )
 
     if state.paper_active:
         if state.spot_quantity == 0 and spot_observation.entry:
@@ -109,12 +262,23 @@ def run_parent_paper_cycle(
                 authorization = gate.spot_entry(
                     state,
                     scoped.decision,
-                    spot_rule,
+                    spot_parameters,
                     donchian_entry=True,
                     size_multiplier=spot_observation.size_multiplier,
                 )
+                signal_id = _record_signal(
+                    store,
+                    snapshot,
+                    scoped,
+                    authorization,
+                    rule_id=spot_rule_id,
+                )
                 if authorization.allowed:
-                    execute(authorization)
+                    execute(
+                        authorization,
+                        signal_id=signal_id,
+                        direction=scoped.decision.direction,
+                    )
         try:
             scoped = provider.decide_scoped(
                 snapshot,
@@ -125,9 +289,38 @@ def run_parent_paper_cycle(
         except RuntimeError:
             provider_errors.append(DecisionScope.PERP_INTRADAY.value)
         else:
-            authorization = gate.perp_entry(state, scoped.decision, perp_rule)
+            authorization = gate.perp_entry(
+                state, scoped.decision, perp_parameters
+            )
+            signal_id = _record_signal(
+                store,
+                snapshot,
+                scoped,
+                authorization,
+                rule_id=perp_rule_id,
+            )
             if authorization.allowed:
-                execute(authorization)
+                reducing = authorization.reduce_only
+                reason = None
+                if reducing:
+                    reason = (
+                        "take_profit"
+                        if scoped.decision.direction == Direction.TAKE_PROFIT
+                        else (
+                            "no_same_tick_flip"
+                            if "no_same_tick_flip" in authorization.reason_codes
+                            else "model_exit"
+                        )
+                    )
+                execute(
+                    authorization,
+                    signal_id=None if reducing else signal_id,
+                    direction=None if reducing else scoped.decision.direction,
+                    stop_distance_pct=(
+                        None if reducing else perp_parameters.stop_distance_pct
+                    ),
+                    close_reason=reason,
+                )
 
     state = state.model_copy(update={"updated_at": now})
     store.save_parent_portfolio_state(

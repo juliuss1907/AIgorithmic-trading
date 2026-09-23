@@ -303,6 +303,10 @@ class IntradayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_trades_signal
                     ON trades(signal_id, timestamp_close);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_entry_fill
+                    ON trades(entry_fill_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_exit_fill
+                    ON trades(exit_fill_id);
                 CREATE TABLE IF NOT EXISTS open_trade_context (
                     scope TEXT PRIMARY KEY CHECK (scope IN ('spot_daily', 'perp_intraday')),
                     trade_key TEXT NOT NULL UNIQUE,
@@ -311,6 +315,7 @@ class IntradayStore:
                     timestamp_open TEXT NOT NULL,
                     direction TEXT NOT NULL,
                     entry_price REAL NOT NULL,
+                    quantity REAL NOT NULL,
                     position_size REAL NOT NULL,
                     entry_fee REAL NOT NULL,
                     stop_loss REAL,
@@ -585,7 +590,24 @@ class IntradayStore:
             else PortfolioSoakEvaluation.model_validate_json(row["payload_json"])
         )
 
-    def record_parent_paper_fill(self, fill: ParentPaperFill) -> None:
+    def record_parent_paper_fill(
+        self,
+        fill: ParentPaperFill,
+        *,
+        entry_signal_id: int | None = None,
+        direction: str | None = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        close_reason: str | None = None,
+    ) -> int | None:
+        if entry_signal_id is not None and fill.reduce_only:
+            raise ValueError("a reduce-only fill cannot open a journal trade")
+        if entry_signal_id is not None and direction is None:
+            raise ValueError("an entry journal fill requires its direction")
+        if close_reason is not None and not fill.reduce_only:
+            raise ValueError("a journal close requires a reduce-only fill")
+        if entry_signal_id is not None and close_reason is not None:
+            raise ValueError("a fill cannot open and close a journal trade")
         with self._connect() as connection:
             connection.execute(
                 "INSERT OR IGNORE INTO parent_paper_fills VALUES (?, ?, ?, ?)",
@@ -596,6 +618,92 @@ class IntradayStore:
                     _json(fill),
                 ),
             )
+            if entry_signal_id is not None:
+                trade_key = hashlib.sha256(
+                    f"{fill.scope.value}:{entry_signal_id}:{fill.fill_id}".encode()
+                ).hexdigest()[:32]
+                connection.execute(
+                    "INSERT OR IGNORE INTO open_trade_context "
+                    "(scope, trade_key, signal_id, entry_fill_id, timestamp_open, "
+                    "direction, entry_price, quantity, position_size, entry_fee, "
+                    "stop_loss, take_profit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        fill.scope.value,
+                        trade_key,
+                        entry_signal_id,
+                        fill.fill_id,
+                        fill.filled_at.astimezone(timezone.utc).isoformat(),
+                        direction,
+                        fill.price,
+                        fill.quantity,
+                        fill.notional,
+                        fill.fee,
+                        stop_loss,
+                        take_profit,
+                    ),
+                )
+                context = connection.execute(
+                    "SELECT * FROM open_trade_context WHERE scope=?",
+                    (fill.scope.value,),
+                ).fetchone()
+                if context["trade_key"] != trade_key:
+                    raise ValueError("scope already has a different open journal trade")
+                return None
+            if close_reason is None:
+                return None
+            existing = connection.execute(
+                "SELECT id FROM trades WHERE exit_fill_id=?", (fill.fill_id,)
+            ).fetchone()
+            if existing is not None:
+                return int(existing["id"])
+            context = connection.execute(
+                "SELECT * FROM open_trade_context WHERE scope=?",
+                (fill.scope.value,),
+            ).fetchone()
+            if context is None:
+                return None
+            opened_at = datetime.fromisoformat(context["timestamp_open"])
+            duration_sec = int((fill.filled_at - opened_at).total_seconds())
+            if duration_sec < 0:
+                raise ValueError("journal close precedes its entry")
+            long_position = context["direction"] in {"Buy", "Strong Buy"}
+            signed = 1 if long_position else -1
+            gross_pnl = (
+                context["quantity"] * (fill.price - context["entry_price"]) * signed
+            )
+            pnl_abs = gross_pnl - context["entry_fee"] - fill.fee
+            pnl_pct = pnl_abs / context["position_size"] * 100
+            cursor = connection.execute(
+                "INSERT INTO trades "
+                "(trade_key, signal_id, scope, entry_fill_id, exit_fill_id, "
+                "timestamp_open, timestamp_close, direction, entry_price, exit_price, "
+                "stop_loss, take_profit, position_size, pnl_abs, pnl_pct, close_reason, "
+                "duration_sec, is_paper) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?, ?, ?, ?, 1)",
+                (
+                    context["trade_key"],
+                    context["signal_id"],
+                    fill.scope.value,
+                    context["entry_fill_id"],
+                    fill.fill_id,
+                    context["timestamp_open"],
+                    fill.filled_at.astimezone(timezone.utc).isoformat(),
+                    context["direction"],
+                    context["entry_price"],
+                    fill.price,
+                    context["stop_loss"],
+                    context["take_profit"],
+                    context["position_size"],
+                    pnl_abs,
+                    pnl_pct,
+                    close_reason,
+                    duration_sec,
+                ),
+            )
+            connection.execute(
+                "DELETE FROM open_trade_context WHERE scope=?", (fill.scope.value,)
+            )
+            return int(cursor.lastrowid)
 
     def record_journal_signal(
         self,
