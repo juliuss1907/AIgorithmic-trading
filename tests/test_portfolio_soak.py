@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -113,6 +114,13 @@ def test_soak_cycle_exercises_both_scoped_jev_workflows_without_trading(tmp_path
     ]
     assert len(store.list_portfolio_soak_ticks()) == 2
     assert store.load_parent_portfolio_state() is None
+    with sqlite3.connect(store.database) as connection:
+        connection.row_factory = sqlite3.Row
+        signals = connection.execute("SELECT * FROM signals ORDER BY scope").fetchall()
+    assert len(signals) == 2
+    assert all(row["gate_passed"] == 0 for row in signals)
+    assert all(row["gate_reason"] == "soak_observation_only" for row in signals)
+    assert all(row["rules_version"] == "soak_no_active_rule" for row in signals)
 
 
 def test_cli_evaluates_soak_then_requires_exact_pass_id_for_activation(

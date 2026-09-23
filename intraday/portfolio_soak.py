@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from intraday.contracts import DecisionScope, FeatureSnapshot
+from intraday.journal import record_scoped_signal
 
 
 class PortfolioSoakEvaluation(BaseModel):
@@ -45,11 +47,26 @@ def run_soak_cycle(
     for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY):
         tick_id = f"{snapshot.symbol}:{scope.value}:{int(now.timestamp() * 1000)}"
         try:
-            provider.decide_scoped(snapshot, tick_id, scope, now)
+            scoped = provider.decide_scoped(snapshot, tick_id, scope, now)
         except RuntimeError:
             status = "provider_error"
         else:
-            status = "success"
+            rule = store.load_active_scoped_rule(scope)
+            try:
+                record_scoped_signal(
+                    store,
+                    snapshot,
+                    scoped,
+                    gate_passed=False,
+                    gate_reason="soak_observation_only",
+                    rule_id=(
+                        rule.rule_id if rule is not None else "soak_no_active_rule"
+                    ),
+                )
+            except (ValueError, sqlite3.Error):
+                status = "gate_error"
+            else:
+                status = "success"
         store.record_portfolio_soak_tick(
             scope=scope,
             status=status,

@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 
 from intraday.contracts import (
     DecisionScope,
     Direction,
     FeatureSnapshot,
-    JevDecisionTrace,
     PerpRuleParameters,
     ScopedRuleCandidate,
     SpotRuleParameters,
 )
+from intraday.journal import record_scoped_signal
 from intraday.parent_paper import apply_paper_target
 from intraday.portfolio_coordinator import ParentPortfolioState
 from intraday.scoped_gate import ScopedEntryGate
@@ -24,77 +23,6 @@ def _rule_parts(rule, fallback_id: str):
     if isinstance(rule, ScopedRuleCandidate):
         return rule.parameters, rule.rule_id
     return rule, fallback_id
-
-
-def _fallback_trace(snapshot, scoped) -> JevDecisionTrace:
-    decision = scoped.decision
-    state = {
-        "snapshot_id": snapshot.snapshot_id,
-        "symbol": snapshot.symbol,
-        "event_time": snapshot.event_time.isoformat(),
-        "bid": snapshot.bid,
-        "ask": snapshot.ask,
-        "features": snapshot.features,
-        "freshness": snapshot.freshness,
-        "quality_flags": snapshot.quality_flags,
-        "decision_scope": scoped.scope.value,
-    }
-    return JevDecisionTrace(
-        state_snapshot=json.dumps(state, sort_keys=True, separators=(",", ":")),
-        raw_signals={
-            **snapshot.features,
-            "bid": float(snapshot.bid),
-            "ask": float(snapshot.ask),
-        },
-        jev_answers={
-            "direction": {
-                "choice": decision.direction.value,
-                "probabilities": {
-                    decision.direction.value: decision.direction_confidence
-                },
-            },
-            "regime": {"choice": decision.regime.value},
-            "toxic_flow": {"noul": decision.toxic_flow},
-            "entry_quality": {"score": decision.entry_quality - 1},
-            "risk_level": {"choice": decision.risk_level.value},
-        },
-    )
-
-
-def _record_signal(
-    store,
-    snapshot,
-    scoped,
-    authorization,
-    *,
-    rule_id: str,
-) -> int:
-    trace = scoped.trace or _fallback_trace(snapshot, scoped)
-    thesis_bundle = store.latest_market_thesis_bundle()
-    thesis = None
-    if thesis_bundle is not None:
-        horizon = (
-            thesis_bundle.daily_swing
-            if scoped.scope == DecisionScope.SPOT_DAILY
-            else thesis_bundle.intraday
-        )
-        thesis = json.dumps(
-            horizon.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-        )
-    passed = authorization.allowed
-    return store.record_journal_signal(
-        decision_id=scoped.decision.decision_id,
-        timestamp=scoped.decision.created_at,
-        symbol=snapshot.symbol,
-        scope=scoped.scope,
-        state_snapshot=trace.state_snapshot,
-        raw_signals=trace.raw_signals,
-        jev_answers=trace.jev_answers,
-        gate_passed=passed,
-        gate_reason=None if passed else ";".join(authorization.reason_codes),
-        rules_version=rule_id,
-        llm_thesis=thesis,
-    )
 
 
 def _mark_state(
@@ -266,11 +194,16 @@ def run_parent_paper_cycle(
                     donchian_entry=True,
                     size_multiplier=spot_observation.size_multiplier,
                 )
-                signal_id = _record_signal(
+                signal_id = record_scoped_signal(
                     store,
                     snapshot,
                     scoped,
-                    authorization,
+                    gate_passed=authorization.allowed,
+                    gate_reason=(
+                        None
+                        if authorization.allowed
+                        else ";".join(authorization.reason_codes)
+                    ),
                     rule_id=spot_rule_id,
                 )
                 if authorization.allowed:
@@ -292,11 +225,16 @@ def run_parent_paper_cycle(
             authorization = gate.perp_entry(
                 state, scoped.decision, perp_parameters
             )
-            signal_id = _record_signal(
+            signal_id = record_scoped_signal(
                 store,
                 snapshot,
                 scoped,
-                authorization,
+                gate_passed=authorization.allowed,
+                gate_reason=(
+                    None
+                    if authorization.allowed
+                    else ";".join(authorization.reason_codes)
+                ),
                 rule_id=perp_rule_id,
             )
             if authorization.allowed:
