@@ -77,7 +77,31 @@ aigt portfolio flatten
 aigt status
 ```
 
-## 4. Ubuntu VPS with Docker Compose
+## 4. Export the immutable trade journal
+
+The SQLite journal stores every returned Jev evaluation, including rejected gates. Each
+signal retains the canonical state JSON prepared before the provider call, raw numeric
+features, complete typed answers and probabilities, scoped champion id, and the applicable
+LLM thesis. Provider failures have no answer to label and remain in `model_calls` instead.
+
+Completed trades are inserted once when the round trip closes. The `signals` and `trades`
+tables reject SQL updates and deletes; open positions are tracked separately. `is_paper=1`
+for this release, while the field remains available to distinguish future live records.
+
+```bash
+aigt journal export \
+  --min-pnl-pct 0.5 \
+  --max-pnl-pct -0.5 \
+  --output-dir training_data
+```
+
+The command writes `kev_finetune_YYYYMMDD.jsonl`. Profits above +0.5% preserve the original
+entry direction, losses below −0.5% are labeled `hold`, and the inclusive range between the
+thresholds is skipped. Values are percentage points, not decimal return ratios. Spot and perp
+evaluations from one market tick remain separate examples because their serialized state
+contains a different `decision_scope`.
+
+## 5. Ubuntu VPS with Docker Compose
 
 Keep the dashboard on loopback and access it through SSH:
 

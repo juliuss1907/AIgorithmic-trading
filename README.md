@@ -52,6 +52,19 @@ aigt portfolio paper run
 aigt serve
 ```
 
+Mọi Jev decision trả về đều được ghi vào SQLite, kể cả khi gate từ chối. Khi một
+paper position đóng, journal ghi một round-trip bất biến với net P&L sau phí. Xuất
+những trade có kết quả rõ ràng thành Kev JSONL bằng:
+
+```bash
+aigt journal export
+# tùy chọn: --min-pnl-pct 0.5 --max-pnl-pct -0.5 --output-dir training_data
+```
+
+`pnl_pct` dùng percentage points (`0.5` là 0,5%). Spot và perp cùng tick được giữ
+thành hai mẫu riêng vì state chứa `decision_scope`; export v1 không tự deduplicate.
+Thư mục `training_data/` là derived artifact và không được commit.
+
 Mở `http://127.0.0.1:8081/portfolio`. Mặc định dữ liệu nằm tại
 `${XDG_STATE_HOME:-~/.local/state}/aigorithmic-trading/intraday.sqlite3`; không dùng
 chung paper account với `lab/`. Để copy paper database cũ mà không xóa nguồn:
