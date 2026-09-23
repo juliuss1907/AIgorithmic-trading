@@ -16,6 +16,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from intraday.config import (
     IntradayConfig,
@@ -41,6 +42,10 @@ from intraday.cross_venue_evaluation import (
 from intraday.decision_experiments import (
     make_experiment_pair_id,
     record_compact_shadow,
+)
+from intraday.decision_evaluation import (
+    evaluate_compact_experiment,
+    generate_retrospective,
 )
 from intraday.hyperliquid import HyperliquidFeed
 from intraday.journal import (
@@ -160,6 +165,26 @@ def _parser() -> argparse.ArgumentParser:
     paper_run.add_argument("--database", default=None)
     paper_run.add_argument("--secrets-file", default=None)
     paper_run.add_argument("--once", action="store_true")
+    experiment = portfolio_commands.add_parser("experiment")
+    experiment_commands = experiment.add_subparsers(
+        dest="experiment_command", required=True
+    )
+    experiment_status = experiment_commands.add_parser("status")
+    experiment_status.add_argument("--database", default=None)
+    experiment_evaluate = experiment_commands.add_parser("evaluate")
+    experiment_evaluate.add_argument("--database", default=None)
+    experiment_evaluate.add_argument(
+        "--scope", choices=["all", *(scope.value for scope in DecisionScope)],
+        default="all",
+    )
+    retrospective = portfolio_commands.add_parser("retrospective")
+    retrospective_commands = retrospective.add_subparsers(
+        dest="retrospective_command", required=True
+    )
+    retrospective_run = retrospective_commands.add_parser("run")
+    retrospective_run.add_argument("--database", default=None)
+    retrospective_run.add_argument("--date", default=None)
+    retrospective_run.add_argument("--once", action="store_true")
     journal = commands.add_parser("journal")
     journal_commands = journal.add_subparsers(
         dest="journal_command", required=True
@@ -483,6 +508,44 @@ def _parent_portfolio_payload(state) -> dict:
 def _portfolio_cli(arguments) -> None:
     store = IntradayStore(resolve_database_path(arguments.database))
     command = arguments.portfolio_command
+    if command == "experiment":
+        if arguments.experiment_command == "status":
+            result = {}
+            for scope in DecisionScope:
+                latest = store.latest_decision_experiment_evaluation(scope)
+                result[scope.value] = {
+                    "summary": store.decision_experiment_pair_summary(scope),
+                    "latest_evaluation": (
+                        latest.model_dump(mode="json") if latest else None
+                    ),
+                    "auto_activation": False,
+                }
+            print(json.dumps(result, indent=2))
+            return
+        scopes = (
+            tuple(DecisionScope)
+            if arguments.scope == "all"
+            else (DecisionScope(arguments.scope),)
+        )
+        evaluated_at = datetime.now(timezone.utc)
+        evaluations = [
+            evaluate_compact_experiment(store, scope=scope, evaluated_at=evaluated_at)
+            for scope in scopes
+        ]
+        print(json.dumps([item.model_dump(mode="json") for item in evaluations], indent=2))
+        return
+    if command == "retrospective":
+        generated_at = datetime.now(timezone.utc)
+        report_date = (
+            datetime.fromisoformat(arguments.date).date()
+            if arguments.date
+            else generated_at.astimezone(ZoneInfo("Asia/Ho_Chi_Minh")).date()
+            - timedelta(days=1)
+        )
+        print(json.dumps(generate_retrospective(
+            store, report_date=report_date, generated_at=generated_at
+        ), indent=2))
+        return
     if command == "soak":
         if arguments.soak_command == "run":
             secret_store = ProviderSecretStore(
@@ -728,6 +791,37 @@ def _portfolio_cli(arguments) -> None:
                     store.finish_scheduler_run(
                         "signal_outcomes", outcome_slot, status="success", finished_at=now
                     )
+            vietnam_now = now.astimezone(ZoneInfo("Asia/Ho_Chi_Minh"))
+            retrospective_local = vietnam_now.replace(
+                hour=config.retrospective_hour_vietnam,
+                minute=0, second=0, microsecond=0,
+            )
+            if vietnam_now >= retrospective_local:
+                retrospective_slot = retrospective_local.astimezone(timezone.utc)
+                if store.claim_scheduler_run(
+                    "daily_retrospective", retrospective_slot, started_at=now
+                ):
+                    try:
+                        result["retrospective"] = generate_retrospective(
+                            store,
+                            report_date=vietnam_now.date() - timedelta(days=1),
+                            generated_at=now,
+                        )["report_id"]
+                        for scope in DecisionScope:
+                            evaluate_compact_experiment(
+                                store, scope=scope, evaluated_at=now
+                            )
+                    except Exception as error:
+                        store.finish_scheduler_run(
+                            "daily_retrospective", retrospective_slot,
+                            status="error", error_code=type(error).__name__,
+                            finished_at=now,
+                        )
+                    else:
+                        store.finish_scheduler_run(
+                            "daily_retrospective", retrospective_slot,
+                            status="success", finished_at=now,
+                        )
             print(json.dumps(result), flush=True)
             if arguments.once:
                 return

@@ -263,6 +263,7 @@ def test_compact_state_is_categorical_bounded_and_auditable(tmp_path):
     assert scoped.state_variant == StateVariant.COMPACT_V1
     assert scoped.decision_mode == DecisionMode.SHADOW
     assert scoped.experiment_pair_id == "pair-1234567890123456"
+    assert store.list_model_calls()[0].workflow == "perp_intraday_entry_compact"
 
 
 def test_jev_provider_rejects_invalid_answer_without_returning_partial_decision(tmp_path):

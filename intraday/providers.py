@@ -397,6 +397,8 @@ class JevDecisionProvider:
         decision_mode: DecisionMode = DecisionMode.PRIMARY,
         experiment_pair_id: str | None = None,
     ) -> tuple[JevDecision, JevDecisionTrace]:
+        if state_variant == StateVariant.COMPACT_V1:
+            workflow = f"{workflow}_compact"
         state = self._state(snapshot, scope, state_variant)
         state_snapshot = json.dumps(state, sort_keys=True, separators=(",", ":"))
         payload = {

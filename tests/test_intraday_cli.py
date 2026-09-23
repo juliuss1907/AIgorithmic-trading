@@ -55,6 +55,31 @@ def test_bare_aigt_prints_help_and_exits_successfully(monkeypatch, capsys):
     assert "journal" in output
 
 
+def test_experiment_status_and_retrospective_cli_are_available(
+    monkeypatch, capsys, tmp_path
+):
+    database = tmp_path / "intraday.sqlite"
+    monkeypatch.setattr(
+        sys, "argv",
+        ["aigt", "portfolio", "experiment", "status", "--database", str(database)],
+    )
+    main()
+    status = json.loads(capsys.readouterr().out)
+    assert set(status) == {"spot_daily", "perp_intraday"}
+
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "aigt", "portfolio", "retrospective", "run", "--once",
+            "--date", "2026-09-22", "--database", str(database),
+        ],
+    )
+    main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["report_date"] == "2026-09-22"
+    assert set(report["scopes"]) == {"spot_daily", "perp_intraday"}
+
+
 def test_journal_export_cli_writes_json_summary_and_jsonl(
     monkeypatch, capsys, tmp_path
 ):

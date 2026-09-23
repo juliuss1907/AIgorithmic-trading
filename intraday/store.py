@@ -36,6 +36,7 @@ from intraday.portfolio_coordinator import ParentPortfolioState
 from intraday.portfolio_soak import PortfolioSoakEvaluation
 from intraday.parent_paper import ParentPaperFill
 from intraday.outcomes import SignalOutcome
+from intraday.decision_evaluation import DecisionExperimentEvaluation
 
 
 def _json(model) -> str:
@@ -385,6 +386,40 @@ class IntradayStore:
                 BEFORE DELETE ON signal_outcomes BEGIN
                     SELECT RAISE(ABORT, 'signal_outcomes are append-only');
                 END;
+                CREATE TABLE IF NOT EXISTS decision_experiment_evaluations (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    status TEXT NOT NULL CHECK (status IN ('collecting', 'eligible', 'reject')),
+                    evaluated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_decision_experiment_evaluations
+                    ON decision_experiment_evaluations(scope, evaluated_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS retrospectives (
+                    id TEXT PRIMARY KEY,
+                    report_date TEXT NOT NULL,
+                    generated_at TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_retrospectives_date_hash
+                    ON retrospectives(report_date, content_hash);
+                CREATE TRIGGER IF NOT EXISTS decision_evaluations_append_only_update
+                BEFORE UPDATE ON decision_experiment_evaluations BEGIN
+                    SELECT RAISE(ABORT, 'decision experiment evaluations are append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS decision_evaluations_append_only_delete
+                BEFORE DELETE ON decision_experiment_evaluations BEGIN
+                    SELECT RAISE(ABORT, 'decision experiment evaluations are append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS retrospectives_append_only_update
+                BEFORE UPDATE ON retrospectives BEGIN
+                    SELECT RAISE(ABORT, 'retrospectives are append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS retrospectives_append_only_delete
+                BEFORE DELETE ON retrospectives BEGIN
+                    SELECT RAISE(ABORT, 'retrospectives are append-only');
+                END;
                 CREATE TABLE IF NOT EXISTS rule_evaluations (
                     id TEXT PRIMARY KEY,
                     candidate_id TEXT NOT NULL REFERENCES rules(id),
@@ -428,8 +463,118 @@ class IntradayStore:
                 "ON signals(experiment_pair_id, scope, state_variant)"
             )
             connection.execute(
-                "UPDATE schema_meta SET value='12' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='13' WHERE key='schema_version'"
             )
+
+    def decision_experiment_pair_summary(self, scope: DecisionScope) -> dict:
+        with self._connect() as connection:
+            primary = connection.execute(
+                "SELECT COUNT(*) AS count, MIN(timestamp) AS first_at, "
+                "MAX(timestamp) AS last_at FROM signals WHERE scope=? "
+                "AND state_variant='numeric_v1' AND decision_mode='primary' "
+                "AND experiment_pair_id IS NOT NULL",
+                (scope.value,),
+            ).fetchone()
+            paired = connection.execute(
+                "SELECT COUNT(*) FROM signals n JOIN signals c "
+                "ON c.experiment_pair_id=n.experiment_pair_id AND c.scope=n.scope "
+                "WHERE n.scope=? AND n.state_variant='numeric_v1' "
+                "AND n.decision_mode='primary' AND c.state_variant='compact_v1' "
+                "AND c.decision_mode='shadow'",
+                (scope.value,),
+            ).fetchone()[0]
+        count = int(primary["count"])
+        duration = 0.0
+        if primary["first_at"] and primary["last_at"]:
+            duration = max(
+                0.0,
+                (datetime.fromisoformat(primary["last_at"]) - datetime.fromisoformat(primary["first_at"])).total_seconds() / 86_400,
+            )
+        return {
+            "primary_pairs": count,
+            "paired_signals": int(paired),
+            "duration_days": duration,
+            "availability": int(paired) / count if count else 0.0,
+        }
+
+    def list_decision_experiment_pairs(
+        self, *, scope: DecisionScope, horizon_sec: int
+    ) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT n.experiment_pair_id, n.timestamp, "
+                "json_extract(n.jev_answers, '$.direction.choice') AS numeric_direction, "
+                "json_extract(c.jev_answers, '$.direction.choice') AS compact_direction, "
+                "n.jev_answers AS numeric_answers, c.jev_answers AS compact_answers, "
+                "no.forward_return_pct AS forward_return_pct "
+                "FROM signals n JOIN signals c ON c.experiment_pair_id=n.experiment_pair_id "
+                "AND c.scope=n.scope JOIN signal_outcomes no ON no.signal_id=n.id "
+                "AND no.horizon_sec=? JOIN signal_outcomes co ON co.signal_id=c.id "
+                "AND co.horizon_sec=? WHERE n.scope=? AND n.state_variant='numeric_v1' "
+                "AND n.decision_mode='primary' AND c.state_variant='compact_v1' "
+                "AND c.decision_mode='shadow' ORDER BY n.timestamp, n.id",
+                (horizon_sec, horizon_sec, scope.value),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_decision_experiment_evaluation(
+        self, evaluation: DecisionExperimentEvaluation
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO decision_experiment_evaluations VALUES (?, ?, ?, ?, ?)",
+                (
+                    evaluation.evaluation_id, evaluation.scope.value,
+                    evaluation.status, evaluation.evaluated_at.isoformat(),
+                    _json(evaluation),
+                ),
+            )
+
+    def latest_decision_experiment_evaluation(
+        self, scope: DecisionScope | None = None
+    ) -> DecisionExperimentEvaluation | None:
+        query = "SELECT payload_json FROM decision_experiment_evaluations"
+        parameters: tuple = ()
+        if scope is not None:
+            query += " WHERE scope=?"
+            parameters = (scope.value,)
+        query += " ORDER BY evaluated_at DESC, id DESC LIMIT 1"
+        with self._connect() as connection:
+            row = connection.execute(query, parameters).fetchone()
+        return None if row is None else DecisionExperimentEvaluation.model_validate_json(row["payload_json"])
+
+    def list_signal_outcome_rows(
+        self, *, scope: DecisionScope, horizon_sec: int, report_date
+    ) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT s.id, s.timestamp, s.jev_answers, s.gate_passed, "
+                "o.forward_return_pct FROM signals s JOIN signal_outcomes o "
+                "ON o.signal_id=s.id AND o.horizon_sec=? WHERE s.scope=? "
+                "AND s.state_variant='numeric_v1' AND s.decision_mode='primary' "
+                "AND date(s.timestamp)=? ORDER BY s.timestamp, s.id",
+                (horizon_sec, scope.value, report_date.isoformat()),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_retrospective(self, report: dict) -> None:
+        payload = json.dumps(report, sort_keys=True, separators=(",", ":"))
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO retrospectives VALUES (?, ?, ?, ?, ?)",
+                (
+                    report["report_id"], report["report_date"],
+                    report["generated_at"], report["content_hash"], payload,
+                ),
+            )
+
+    def latest_retrospective(self) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM retrospectives "
+                "ORDER BY generated_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        return None if row is None else json.loads(row["payload_json"])
 
     def list_signals_missing_outcome(
         self,
