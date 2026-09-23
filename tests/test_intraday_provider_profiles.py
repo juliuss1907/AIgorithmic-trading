@@ -181,7 +181,7 @@ def test_existing_v1_database_is_migrated_additively(tmp_path):
         "analyst_reports", "market_theses", "rule_evaluations",
         "signals", "trades", "open_trade_context",
     } <= provider_tables
-    assert version == "11"
+    assert version == "12"
 
 
 def test_secret_store_writes_mode_0600_and_never_exposes_key_in_repr(tmp_path):

@@ -35,6 +35,7 @@ from intraday.cross_venue_evaluation import CrossVenuePromotionEvaluation
 from intraday.portfolio_coordinator import ParentPortfolioState
 from intraday.portfolio_soak import PortfolioSoakEvaluation
 from intraday.parent_paper import ParentPaperFill
+from intraday.outcomes import SignalOutcome
 
 
 def _json(model) -> str:
@@ -356,6 +357,34 @@ class IntradayStore:
                 BEFORE DELETE ON trades BEGIN
                     SELECT RAISE(ABORT, 'trades are append-only');
                 END;
+                CREATE TABLE IF NOT EXISTS signal_outcomes (
+                    id TEXT PRIMARY KEY,
+                    signal_id INTEGER NOT NULL REFERENCES signals(id),
+                    horizon_sec INTEGER NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    exit_price REAL NOT NULL,
+                    forward_return_pct REAL NOT NULL,
+                    max_upside_pct REAL NOT NULL,
+                    max_downside_pct REAL NOT NULL,
+                    directional_return_pct REAL,
+                    mfe_pct REAL,
+                    mae_pct REAL,
+                    sample_count INTEGER NOT NULL,
+                    coverage_pct REAL NOT NULL,
+                    price_source TEXT NOT NULL,
+                    UNIQUE(signal_id, horizon_sec)
+                );
+                CREATE INDEX IF NOT EXISTS idx_signal_outcomes_horizon
+                    ON signal_outcomes(horizon_sec, signal_id);
+                CREATE TRIGGER IF NOT EXISTS signal_outcomes_append_only_update
+                BEFORE UPDATE ON signal_outcomes BEGIN
+                    SELECT RAISE(ABORT, 'signal_outcomes are append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS signal_outcomes_append_only_delete
+                BEFORE DELETE ON signal_outcomes BEGIN
+                    SELECT RAISE(ABORT, 'signal_outcomes are append-only');
+                END;
                 CREATE TABLE IF NOT EXISTS rule_evaluations (
                     id TEXT PRIMARY KEY,
                     candidate_id TEXT NOT NULL REFERENCES rules(id),
@@ -399,8 +428,89 @@ class IntradayStore:
                 "ON signals(experiment_pair_id, scope, state_variant)"
             )
             connection.execute(
-                "UPDATE schema_meta SET value='11' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='12' WHERE key='schema_version'"
             )
+
+    def list_signals_missing_outcome(
+        self,
+        *,
+        scope: DecisionScope,
+        horizon_sec: int,
+        matured_before: datetime,
+        limit: int = 1000,
+    ) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT s.id, s.timestamp, json_extract(s.jev_answers, '$.direction.choice') "
+                "AS direction FROM signals s LEFT JOIN signal_outcomes o "
+                "ON o.signal_id=s.id AND o.horizon_sec=? "
+                "WHERE s.scope=? AND o.id IS NULL AND julianday(s.timestamp)<=julianday(?) "
+                "ORDER BY s.timestamp, s.id LIMIT ?",
+                (horizon_sec, scope.value, matured_before.isoformat(), limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_snapshots_between(
+        self, start: datetime, end: datetime
+    ) -> list[FeatureSnapshot]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM snapshots "
+                "WHERE julianday(event_time)>=julianday(?) "
+                "AND julianday(event_time)<=julianday(?) "
+                "ORDER BY event_time, id",
+                (start.isoformat(), end.isoformat()),
+            ).fetchall()
+        return [FeatureSnapshot.model_validate_json(row["payload_json"]) for row in rows]
+
+    def record_signal_outcome(self, outcome: SignalOutcome) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO signal_outcomes VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    outcome.outcome_id,
+                    outcome.signal_id,
+                    outcome.horizon_sec,
+                    outcome.observed_at.astimezone(timezone.utc).isoformat(),
+                    outcome.entry_price,
+                    outcome.exit_price,
+                    outcome.forward_return_pct,
+                    outcome.max_upside_pct,
+                    outcome.max_downside_pct,
+                    outcome.directional_return_pct,
+                    outcome.mfe_pct,
+                    outcome.mae_pct,
+                    outcome.sample_count,
+                    outcome.coverage_pct,
+                    outcome.price_source,
+                ),
+            )
+
+    def list_signal_outcomes(self, *, signal_id: int | None = None) -> list[SignalOutcome]:
+        query = "SELECT * FROM signal_outcomes"
+        parameters: tuple = ()
+        if signal_id is not None:
+            query += " WHERE signal_id=?"
+            parameters = (signal_id,)
+        query += " ORDER BY signal_id, horizon_sec"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [
+            SignalOutcome(
+                outcome_id=row["id"], signal_id=row["signal_id"],
+                horizon_sec=row["horizon_sec"], observed_at=row["observed_at"],
+                entry_price=row["entry_price"], exit_price=row["exit_price"],
+                forward_return_pct=row["forward_return_pct"],
+                max_upside_pct=row["max_upside_pct"],
+                max_downside_pct=row["max_downside_pct"],
+                directional_return_pct=row["directional_return_pct"],
+                mfe_pct=row["mfe_pct"], mae_pct=row["mae_pct"],
+                sample_count=row["sample_count"], coverage_pct=row["coverage_pct"],
+                price_source=row["price_source"],
+            )
+            for row in rows
+        ]
 
     def claim_scheduler_run(
         self, job_name: str, scheduled_for: datetime, *, started_at: datetime | None = None

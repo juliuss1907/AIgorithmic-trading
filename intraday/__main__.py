@@ -50,6 +50,7 @@ from intraday.journal import (
 )
 from intraday.market import BinanceUsdMClient, MultiCadenceMarketCache, StaleMarketData
 from intraday.notifications import TelegramNotifier, drain_outbox
+from intraday.outcomes import evaluate_pending_outcomes
 from intraday.provider_client import ProviderPreflightClient
 from intraday.provider_profiles import ProviderSecretStore
 from intraday.providers import AssignedDecisionProvider, StubDecisionProvider
@@ -714,6 +715,19 @@ def _portfolio_cli(arguments) -> None:
                 result["shadow_errors"] = shadow_errors
             result["risk_fills"] = risk_result["fills"]
             result["decision_scopes"] = [scope.value for scope in slots]
+            outcome_slot = claim_cadence(store, "signal_outcomes", now, 60)
+            if outcome_slot is not None:
+                try:
+                    result["outcomes"] = evaluate_pending_outcomes(store, now=now)
+                except Exception as error:
+                    store.finish_scheduler_run(
+                        "signal_outcomes", outcome_slot, status="error",
+                        error_code=type(error).__name__, finished_at=now,
+                    )
+                else:
+                    store.finish_scheduler_run(
+                        "signal_outcomes", outcome_slot, status="success", finished_at=now
+                    )
             print(json.dumps(result), flush=True)
             if arguments.once:
                 return
