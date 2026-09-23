@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from intraday.contracts import (
     AnalystReport,
+    DecisionScope,
     FeatureSnapshot,
     GateDecision,
     JevDecision,
     MarketThesis,
+    MarketThesisBundle,
     NewsEvent,
     NewsIngestResult,
     PaperFill,
@@ -23,9 +26,13 @@ from intraday.contracts import (
     PromotionEvaluation,
     RuleCandidate,
     RuleReplayEvaluation,
+    ScopedRuleCandidate,
     VenueMarketFrame,
 )
 from intraday.cross_venue_evaluation import CrossVenuePromotionEvaluation
+from intraday.portfolio_coordinator import ParentPortfolioState
+from intraday.portfolio_soak import PortfolioSoakEvaluation
+from intraday.parent_paper import ParentPaperFill
 
 
 def _json(model) -> str:
@@ -196,6 +203,141 @@ class IntradayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_market_theses_latest
                     ON market_theses(generated_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS market_thesis_bundles (
+                    id TEXT PRIMARY KEY,
+                    generated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_market_thesis_bundles_latest
+                    ON market_thesis_bundles(generated_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS scoped_rules (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    parent_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN (
+                        'queued', 'replay_passed', 'challenger', 'champion',
+                        'hall_of_fame', 'rejected'
+                    )),
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_scoped_rules_status
+                    ON scoped_rules(scope, status, created_at, id);
+                CREATE TABLE IF NOT EXISTS scoped_rule_registry (
+                    scope TEXT PRIMARY KEY CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    champion_id TEXT REFERENCES scoped_rules(id),
+                    challenger_id TEXT REFERENCES scoped_rules(id),
+                    rollback_id TEXT REFERENCES scoped_rules(id),
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS parent_portfolio_state (
+                    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS parent_portfolio_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS portfolio_soak_ticks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    status TEXT NOT NULL CHECK (status IN (
+                        'success', 'skipped_no_setup', 'provider_error', 'gate_error'
+                    )),
+                    hard_risk_violation INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_portfolio_soak_ticks_time
+                    ON portfolio_soak_ticks(created_at, scope);
+                CREATE TABLE IF NOT EXISTS portfolio_soak_evaluations (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL CHECK (status IN ('deferred', 'reject', 'pass')),
+                    evaluated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS parent_paper_fills (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    filled_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS signals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    decision_id TEXT NOT NULL UNIQUE,
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    state_snapshot TEXT NOT NULL,
+                    raw_signals TEXT NOT NULL,
+                    jev_answers TEXT NOT NULL,
+                    gate_passed INTEGER NOT NULL CHECK (gate_passed IN (0, 1)),
+                    gate_reason TEXT,
+                    rules_version TEXT NOT NULL,
+                    llm_thesis TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_signals_time_scope
+                    ON signals(timestamp, symbol, scope);
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trade_key TEXT NOT NULL UNIQUE,
+                    signal_id INTEGER NOT NULL REFERENCES signals(id),
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    entry_fill_id TEXT NOT NULL,
+                    exit_fill_id TEXT NOT NULL,
+                    timestamp_open TEXT NOT NULL,
+                    timestamp_close TEXT,
+                    direction TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    exit_price REAL,
+                    stop_loss REAL,
+                    take_profit REAL,
+                    position_size REAL NOT NULL,
+                    pnl_abs REAL,
+                    pnl_pct REAL,
+                    close_reason TEXT,
+                    duration_sec INTEGER,
+                    is_paper INTEGER NOT NULL DEFAULT 1 CHECK (is_paper IN (0, 1))
+                );
+                CREATE INDEX IF NOT EXISTS idx_trades_signal
+                    ON trades(signal_id, timestamp_close);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_entry_fill
+                    ON trades(entry_fill_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_exit_fill
+                    ON trades(exit_fill_id);
+                CREATE TABLE IF NOT EXISTS open_trade_context (
+                    scope TEXT PRIMARY KEY CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    trade_key TEXT NOT NULL UNIQUE,
+                    signal_id INTEGER NOT NULL REFERENCES signals(id),
+                    entry_fill_id TEXT NOT NULL,
+                    timestamp_open TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    entry_price REAL NOT NULL,
+                    quantity REAL NOT NULL,
+                    position_size REAL NOT NULL,
+                    entry_fee REAL NOT NULL,
+                    stop_loss REAL,
+                    take_profit REAL
+                );
+                CREATE TRIGGER IF NOT EXISTS signals_append_only_update
+                BEFORE UPDATE ON signals BEGIN
+                    SELECT RAISE(ABORT, 'signals are append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS signals_append_only_delete
+                BEFORE DELETE ON signals BEGIN
+                    SELECT RAISE(ABORT, 'signals are append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS trades_append_only_update
+                BEFORE UPDATE ON trades BEGIN
+                    SELECT RAISE(ABORT, 'trades are append-only');
+                END;
+                CREATE TRIGGER IF NOT EXISTS trades_append_only_delete
+                BEFORE DELETE ON trades BEGIN
+                    SELECT RAISE(ABORT, 'trades are append-only');
+                END;
                 CREATE TABLE IF NOT EXISTS rule_evaluations (
                     id TEXT PRIMARY KEY,
                     candidate_id TEXT NOT NULL REFERENCES rules(id),
@@ -225,7 +367,7 @@ class IntradayStore:
                 if name not in command_columns:
                     connection.execute(f"ALTER TABLE commands ADD COLUMN {name} {definition}")
             connection.execute(
-                "UPDATE schema_meta SET value='4' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='9' WHERE key='schema_version'"
             )
 
     def record_tick(
@@ -300,6 +442,13 @@ class IntradayStore:
                 self._save_runtime_state(connection, runtime_state, gate.evaluated_at)
         return {"id": decision.decision_id, "tick_id": decision.tick_id}
 
+    def record_snapshot(self, snapshot: FeatureSnapshot) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO snapshots VALUES (?, ?, ?)",
+                (snapshot.snapshot_id, snapshot.event_time.isoformat(), _json(snapshot)),
+            )
+
     def get_tick(self, tick_id: str):
         with self._connect() as connection:
             row = connection.execute(
@@ -326,6 +475,388 @@ class IntradayStore:
                 "SELECT payload_json FROM portfolio_state WHERE singleton = 1"
             ).fetchone()
         return None if row is None else json.loads(row["payload_json"])
+
+    def save_parent_portfolio_state(
+        self,
+        state: ParentPortfolioState,
+        *,
+        event_kind: str,
+        actor: str,
+    ) -> None:
+        payload = _json(state)
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO parent_portfolio_state VALUES (1, ?, ?) "
+                "ON CONFLICT(singleton) DO UPDATE SET "
+                "payload_json=excluded.payload_json, updated_at=excluded.updated_at",
+                (payload, state.updated_at.isoformat()),
+            )
+            connection.execute(
+                "INSERT INTO parent_portfolio_events "
+                "(kind, actor, payload_json, created_at) VALUES (?, ?, ?, ?)",
+                (event_kind, actor, payload, state.updated_at.isoformat()),
+            )
+
+    def load_parent_portfolio_state(self) -> ParentPortfolioState | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM parent_portfolio_state WHERE singleton=1"
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else ParentPortfolioState.model_validate_json(row["payload_json"])
+        )
+
+    def list_parent_portfolio_events(self, limit: int = 100) -> list[dict]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, kind, actor, payload_json, created_at "
+                "FROM parent_portfolio_events ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_portfolio_soak_tick(
+        self,
+        *,
+        scope: DecisionScope,
+        status: str,
+        created_at: datetime,
+        hard_risk_violation: bool = False,
+    ) -> None:
+        if status not in {
+            "success", "skipped_no_setup", "provider_error", "gate_error"
+        }:
+            raise ValueError("invalid portfolio soak status")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO portfolio_soak_ticks "
+                "(scope, status, hard_risk_violation, created_at) VALUES (?, ?, ?, ?)",
+                (
+                    scope.value,
+                    status,
+                    int(hard_risk_violation),
+                    created_at.isoformat(),
+                ),
+            )
+
+    def list_portfolio_soak_ticks(self) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT scope, status, hard_risk_violation, created_at "
+                "FROM portfolio_soak_ticks ORDER BY created_at, id"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_portfolio_soak_evaluation(
+        self, evaluation: PortfolioSoakEvaluation
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO portfolio_soak_evaluations VALUES (?, ?, ?, ?)",
+                (
+                    evaluation.evaluation_id,
+                    evaluation.status,
+                    evaluation.evaluated_at.isoformat(),
+                    _json(evaluation),
+                ),
+            )
+
+    def portfolio_soak_evaluation(
+        self, evaluation_id: str
+    ) -> PortfolioSoakEvaluation | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM portfolio_soak_evaluations WHERE id=?",
+                (evaluation_id,),
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else PortfolioSoakEvaluation.model_validate_json(row["payload_json"])
+        )
+
+    def latest_portfolio_soak_evaluation(self) -> PortfolioSoakEvaluation | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM portfolio_soak_evaluations "
+                "ORDER BY evaluated_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else PortfolioSoakEvaluation.model_validate_json(row["payload_json"])
+        )
+
+    def record_parent_paper_fill(
+        self,
+        fill: ParentPaperFill,
+        *,
+        entry_signal_id: int | None = None,
+        direction: str | None = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        close_reason: str | None = None,
+    ) -> int | None:
+        if entry_signal_id is not None and fill.reduce_only:
+            raise ValueError("a reduce-only fill cannot open a journal trade")
+        if entry_signal_id is not None and direction is None:
+            raise ValueError("an entry journal fill requires its direction")
+        if close_reason is not None and not fill.reduce_only:
+            raise ValueError("a journal close requires a reduce-only fill")
+        if entry_signal_id is not None and close_reason is not None:
+            raise ValueError("a fill cannot open and close a journal trade")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO parent_paper_fills VALUES (?, ?, ?, ?)",
+                (
+                    fill.fill_id,
+                    fill.scope.value,
+                    fill.filled_at.isoformat(),
+                    _json(fill),
+                ),
+            )
+            if entry_signal_id is not None:
+                trade_key = hashlib.sha256(
+                    f"{fill.scope.value}:{entry_signal_id}:{fill.fill_id}".encode()
+                ).hexdigest()[:32]
+                connection.execute(
+                    "INSERT OR IGNORE INTO open_trade_context "
+                    "(scope, trade_key, signal_id, entry_fill_id, timestamp_open, "
+                    "direction, entry_price, quantity, position_size, entry_fee, "
+                    "stop_loss, take_profit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        fill.scope.value,
+                        trade_key,
+                        entry_signal_id,
+                        fill.fill_id,
+                        fill.filled_at.astimezone(timezone.utc).isoformat(),
+                        direction,
+                        fill.price,
+                        fill.quantity,
+                        fill.notional,
+                        fill.fee,
+                        stop_loss,
+                        take_profit,
+                    ),
+                )
+                context = connection.execute(
+                    "SELECT * FROM open_trade_context WHERE scope=?",
+                    (fill.scope.value,),
+                ).fetchone()
+                if context["trade_key"] != trade_key:
+                    raise ValueError("scope already has a different open journal trade")
+                return None
+            if close_reason is None:
+                return None
+            existing = connection.execute(
+                "SELECT id FROM trades WHERE exit_fill_id=?", (fill.fill_id,)
+            ).fetchone()
+            if existing is not None:
+                return int(existing["id"])
+            context = connection.execute(
+                "SELECT * FROM open_trade_context WHERE scope=?",
+                (fill.scope.value,),
+            ).fetchone()
+            if context is None:
+                return None
+            opened_at = datetime.fromisoformat(context["timestamp_open"])
+            duration_sec = int((fill.filled_at - opened_at).total_seconds())
+            if duration_sec < 0:
+                raise ValueError("journal close precedes its entry")
+            long_position = context["direction"] in {"Buy", "Strong Buy"}
+            signed = 1 if long_position else -1
+            gross_pnl = (
+                context["quantity"] * (fill.price - context["entry_price"]) * signed
+            )
+            pnl_abs = gross_pnl - context["entry_fee"] - fill.fee
+            pnl_pct = pnl_abs / context["position_size"] * 100
+            cursor = connection.execute(
+                "INSERT INTO trades "
+                "(trade_key, signal_id, scope, entry_fill_id, exit_fill_id, "
+                "timestamp_open, timestamp_close, direction, entry_price, exit_price, "
+                "stop_loss, take_profit, position_size, pnl_abs, pnl_pct, close_reason, "
+                "duration_sec, is_paper) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?, ?, ?, ?, 1)",
+                (
+                    context["trade_key"],
+                    context["signal_id"],
+                    fill.scope.value,
+                    context["entry_fill_id"],
+                    fill.fill_id,
+                    context["timestamp_open"],
+                    fill.filled_at.astimezone(timezone.utc).isoformat(),
+                    context["direction"],
+                    context["entry_price"],
+                    fill.price,
+                    context["stop_loss"],
+                    context["take_profit"],
+                    context["position_size"],
+                    pnl_abs,
+                    pnl_pct,
+                    close_reason,
+                    duration_sec,
+                ),
+            )
+            connection.execute(
+                "DELETE FROM open_trade_context WHERE scope=?", (fill.scope.value,)
+            )
+            return int(cursor.lastrowid)
+
+    def record_journal_signal(
+        self,
+        *,
+        decision_id: str,
+        timestamp: datetime,
+        symbol: str,
+        scope: DecisionScope,
+        state_snapshot: str,
+        raw_signals: dict[str, float | None],
+        jev_answers: dict,
+        gate_passed: bool,
+        gate_reason: str | None,
+        rules_version: str,
+        llm_thesis: str | None,
+    ) -> int:
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise ValueError("signal timestamp must be timezone-aware")
+        if not decision_id or not symbol or not state_snapshot or not rules_version:
+            raise ValueError("signal identity and snapshots must be nonempty")
+        if not raw_signals or any(
+            isinstance(value, bool)
+            or (
+                value is not None
+                and (
+                    not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                )
+            )
+            for value in raw_signals.values()
+        ):
+            raise ValueError("raw_signals must contain finite numeric values")
+        if not jev_answers:
+            raise ValueError("jev_answers must not be empty")
+        if gate_passed and gate_reason is not None:
+            raise ValueError("a passed gate cannot have a rejection reason")
+        if not gate_passed and not gate_reason:
+            raise ValueError("a rejected gate requires a reason")
+        values = (
+            decision_id,
+            timestamp.astimezone(timezone.utc).isoformat(),
+            symbol,
+            scope.value,
+            state_snapshot,
+            json.dumps(raw_signals, sort_keys=True, separators=(",", ":")),
+            json.dumps(jev_answers, sort_keys=True, separators=(",", ":")),
+            int(gate_passed),
+            gate_reason,
+            rules_version,
+            llm_thesis,
+        )
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO signals "
+                "(decision_id, timestamp, symbol, scope, state_snapshot, raw_signals, "
+                "jev_answers, gate_passed, gate_reason, rules_version, llm_thesis) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+            row = connection.execute(
+                "SELECT id, timestamp, symbol, scope, state_snapshot, raw_signals, "
+                "jev_answers, gate_passed, gate_reason, rules_version, llm_thesis "
+                "FROM signals WHERE decision_id=?",
+                (decision_id,),
+            ).fetchone()
+            if tuple(row[1:]) != values[1:]:
+                raise ValueError("decision_id was reused with different journal data")
+            return int(row["id"])
+
+    def record_completed_trade(
+        self,
+        *,
+        trade_key: str,
+        signal_id: int,
+        scope: DecisionScope,
+        entry_fill_id: str,
+        exit_fill_id: str,
+        timestamp_open: datetime,
+        timestamp_close: datetime,
+        direction: str,
+        entry_price: float,
+        exit_price: float,
+        stop_loss: float | None,
+        take_profit: float | None,
+        position_size: float,
+        pnl_abs: float,
+        pnl_pct: float,
+        close_reason: str,
+        duration_sec: int,
+        is_paper: bool = True,
+    ) -> int:
+        if timestamp_open.tzinfo is None or timestamp_open.utcoffset() is None:
+            raise ValueError("trade open timestamp must be timezone-aware")
+        if timestamp_close.tzinfo is None or timestamp_close.utcoffset() is None:
+            raise ValueError("trade close timestamp must be timezone-aware")
+        if timestamp_close < timestamp_open or duration_sec < 0:
+            raise ValueError("trade close must not precede its open")
+        if min(entry_price, exit_price, position_size) <= 0:
+            raise ValueError("trade prices and position size must be positive")
+        values = (
+            trade_key,
+            signal_id,
+            scope.value,
+            entry_fill_id,
+            exit_fill_id,
+            timestamp_open.astimezone(timezone.utc).isoformat(),
+            timestamp_close.astimezone(timezone.utc).isoformat(),
+            direction,
+            entry_price,
+            exit_price,
+            stop_loss,
+            take_profit,
+            position_size,
+            pnl_abs,
+            pnl_pct,
+            close_reason,
+            duration_sec,
+            int(is_paper),
+        )
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO trades "
+                "(trade_key, signal_id, scope, entry_fill_id, exit_fill_id, "
+                "timestamp_open, timestamp_close, direction, entry_price, exit_price, "
+                "stop_loss, take_profit, position_size, pnl_abs, pnl_pct, close_reason, "
+                "duration_sec, is_paper) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?, ?, ?, ?, ?)",
+                values,
+            )
+            row = connection.execute(
+                "SELECT id, trade_key, signal_id, scope, entry_fill_id, exit_fill_id, "
+                "timestamp_open, timestamp_close, direction, entry_price, exit_price, "
+                "stop_loss, take_profit, position_size, pnl_abs, pnl_pct, close_reason, "
+                "duration_sec, is_paper FROM trades WHERE trade_key=?",
+                (trade_key,),
+            ).fetchone()
+            if tuple(row[1:]) != values:
+                raise ValueError("trade_key was reused with different journal data")
+            return int(row["id"])
+
+    def list_parent_paper_fills(self, limit: int = 100) -> list[ParentPaperFill]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM parent_paper_fills "
+                "ORDER BY filled_at DESC, id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            ParentPaperFill.model_validate_json(row["payload_json"]) for row in rows
+        ]
 
     @staticmethod
     def _save_runtime_state(connection, state: dict, updated_at: datetime) -> None:
@@ -463,7 +994,8 @@ class IntradayStore:
         allowed = {
             "pause_entries", "resume_entries", "flatten", "rollback",
             "toggle_notifications", "provider_test", "provider_activate",
-            "provider_deactivate",
+            "provider_deactivate", "portfolio_pause", "portfolio_resume",
+            "portfolio_flatten",
         }
         if kind not in allowed:
             raise ValueError("unsupported operator command")
@@ -669,6 +1201,122 @@ class IntradayStore:
                 "ORDER BY generated_at DESC, id DESC LIMIT 1"
             ).fetchone()
         return None if row is None else MarketThesis.model_validate_json(row["payload_json"])
+
+    def record_scoped_analysis(
+        self,
+        reports: tuple[AnalystReport, AnalystReport, AnalystReport],
+        bundle: MarketThesisBundle,
+    ) -> None:
+        expected = {"market", "news", "sentiment"}
+        if {report.analyst for report in reports} != expected:
+            raise ValueError("analysis cycle requires market, news, and sentiment reports")
+        if set(bundle.source_report_ids) != {report.report_id for report in reports}:
+            raise ValueError("thesis bundle must reference the analysis cycle reports")
+        with self._connect() as connection:
+            for report in reports:
+                connection.execute(
+                    "INSERT OR IGNORE INTO analyst_reports VALUES (?, ?, ?, ?)",
+                    (
+                        report.report_id,
+                        report.analyst,
+                        report.generated_at.isoformat(),
+                        _json(report),
+                    ),
+                )
+            connection.execute(
+                "INSERT INTO market_thesis_bundles VALUES (?, ?, ?)",
+                (bundle.thesis_id, bundle.generated_at.isoformat(), _json(bundle)),
+            )
+
+    def latest_market_thesis_bundle(self) -> MarketThesisBundle | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM market_thesis_bundles "
+                "ORDER BY generated_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else MarketThesisBundle.model_validate_json(row["payload_json"])
+        )
+
+    def register_scoped_rule(
+        self, rule: ScopedRuleCandidate, *, status: str = "queued"
+    ) -> None:
+        allowed = {
+            "queued", "replay_passed", "challenger", "champion",
+            "hall_of_fame", "rejected",
+        }
+        if status not in allowed:
+            raise ValueError("invalid rule status")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO scoped_rules VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    rule.rule_id,
+                    rule.scope.value,
+                    rule.parent_rule_id,
+                    status,
+                    _json(rule),
+                    rule.created_at.isoformat(),
+                ),
+            )
+
+    def has_open_scoped_rule_candidate(self, scope: DecisionScope) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM scoped_rules WHERE scope=? AND status IN "
+                "('queued', 'replay_passed', 'challenger') LIMIT 1",
+                (scope.value,),
+            ).fetchone()
+        return row is not None
+
+    def scoped_rule_registry(self, scope: DecisionScope) -> dict:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT champion_id, challenger_id, rollback_id, updated_at "
+                "FROM scoped_rule_registry WHERE scope=?",
+                (scope.value,),
+            ).fetchone()
+        if row is None:
+            return {"champion_id": None, "challenger_id": None, "rollback_id": None}
+        return dict(row)
+
+    def activate_scoped_champion(
+        self, scope: DecisionScope, rule_id: str, *, now: datetime
+    ) -> dict:
+        with self._connect() as connection:
+            rule = connection.execute(
+                "SELECT scope FROM scoped_rules WHERE id=?", (rule_id,)
+            ).fetchone()
+            if rule is None or rule["scope"] != scope.value:
+                raise ValueError("unknown scoped rule")
+            connection.execute(
+                "UPDATE scoped_rules SET status='champion' WHERE id=?", (rule_id,)
+            )
+            connection.execute(
+                "INSERT INTO scoped_rule_registry VALUES (?, ?, NULL, NULL, ?) "
+                "ON CONFLICT(scope) DO UPDATE SET champion_id=excluded.champion_id, "
+                "challenger_id=NULL, rollback_id=NULL, updated_at=excluded.updated_at",
+                (scope.value, rule_id, now.isoformat()),
+            )
+        return self.scoped_rule_registry(scope)
+
+    def load_active_scoped_rule(
+        self, scope: DecisionScope
+    ) -> ScopedRuleCandidate | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT r.payload_json FROM scoped_rules r "
+                "JOIN scoped_rule_registry g ON g.champion_id=r.id "
+                "WHERE g.scope=?",
+                (scope.value,),
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else ScopedRuleCandidate.model_validate_json(row["payload_json"])
+        )
 
     def activate_champion(self, rule_id: str, *, now: datetime) -> dict:
         with self._connect() as connection:

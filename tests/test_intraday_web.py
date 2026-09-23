@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from intraday.contracts import ProviderKind, ProviderProfile, ProviderRole
 from intraday.store import IntradayStore
+from intraday.portfolio_coordinator import ParentPortfolioState
 from intraday.web import create_app
 
 
@@ -118,3 +119,44 @@ def test_provider_mutations_are_authenticated_idempotent_commands(tmp_path):
     )
     assert activate.status_code == 202
     assert activate.json()["kind"] == "provider_activate"
+
+
+def test_combined_portfolio_page_api_and_control_inbox(tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime(2026, 9, 23, tzinfo=timezone.utc)
+    state = ParentPortfolioState(
+        mark_price=100_000,
+        day_start_equity=10_000,
+        high_water_mark=10_000,
+        entries_paused=True,
+        paper_active=False,
+        updated_at=now,
+    )
+    store.save_parent_portfolio_state(state, event_kind="initialized", actor="test")
+    client = TestClient(create_app(database=database, control_token="control-token"))
+
+    page = client.get("/portfolio")
+    api = client.get("/api/portfolio")
+    unauthorized = client.post(
+        "/api/portfolio/commands",
+        json={"kind": "pause"},
+        headers={"Idempotency-Key": "pause-1"},
+    )
+    accepted = client.post(
+        "/api/portfolio/commands",
+        json={"kind": "flatten"},
+        headers={
+            "Authorization": "Bearer control-token",
+            "Idempotency-Key": "flatten-1",
+        },
+    )
+
+    assert page.status_code == 200
+    assert "Combined paper portfolio" in page.text
+    assert "60 / 40" in page.text
+    assert api.json()["portfolio"]["paper_active"] is False
+    assert api.json()["limits"]["leverage"] == 3
+    assert unauthorized.status_code == 401
+    assert accepted.status_code == 202
+    assert accepted.json()["kind"] == "portfolio_flatten"

@@ -77,7 +77,10 @@ class ProviderPreflightClient:
     @staticmethod
     def _request(credential: ProviderCredential) -> tuple[str, dict]:
         profile = credential.profile
-        if profile.kind == ProviderKind.OPENROUTER_DECISIONS:
+        if profile.kind in {
+            ProviderKind.OPENROUTER_DECISIONS,
+            ProviderKind.TYPESAFE_SYSTEMONE,
+        }:
             return profile.base_url, {
                 "model": profile.model,
                 "state": {"probe": "provider connectivity check"},
@@ -92,6 +95,12 @@ class ProviderPreflightClient:
                     }
                 },
             }
+        if profile.kind == ProviderKind.ANTHROPIC_MESSAGES:
+            return profile.base_url, {
+                "model": profile.model,
+                "messages": [{"role": "user", "content": "Reply with: ok"}],
+                "max_tokens": 1,
+            }
         return profile.base_url.rstrip("/") + "/chat/completions", {
             "model": profile.model,
             "messages": [{"role": "user", "content": "Reply with: ok"}],
@@ -103,11 +112,40 @@ class ProviderPreflightClient:
     def _valid_response(kind: ProviderKind, payload: object) -> bool:
         if not isinstance(payload, dict):
             return False
-        if kind == ProviderKind.OPENROUTER_DECISIONS:
+        if kind in {
+            ProviderKind.OPENROUTER_DECISIONS,
+            ProviderKind.TYPESAFE_SYSTEMONE,
+        }:
             answer = payload.get("answers", {}).get("reachable", {})
             return isinstance(answer, dict) and isinstance(answer.get("noul"), (int, float))
+        if kind == ProviderKind.ANTHROPIC_MESSAGES:
+            content = payload.get("content")
+            return (
+                isinstance(content, list)
+                and bool(content)
+                and isinstance(content[0], dict)
+                and content[0].get("type") == "text"
+            )
         choices = payload.get("choices")
         return isinstance(choices, list) and bool(choices)
+
+    @staticmethod
+    def _headers(credential: ProviderCredential) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "AIgorithmic-Trading/0.1 provider-preflight",
+        }
+        if credential.profile.kind == ProviderKind.ANTHROPIC_MESSAGES:
+            headers.update(
+                {
+                    "x-api-key": credential.api_key,
+                    "anthropic-version": "2023-06-01",
+                }
+            )
+        else:
+            headers["Authorization"] = f"Bearer {credential.api_key}"
+        return headers
 
     def test(self, credential: ProviderCredential) -> ProviderPreflightResult:
         url, payload = self._request(credential)
@@ -116,17 +154,16 @@ class ProviderPreflightClient:
         try:
             response = self._transport(
                 url=url,
-                headers={
-                    "Authorization": f"Bearer {credential.api_key}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": "AIgorithmic-Trading/0.1 provider-preflight",
-                },
+                headers=self._headers(credential),
                 body=json.dumps(payload, separators=(",", ":")).encode(),
                 timeout=self._timeout_seconds,
             )
             headers = {name.lower(): value for name, value in response.headers.items()}
-            request_id = headers.get("x-request-id") or headers.get("x-openrouter-request-id")
+            request_id = (
+                headers.get("x-request-id")
+                or headers.get("x-openrouter-request-id")
+                or headers.get("request-id")
+            )
             if not 200 <= response.status_code < 300:
                 return ProviderPreflightResult(
                     status="error",

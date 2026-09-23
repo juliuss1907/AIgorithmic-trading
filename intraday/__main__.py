@@ -22,7 +22,13 @@ from intraday.config import (
     default_provider_secrets_path,
     resolve_database_path,
 )
-from intraday.contracts import Direction, ProviderKind, ProviderProfile, ProviderRole
+from intraday.contracts import (
+    DecisionScope,
+    Direction,
+    ProviderKind,
+    ProviderProfile,
+    ProviderRole,
+)
 from intraday.cross_venue import (
     CrossVenuePolicy,
     derive_cross_venue_thresholds,
@@ -33,14 +39,34 @@ from intraday.cross_venue_evaluation import (
     evaluate_cross_venue_promotion,
 )
 from intraday.hyperliquid import HyperliquidFeed
+from intraday.journal import (
+    count_training_candidates,
+    export_training_data,
+    training_output_path,
+)
 from intraday.market import BinanceUsdMClient
 from intraday.notifications import TelegramNotifier, drain_outbox
 from intraday.provider_client import ProviderPreflightClient
 from intraday.provider_profiles import ProviderSecretStore
 from intraday.providers import AssignedDecisionProvider, StubDecisionProvider
+from intraday.portfolio_coordinator import (
+    ParentPortfolioState,
+    apply_operator_command,
+)
+from intraday.portfolio_soak import evaluate_portfolio_soak, run_soak_cycle
+from intraday.parent_runtime import (
+    flatten_parent_paper_positions,
+    run_parent_paper_cycle,
+)
 from intraday.replay import compare_cross_venue
-from intraday.runtime import run_analysis_cycle, run_news_cycle, run_once
+from intraday.runtime import (
+    process_pending_commands,
+    run_analysis_cycle,
+    run_news_cycle,
+    run_once,
+)
 from intraday.store import IntradayStore
+from intraday.spot_signal import BinanceSpotDailyClient, evaluate_donchian
 
 
 def _project_version() -> str:
@@ -57,7 +83,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command")
     for name in (
-        "doctor", "collect", "news", "analysis", "run", "cross-venue-status",
+        "doctor", "status", "collect", "news", "analysis", "run", "cross-venue-status",
         "cross-venue-replay", "cross-venue-evaluate",
     ):
         command = commands.add_parser(name)
@@ -89,6 +115,10 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--model", required=True)
     add.add_argument("--api-key-stdin", action="store_true")
     add.add_argument("--replace", action="store_true")
+    setup = provider_commands.add_parser("setup")
+    setup.add_argument("--database", default=None)
+    setup.add_argument("--secrets-file", default=None)
+    setup.add_argument("--api-key-stdin", action="store_true")
     activate = provider_commands.add_parser("activate")
     activate.add_argument("role", choices=[item.value for item in ProviderRole])
     activate.add_argument("profile_id")
@@ -98,6 +128,40 @@ def _parser() -> argparse.ArgumentParser:
     deactivate.add_argument("role", choices=[item.value for item in ProviderRole])
     deactivate.add_argument("--database", default=None)
     deactivate.add_argument("--secrets-file", default=None)
+    portfolio = commands.add_parser("portfolio")
+    portfolio_commands = portfolio.add_subparsers(
+        dest="portfolio_command", required=True
+    )
+    for name in ("status", "pause", "resume", "flatten"):
+        command = portfolio_commands.add_parser(name)
+        command.add_argument("--database", default=None)
+    soak = portfolio_commands.add_parser("soak")
+    soak_commands = soak.add_subparsers(dest="soak_command", required=True)
+    soak_evaluate = soak_commands.add_parser("evaluate")
+    soak_evaluate.add_argument("--database", default=None)
+    soak_evaluate.add_argument("--at", default=None)
+    soak_run = soak_commands.add_parser("run")
+    soak_run.add_argument("--database", default=None)
+    soak_run.add_argument("--secrets-file", default=None)
+    soak_run.add_argument("--once", action="store_true")
+    activate_paper = portfolio_commands.add_parser("activate-paper")
+    activate_paper.add_argument("--evaluation-id", required=True)
+    activate_paper.add_argument("--database", default=None)
+    paper = portfolio_commands.add_parser("paper")
+    paper_commands = paper.add_subparsers(dest="paper_command", required=True)
+    paper_run = paper_commands.add_parser("run")
+    paper_run.add_argument("--database", default=None)
+    paper_run.add_argument("--secrets-file", default=None)
+    paper_run.add_argument("--once", action="store_true")
+    journal = commands.add_parser("journal")
+    journal_commands = journal.add_subparsers(
+        dest="journal_command", required=True
+    )
+    journal_export = journal_commands.add_parser("export")
+    journal_export.add_argument("--database", default=None)
+    journal_export.add_argument("--output-dir", default="training_data")
+    journal_export.add_argument("--min-pnl-pct", type=float, default=0.5)
+    journal_export.add_argument("--max-pnl-pct", type=float, default=-0.5)
     return parser
 
 
@@ -112,12 +176,108 @@ def _provider_cli(arguments) -> None:
     store = IntradayStore(database)
     command = arguments.provider_command
 
+    if command == "setup":
+        try:
+            role = ProviderRole(input("Role [jev/llm]: ").strip().lower())
+        except ValueError as error:
+            raise SystemExit("role must be jev or llm") from error
+        allowed = {
+            ProviderRole.JEV: (
+                ProviderKind.TYPESAFE_SYSTEMONE,
+                ProviderKind.OPENROUTER_DECISIONS,
+            ),
+            ProviderRole.LLM: (
+                ProviderKind.OPENAI_COMPATIBLE,
+                ProviderKind.ANTHROPIC_MESSAGES,
+            ),
+        }[role]
+        default_kind = allowed[0]
+        kind_value = input(
+            f"Protocol [{'/'.join(item.value for item in allowed)}] "
+            f"(default {default_kind.value}): "
+        ).strip() or default_kind.value
+        try:
+            kind = ProviderKind(kind_value)
+        except ValueError as error:
+            raise SystemExit("unsupported provider protocol") from error
+        if kind not in allowed:
+            raise SystemExit(f"{kind.value} cannot be used for the {role.value} role")
+        profile_id = input("Profile id: ").strip()
+        model_default = "jev-latest" if kind == ProviderKind.TYPESAFE_SYSTEMONE else ""
+        model = input(
+            f"Model{f' (default {model_default})' if model_default else ''}: "
+        ).strip() or model_default
+        if not model:
+            raise SystemExit("model is required")
+        endpoints = {
+            ProviderKind.TYPESAFE_SYSTEMONE: "https://api.typesafe.ai/v1/systemone",
+            ProviderKind.OPENROUTER_DECISIONS: "https://openrouter.ai/api/alpha/decisions",
+            ProviderKind.ANTHROPIC_MESSAGES: "https://api.anthropic.com/v1/messages",
+        }
+        base_url = endpoints.get(kind)
+        if base_url is None:
+            base_url = input(
+                "OpenAI-compatible base URL "
+                "(for example https://api.openai.com/v1): "
+            ).strip()
+        if arguments.api_key_stdin:
+            api_key = sys.stdin.readline().rstrip("\r\n")
+        else:
+            api_key = getpass.getpass("Provider API key: ")
+        now = datetime.now(timezone.utc)
+        if store.provider_profile(profile_id) is not None:
+            raise SystemExit("provider profile already exists")
+        profile = ProviderProfile.create(
+            profile_id=profile_id,
+            role=role,
+            kind=kind,
+            base_url=base_url,
+            model=model,
+            credential_version=secrets.token_hex(16),
+            created_at=now,
+            updated_at=now,
+        )
+        secret_store.upsert(profile, api_key, replace=False)
+        store.sync_provider_profile(profile)
+        result = ProviderPreflightClient().test(secret_store.get(profile_id))
+        store.record_provider_test(
+            profile_id,
+            status=result.status,
+            tested_at=now,
+            latency_ms=result.latency_ms,
+            error_code=result.error_code,
+        )
+        active = False
+        if result.status == "ok":
+            store.activate_provider(role, profile_id, actor="cli", now=now)
+            active = True
+        print(
+            json.dumps(
+                {
+                    "profile_id": profile_id,
+                    "role": role.value,
+                    "kind": kind.value,
+                    "status": result.status,
+                    "latency_ms": result.latency_ms,
+                    "active": active,
+                },
+                indent=2,
+            )
+        )
+        if not active:
+            raise SystemExit(1)
+        return
+
     if command == "add":
         kind = ProviderKind(arguments.kind)
         role = ProviderRole(arguments.role)
         base_url = arguments.base_url
         if kind == ProviderKind.OPENROUTER_DECISIONS:
             base_url = base_url or "https://openrouter.ai/api/alpha/decisions"
+        elif kind == ProviderKind.TYPESAFE_SYSTEMONE:
+            base_url = base_url or "https://api.typesafe.ai/v1/systemone"
+        elif kind == ProviderKind.ANTHROPIC_MESSAGES:
+            base_url = base_url or "https://api.anthropic.com/v1/messages"
         elif not base_url:
             raise SystemExit("--base-url is required for OpenAI-compatible providers")
         if arguments.api_key_stdin:
@@ -289,6 +449,197 @@ def _doctor(config: IntradayConfig) -> dict:
     }
 
 
+def _parent_portfolio_payload(state) -> dict:
+    equity = state.equity
+    spot_notional = state.spot_notional
+    perp_notional = state.perp_notional
+    return {
+        "mode": "paper",
+        "paper_active": state.paper_active,
+        "equity": equity,
+        "daily_return": state.daily_return,
+        "drawdown": state.drawdown,
+        "spot_notional": spot_notional,
+        "perp_notional": perp_notional,
+        "gross_exposure_pct": (spot_notional + abs(perp_notional)) / equity,
+        "net_delta_pct": (spot_notional + perp_notional) / equity,
+        "isolated_margin_pct": abs(perp_notional) / 3 / equity,
+        "leverage": 3,
+        "margin_mode": "isolated",
+        "entries_paused": state.entries_paused,
+        "halt_reason": state.halt_reason,
+        "soak_evaluation_id": state.soak_evaluation_id,
+        "updated_at": state.updated_at.isoformat(),
+    }
+
+
+def _portfolio_cli(arguments) -> None:
+    store = IntradayStore(resolve_database_path(arguments.database))
+    command = arguments.portfolio_command
+    if command == "soak":
+        if arguments.soak_command == "run":
+            secret_store = ProviderSecretStore(
+                arguments.secrets_file or _default_secrets_file()
+            )
+            provider = AssignedDecisionProvider(
+                store,
+                secret_store,
+                fallback=StubDecisionProvider(direction=Direction.HOLD),
+            )
+            market = BinanceUsdMClient()
+            config = IntradayConfig.from_environment(database=arguments.database)
+            interval = config.interval_seconds
+            background_started = False
+            while True:
+                now = datetime.now(timezone.utc)
+                process_pending_commands(store, now=now)
+                snapshot = market.snapshot("BTCUSDT", now=now)
+                if store.load_parent_portfolio_state() is None:
+                    initial = ParentPortfolioState(
+                        mark_price=float(snapshot.features["mark_price"]),
+                        day_start_equity=10_000,
+                        high_water_mark=10_000,
+                        entries_paused=True,
+                        halt_reason="soak_not_promoted",
+                        paper_active=False,
+                        updated_at=now,
+                    )
+                    store.save_parent_portfolio_state(
+                        initial, event_kind="initialized", actor="soak_worker"
+                    )
+                result = run_soak_cycle(
+                    store, provider, snapshot, now=now
+                )
+                print(json.dumps(result), flush=True)
+                if arguments.once:
+                    return
+                if not background_started:
+                    if config.news_enabled:
+                        threading.Thread(
+                            target=_news_loop, args=(config,), daemon=True
+                        ).start()
+                    threading.Thread(
+                        target=_analysis_loop, args=(config,), daemon=True
+                    ).start()
+                    background_started = True
+                time.sleep(max(1, interval))
+        evaluated_at = (
+            datetime.fromisoformat(arguments.at)
+            if arguments.at
+            else datetime.now(timezone.utc)
+        )
+        evaluation = evaluate_portfolio_soak(
+            store.list_portfolio_soak_ticks(), evaluated_at=evaluated_at
+        )
+        store.record_portfolio_soak_evaluation(evaluation)
+        print(evaluation.model_dump_json(indent=2))
+        return
+    if command == "paper":
+        state = store.load_parent_portfolio_state()
+        if state is None or not state.paper_active:
+            raise SystemExit("paper worker requires a promoted parent portfolio")
+        spot_rule = store.load_active_scoped_rule(DecisionScope.SPOT_DAILY)
+        perp_rule = store.load_active_scoped_rule(DecisionScope.PERP_INTRADAY)
+        if spot_rule is None or perp_rule is None:
+            raise SystemExit("paper worker requires both scoped champion rules")
+        secret_store = ProviderSecretStore(
+            arguments.secrets_file or _default_secrets_file()
+        )
+        provider = AssignedDecisionProvider(
+            store,
+            secret_store,
+            fallback=StubDecisionProvider(direction=Direction.HOLD),
+        )
+        market = BinanceUsdMClient()
+        spot_market = BinanceSpotDailyClient()
+        config = IntradayConfig.from_environment(database=arguments.database)
+        interval = config.interval_seconds
+        if not arguments.once:
+            if config.news_enabled:
+                threading.Thread(
+                    target=_news_loop, args=(config,), daemon=True
+                ).start()
+            threading.Thread(
+                target=_analysis_loop, args=(config,), daemon=True
+            ).start()
+        cached_day = None
+        spot_observation = None
+        while True:
+            now = datetime.now(timezone.utc)
+            snapshot = market.snapshot("BTCUSDT", now=now)
+            process_pending_commands(store, now=now, snapshot=snapshot)
+            if cached_day != now.date() or spot_observation is None:
+                limit = max(
+                    spot_rule.parameters.entry_window,
+                    spot_rule.parameters.exit_window,
+                    spot_rule.parameters.atr_period,
+                ) + 2
+                daily = spot_market.candles(limit=max(35, limit), now=now)
+                spot_observation = evaluate_donchian(
+                    daily, spot_rule.parameters
+                )
+                cached_day = now.date()
+            result = run_parent_paper_cycle(
+                store,
+                provider,
+                snapshot,
+                spot_observation,
+                spot_rule=spot_rule,
+                perp_rule=perp_rule,
+                now=now,
+            )
+            print(json.dumps(result), flush=True)
+            if arguments.once:
+                return
+            time.sleep(max(1, interval))
+    state = store.load_parent_portfolio_state()
+    if state is None:
+        raise SystemExit("parent paper portfolio is not initialized")
+    if command == "activate-paper":
+        evaluation = store.portfolio_soak_evaluation(arguments.evaluation_id)
+        latest_evaluation = store.latest_portfolio_soak_evaluation()
+        if (
+            evaluation is None
+            or evaluation.status != "pass"
+            or latest_evaluation is None
+            or latest_evaluation.evaluation_id != evaluation.evaluation_id
+        ):
+            raise SystemExit("paper activation requires the exact id of a passing soak")
+        now = datetime.now(timezone.utc)
+        state = state.model_copy(
+            update={
+                "paper_active": True,
+                "entries_paused": False,
+                "halt_reason": None,
+                "soak_evaluation_id": evaluation.evaluation_id,
+                "updated_at": now,
+            }
+        )
+        store.save_parent_portfolio_state(
+            state, event_kind="activate_paper", actor="cli"
+        )
+        print(json.dumps(_parent_portfolio_payload(state), indent=2))
+        return
+    if command == "status":
+        print(json.dumps(_parent_portfolio_payload(state), indent=2))
+        return
+    now = datetime.now(timezone.utc)
+    try:
+        if command == "flatten":
+            state = flatten_parent_paper_positions(
+                store, state, now=now, actor="cli"
+            )
+        else:
+            state = apply_operator_command(state, command, now=now)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    if command != "flatten":
+        store.save_parent_portfolio_state(
+            state, event_kind=command, actor="cli"
+        )
+    print(json.dumps(_parent_portfolio_payload(state), indent=2))
+
+
 def _news_loop(config: IntradayConfig) -> None:
     store = IntradayStore(config.database)
     while True:
@@ -309,6 +660,36 @@ def _analysis_loop(config: IntradayConfig) -> None:
             time.sleep(config.llm_analysis_interval_seconds)
 
 
+def _journal_cli(arguments) -> None:
+    database = resolve_database_path(arguments.database)
+    IntradayStore(database)
+    now = datetime.now(timezone.utc)
+    try:
+        candidates = count_training_candidates(database)
+        rows = export_training_data(
+            arguments.min_pnl_pct,
+            arguments.max_pnl_pct,
+            database=database,
+            output_dir=arguments.output_dir,
+            now=now,
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    hold = sum(row["answer"]["direction"] == "hold" for row in rows)
+    result = {
+        "output_file": str(
+            training_output_path(arguments.output_dir, now).resolve()
+        ),
+        "exported": len(rows),
+        "positive": len(rows) - hold,
+        "hold": hold,
+        "ambiguous_skipped": candidates - len(rows),
+        "min_pnl_pct": arguments.min_pnl_pct,
+        "max_pnl_pct": arguments.max_pnl_pct,
+    }
+    print(json.dumps(result, indent=2))
+
+
 def main() -> None:
     parser = _parser()
     arguments = parser.parse_args()
@@ -321,9 +702,24 @@ def main() -> None:
     if arguments.command == "provider":
         _provider_cli(arguments)
         return
+    if arguments.command == "journal":
+        _journal_cli(arguments)
+        return
+    if arguments.command == "portfolio":
+        _portfolio_cli(arguments)
+        return
     config = IntradayConfig.from_environment(database=arguments.database)
     if arguments.command == "doctor":
         print(json.dumps(_doctor(config), indent=2))
+        return
+    if arguments.command == "status":
+        store = IntradayStore(config.database)
+        result = _doctor(config)
+        parent = store.load_parent_portfolio_state()
+        result["portfolio"] = (
+            _parent_portfolio_payload(parent) if parent is not None else None
+        )
+        print(json.dumps(result, indent=2))
         return
     if arguments.command == "serve":
         import uvicorn

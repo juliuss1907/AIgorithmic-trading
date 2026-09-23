@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import pytest
 
 from intraday.contracts import (
+    DecisionScope,
     Direction,
     FeatureSnapshot,
     ProviderKind,
@@ -167,6 +168,63 @@ def test_jev_provider_opens_circuit_after_three_failures(tmp_path):
     assert [call.error_code for call in store.list_model_calls()] == [
         "circuit_open", "provider_unavailable", "provider_unavailable", "provider_unavailable"
     ]
+
+
+def test_scoped_jev_workflows_have_independent_circuit_breakers(tmp_path):
+    calls = []
+    request_states = []
+
+    def transport(**request):
+        payload = json.loads(request["body"])
+        calls.append(payload["state"]["decision_scope"])
+        request_states.append(payload["state"])
+        if payload["state"]["decision_scope"] == "spot_daily":
+            return HttpResponse(503, {}, b'{"error":"unavailable"}')
+        return HttpResponse(200, {}, json.dumps(successful_response()).encode())
+
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    current = profile()
+    store.sync_provider_profile(current)
+    provider = JevDecisionProvider(
+        ProviderCredential(current, "private-key"),
+        store=store,
+        transport=transport,
+        clock=lambda: 100.0,
+    )
+
+    for index in range(3):
+        with pytest.raises(ProviderDecisionError, match="provider_unavailable"):
+            provider.decide_scoped(
+                snapshot(), f"BTCUSDT:spot:{index}", DecisionScope.SPOT_DAILY, NOW
+            )
+    with pytest.raises(ProviderDecisionError, match="circuit_open"):
+        provider.decide_scoped(
+            snapshot(), "BTCUSDT:spot:4", DecisionScope.SPOT_DAILY, NOW
+        )
+
+    perp = provider.decide_scoped(
+        snapshot(), "BTCUSDT:perp:1", DecisionScope.PERP_INTRADAY, NOW
+    )
+
+    assert perp.scope == DecisionScope.PERP_INTRADAY
+    assert perp.workflow == "perp_intraday_entry"
+    assert perp.decision.direction == Direction.BUY
+    sent_state = request_states[-1]
+    assert json.loads(perp.trace.state_snapshot) == sent_state
+    assert perp.trace.state_snapshot == json.dumps(
+        sent_state, sort_keys=True, separators=(",", ":")
+    )
+    assert perp.trace.raw_signals == {
+        "ask": 100_010.0,
+        "bid": 99_990.0,
+        **snapshot().features,
+    }
+    assert perp.trace.jev_answers == successful_response()["answers"]
+    assert calls == ["spot_daily", "spot_daily", "spot_daily", "perp_intraday"]
+    assert {call.workflow for call in store.list_model_calls()} == {
+        "spot_daily_entry",
+        "perp_intraday_entry",
+    }
 
 
 def test_jev_provider_rejects_invalid_answer_without_returning_partial_decision(tmp_path):

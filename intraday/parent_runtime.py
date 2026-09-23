@@ -1,0 +1,276 @@
+"""Combined parent paper cycle with deterministic exits ahead of AI entries."""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from intraday.contracts import (
+    DecisionScope,
+    Direction,
+    FeatureSnapshot,
+    PerpRuleParameters,
+    ScopedRuleCandidate,
+    SpotRuleParameters,
+)
+from intraday.journal import record_scoped_signal
+from intraday.parent_paper import apply_paper_target
+from intraday.portfolio_coordinator import ParentPortfolioState
+from intraday.scoped_gate import ScopedEntryGate
+from intraday.spot_signal import DonchianObservation
+
+
+def _rule_parts(rule, fallback_id: str):
+    if isinstance(rule, ScopedRuleCandidate):
+        return rule.parameters, rule.rule_id
+    return rule, fallback_id
+
+
+def _mark_state(
+    state: ParentPortfolioState, snapshot: FeatureSnapshot, now: datetime
+) -> ParentPortfolioState:
+    payload = state.model_dump()
+    payload.update(
+        {
+            "mark_price": float(snapshot.features["mark_price"]),
+            "updated_at": now,
+        }
+    )
+    marked = ParentPortfolioState.model_validate(payload)
+    if state.updated_at.date() != now.date():
+        marked = marked.model_copy(update={"day_start_equity": marked.equity})
+    return marked.model_copy(
+        update={"high_water_mark": max(state.high_water_mark, marked.equity)}
+    )
+
+
+def flatten_parent_paper_positions(
+    store,
+    state: ParentPortfolioState,
+    *,
+    now: datetime,
+    bid: float | None = None,
+    ask: float | None = None,
+    actor: str,
+) -> ParentPortfolioState:
+    """Flatten both paper sleeves through fills so open trades remain auditable."""
+    bid = state.mark_price if bid is None else bid
+    ask = state.mark_price if ask is None else ask
+    gate = ScopedEntryGate()
+    current = state
+    for scope, quantity in (
+        (DecisionScope.SPOT_DAILY, current.spot_quantity),
+        (DecisionScope.PERP_INTRADAY, current.perp_quantity),
+    ):
+        if not quantity:
+            continue
+        authorization = gate.deterministic_exit(current, scope, "manual")
+        current, fill = apply_paper_target(
+            current, authorization, bid=bid, ask=ask, now=now
+        )
+        if fill is not None:
+            store.record_parent_paper_fill(fill, close_reason="manual")
+    current = current.model_copy(
+        update={
+            "entries_paused": True,
+            "halt_reason": "operator_flatten",
+            "updated_at": now,
+        }
+    )
+    store.save_parent_portfolio_state(
+        current, event_kind="flatten", actor=actor
+    )
+    return current
+
+
+def run_parent_paper_cycle(
+    store,
+    provider,
+    snapshot: FeatureSnapshot,
+    spot_observation: DonchianObservation,
+    *,
+    spot_rule: SpotRuleParameters | ScopedRuleCandidate,
+    perp_rule: PerpRuleParameters | ScopedRuleCandidate,
+    now: datetime,
+) -> dict:
+    store.record_snapshot(snapshot)
+    state = store.load_parent_portfolio_state()
+    if state is None:
+        raise ValueError("parent paper portfolio is not initialized")
+    state = _mark_state(state, snapshot, now)
+    gate = ScopedEntryGate()
+    spot_parameters, spot_rule_id = _rule_parts(spot_rule, "spot_rule_parameters")
+    perp_parameters, perp_rule_id = _rule_parts(perp_rule, "perp_rule_parameters")
+    fills = []
+    provider_errors = []
+
+    def execute(
+        authorization,
+        *,
+        signal_id=None,
+        direction=None,
+        stop_distance_pct=None,
+        close_reason=None,
+    ):
+        nonlocal state
+        state, fill = apply_paper_target(
+            state,
+            authorization,
+            bid=snapshot.bid,
+            ask=snapshot.ask,
+            now=now,
+        )
+        if fill is not None:
+            stop_loss = None
+            if signal_id is not None and stop_distance_pct is not None:
+                long_entry = direction in {Direction.BUY, Direction.STRONG_BUY}
+                stop_loss = fill.price * (
+                    1 - stop_distance_pct if long_entry else 1 + stop_distance_pct
+                )
+            store.record_parent_paper_fill(
+                fill,
+                entry_signal_id=signal_id,
+                direction=direction.value if direction is not None else None,
+                stop_loss=stop_loss,
+                close_reason=close_reason,
+            )
+            fills.append(fill)
+
+    # Hard exits always run before any provider call.
+    if state.drawdown <= -gate.coordinator.policy.max_drawdown_pct:
+        if state.spot_quantity:
+            execute(
+                gate.deterministic_exit(
+                    state, DecisionScope.SPOT_DAILY, "parent_drawdown_limit"
+                ),
+                close_reason="parent_drawdown_limit",
+            )
+        if state.perp_quantity:
+            execute(
+                gate.deterministic_exit(
+                    state, DecisionScope.PERP_INTRADAY, "parent_drawdown_limit"
+                ),
+                close_reason="parent_drawdown_limit",
+            )
+        state = state.model_copy(
+            update={"entries_paused": True, "halt_reason": "parent_drawdown_limit"}
+        )
+    else:
+        if state.spot_quantity and spot_observation.exit:
+            execute(
+                gate.deterministic_exit(
+                    state, DecisionScope.SPOT_DAILY, "donchian_exit"
+                ),
+                close_reason="donchian_exit",
+            )
+        if state.perp_quantity and state.perp_entry_price is not None:
+            signed_return = (
+                (state.mark_price / state.perp_entry_price - 1)
+                * (1 if state.perp_quantity > 0 else -1)
+            )
+            if signed_return <= -perp_parameters.stop_distance_pct:
+                execute(
+                    gate.deterministic_exit(
+                        state, DecisionScope.PERP_INTRADAY, "perp_stop_loss"
+                    ),
+                    close_reason="stop_loss",
+                )
+
+    if state.paper_active:
+        if state.spot_quantity == 0 and spot_observation.entry:
+            try:
+                scoped = provider.decide_scoped(
+                    snapshot,
+                    f"{snapshot.symbol}:spot_daily:{int(now.timestamp() * 1000)}",
+                    DecisionScope.SPOT_DAILY,
+                    now,
+                )
+            except RuntimeError:
+                provider_errors.append(DecisionScope.SPOT_DAILY.value)
+            else:
+                authorization = gate.spot_entry(
+                    state,
+                    scoped.decision,
+                    spot_parameters,
+                    donchian_entry=True,
+                    size_multiplier=spot_observation.size_multiplier,
+                )
+                signal_id = record_scoped_signal(
+                    store,
+                    snapshot,
+                    scoped,
+                    gate_passed=authorization.allowed,
+                    gate_reason=(
+                        None
+                        if authorization.allowed
+                        else ";".join(authorization.reason_codes)
+                    ),
+                    rule_id=spot_rule_id,
+                )
+                if authorization.allowed:
+                    execute(
+                        authorization,
+                        signal_id=signal_id,
+                        direction=scoped.decision.direction,
+                    )
+        try:
+            scoped = provider.decide_scoped(
+                snapshot,
+                f"{snapshot.symbol}:perp_intraday:{int(now.timestamp() * 1000)}",
+                DecisionScope.PERP_INTRADAY,
+                now,
+            )
+        except RuntimeError:
+            provider_errors.append(DecisionScope.PERP_INTRADAY.value)
+        else:
+            authorization = gate.perp_entry(
+                state, scoped.decision, perp_parameters
+            )
+            signal_id = record_scoped_signal(
+                store,
+                snapshot,
+                scoped,
+                gate_passed=authorization.allowed,
+                gate_reason=(
+                    None
+                    if authorization.allowed
+                    else ";".join(authorization.reason_codes)
+                ),
+                rule_id=perp_rule_id,
+            )
+            if authorization.allowed:
+                reducing = authorization.reduce_only
+                reason = None
+                if reducing:
+                    reason = (
+                        "take_profit"
+                        if scoped.decision.direction == Direction.TAKE_PROFIT
+                        else (
+                            "no_same_tick_flip"
+                            if "no_same_tick_flip" in authorization.reason_codes
+                            else "model_exit"
+                        )
+                    )
+                execute(
+                    authorization,
+                    signal_id=None if reducing else signal_id,
+                    direction=None if reducing else scoped.decision.direction,
+                    stop_distance_pct=(
+                        None if reducing else perp_parameters.stop_distance_pct
+                    ),
+                    close_reason=reason,
+                )
+
+    state = state.model_copy(update={"updated_at": now})
+    store.save_parent_portfolio_state(
+        state, event_kind="paper_cycle", actor="worker"
+    )
+    return {
+        "status": "ok" if state.paper_active else "inactive",
+        "fills": len(fills),
+        "fill_ids": [fill.fill_id for fill in fills],
+        "provider_errors": provider_errors,
+        "equity": state.equity,
+        "spot_notional": state.spot_notional,
+        "perp_notional": state.perp_notional,
+        "entries_paused": state.entries_paused,
+    }
