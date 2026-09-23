@@ -4,7 +4,7 @@
 
 - [x] Phase 0: commit trang System Plan và tài liệu kế hoạch.
 - [x] Phase 1: scheduler đa nhịp, cache dữ liệu và risk loop không gọi AI.
-- [ ] Phase 2: compact Jev shadow A/B, journal variant/mode/pair.
+- [x] Phase 2: compact Jev shadow A/B, journal variant/mode/pair.
 - [ ] Phase 3: forward outcome engine cho Perp và Spot.
 - [ ] Phase 4: evaluator A/B, eligibility gate và retrospective 09:00.
 - [ ] Phase 5: evidence-aware LLM thesis và manual rule lifecycle.

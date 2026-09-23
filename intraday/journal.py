@@ -94,6 +94,9 @@ def record_scoped_signal(
         gate_reason=gate_reason,
         rules_version=rule_id,
         llm_thesis=thesis,
+        state_variant=scoped.state_variant,
+        decision_mode=scoped.decision_mode,
+        experiment_pair_id=scoped.experiment_pair_id,
     )
 
 

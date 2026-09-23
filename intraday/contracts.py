@@ -32,6 +32,16 @@ class DecisionScope(str, Enum):
     PERP_INTRADAY = "perp_intraday"
 
 
+class StateVariant(str, Enum):
+    NUMERIC_V1 = "numeric_v1"
+    COMPACT_V1 = "compact_v1"
+
+
+class DecisionMode(str, Enum):
+    PRIMARY = "primary"
+    SHADOW = "shadow"
+
+
 class Regime(str, Enum):
     TRENDING_UP = "Trending Up"
     TRENDING_DOWN = "Trending Down"
@@ -217,6 +227,9 @@ class ScopedJevDecision(StrictContract):
     workflow: Literal["spot_daily_entry", "perp_intraday_entry"]
     decision: JevDecision
     trace: JevDecisionTrace | None = None
+    state_variant: StateVariant = StateVariant.NUMERIC_V1
+    decision_mode: DecisionMode = DecisionMode.PRIMARY
+    experiment_pair_id: str | None = Field(default=None, min_length=16, max_length=64)
 
     @model_validator(mode="after")
     def workflow_matches_scope(self):

@@ -38,6 +38,10 @@ from intraday.cross_venue_evaluation import (
     CrossVenueEvaluationEvidence,
     evaluate_cross_venue_promotion,
 )
+from intraday.decision_experiments import (
+    make_experiment_pair_id,
+    record_compact_shadow,
+)
 from intraday.hyperliquid import HyperliquidFeed
 from intraday.journal import (
     count_training_candidates,
@@ -630,6 +634,8 @@ def _portfolio_cli(arguments) -> None:
                 spot_rule=spot_rule, perp_rule=perp_rule, now=now,
             )
             slots = {}
+            experiment_pairs = {}
+            compact_jobs = {}
             perp_slot = claim_cadence(
                 store, "paper_perp_numeric", now,
                 config.perp_decision_interval_seconds,
@@ -638,6 +644,17 @@ def _portfolio_cli(arguments) -> None:
                 slots[DecisionScope.PERP_INTRADAY] = (
                     "paper_perp_numeric", perp_slot
                 )
+                compact_slot = claim_cadence(
+                    store, "paper_perp_compact_shadow", now,
+                    config.compact_shadow_interval_seconds,
+                )
+                if compact_slot is not None:
+                    experiment_pairs[DecisionScope.PERP_INTRADAY] = (
+                        make_experiment_pair_id(
+                            DecisionScope.PERP_INTRADAY, snapshot, compact_slot
+                        )
+                    )
+                    compact_jobs[DecisionScope.PERP_INTRADAY] = compact_slot
             if spot_event and spot_observation.entry:
                 if store.claim_scheduler_run(
                     "paper_spot_daily", cached_daily_close, started_at=now
@@ -645,13 +662,20 @@ def _portfolio_cli(arguments) -> None:
                     slots[DecisionScope.SPOT_DAILY] = (
                         "paper_spot_daily", cached_daily_close
                     )
+                    experiment_pairs[DecisionScope.SPOT_DAILY] = (
+                        make_experiment_pair_id(
+                            DecisionScope.SPOT_DAILY, snapshot, cached_daily_close
+                        )
+                    )
             result = risk_result
             if slots:
                 try:
                     result = run_parent_paper_cycle(
                         store, provider, snapshot, spot_observation,
                         spot_rule=spot_rule, perp_rule=perp_rule,
-                        decision_scopes=tuple(slots), now=now,
+                        decision_scopes=tuple(slots),
+                        experiment_pair_ids=experiment_pairs,
+                        now=now,
                     )
                 except Exception as error:
                     for job, slot in slots.values():
@@ -665,6 +689,29 @@ def _portfolio_cli(arguments) -> None:
                         store.finish_scheduler_run(
                             job, slot, status="success", finished_at=now
                         )
+                shadow_errors = []
+                for scope, pair_id in experiment_pairs.items():
+                    rule = spot_rule if scope == DecisionScope.SPOT_DAILY else perp_rule
+                    try:
+                        record_compact_shadow(
+                            store, provider, snapshot, scope=scope,
+                            rule_id=rule.rule_id, experiment_pair_id=pair_id, now=now,
+                        )
+                    except Exception as error:
+                        shadow_errors.append(f"{scope.value}:{type(error).__name__}")
+                        if scope in compact_jobs:
+                            store.finish_scheduler_run(
+                                "paper_perp_compact_shadow", compact_jobs[scope],
+                                status="error", error_code=type(error).__name__,
+                                finished_at=now,
+                            )
+                    else:
+                        if scope in compact_jobs:
+                            store.finish_scheduler_run(
+                                "paper_perp_compact_shadow", compact_jobs[scope],
+                                status="success", finished_at=now,
+                            )
+                result["shadow_errors"] = shadow_errors
             result["risk_fills"] = risk_result["fills"]
             result["decision_scopes"] = [scope.value for scope in slots]
             print(json.dumps(result), flush=True)

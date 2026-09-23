@@ -11,6 +11,7 @@ from pathlib import Path
 
 from intraday.contracts import (
     AnalystReport,
+    DecisionMode,
     DecisionScope,
     FeatureSnapshot,
     GateDecision,
@@ -27,6 +28,7 @@ from intraday.contracts import (
     RuleCandidate,
     RuleReplayEvaluation,
     ScopedRuleCandidate,
+    StateVariant,
     VenueMarketFrame,
 )
 from intraday.cross_venue_evaluation import CrossVenuePromotionEvaluation
@@ -288,7 +290,12 @@ class IntradayStore:
                     gate_passed INTEGER NOT NULL CHECK (gate_passed IN (0, 1)),
                     gate_reason TEXT,
                     rules_version TEXT NOT NULL,
-                    llm_thesis TEXT
+                    llm_thesis TEXT,
+                    state_variant TEXT NOT NULL DEFAULT 'numeric_v1'
+                        CHECK (state_variant IN ('numeric_v1', 'compact_v1')),
+                    decision_mode TEXT NOT NULL DEFAULT 'primary'
+                        CHECK (decision_mode IN ('primary', 'shadow')),
+                    experiment_pair_id TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_signals_time_scope
                     ON signals(timestamp, symbol, scope);
@@ -377,8 +384,22 @@ class IntradayStore:
             }.items():
                 if name not in command_columns:
                     connection.execute(f"ALTER TABLE commands ADD COLUMN {name} {definition}")
+            signal_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(signals)")
+            }
+            for name, definition in {
+                "state_variant": "TEXT NOT NULL DEFAULT 'numeric_v1'",
+                "decision_mode": "TEXT NOT NULL DEFAULT 'primary'",
+                "experiment_pair_id": "TEXT",
+            }.items():
+                if name not in signal_columns:
+                    connection.execute(f"ALTER TABLE signals ADD COLUMN {name} {definition}")
             connection.execute(
-                "UPDATE schema_meta SET value='10' WHERE key='schema_version'"
+                "CREATE INDEX IF NOT EXISTS idx_signals_experiment_pair "
+                "ON signals(experiment_pair_id, scope, state_variant)"
+            )
+            connection.execute(
+                "UPDATE schema_meta SET value='11' WHERE key='schema_version'"
             )
 
     def claim_scheduler_run(
@@ -791,6 +812,9 @@ class IntradayStore:
         gate_reason: str | None,
         rules_version: str,
         llm_thesis: str | None,
+        state_variant: StateVariant = StateVariant.NUMERIC_V1,
+        decision_mode: DecisionMode = DecisionMode.PRIMARY,
+        experiment_pair_id: str | None = None,
     ) -> int:
         if timestamp.tzinfo is None or timestamp.utcoffset() is None:
             raise ValueError("signal timestamp must be timezone-aware")
@@ -826,18 +850,23 @@ class IntradayStore:
             gate_reason,
             rules_version,
             llm_thesis,
+            state_variant.value,
+            decision_mode.value,
+            experiment_pair_id,
         )
         with self._connect() as connection:
             connection.execute(
                 "INSERT OR IGNORE INTO signals "
                 "(decision_id, timestamp, symbol, scope, state_snapshot, raw_signals, "
-                "jev_answers, gate_passed, gate_reason, rules_version, llm_thesis) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "jev_answers, gate_passed, gate_reason, rules_version, llm_thesis, "
+                "state_variant, decision_mode, experiment_pair_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 values,
             )
             row = connection.execute(
                 "SELECT id, timestamp, symbol, scope, state_snapshot, raw_signals, "
-                "jev_answers, gate_passed, gate_reason, rules_version, llm_thesis "
+                "jev_answers, gate_passed, gate_reason, rules_version, llm_thesis, "
+                "state_variant, decision_mode, experiment_pair_id "
                 "FROM signals WHERE decision_id=?",
                 (decision_id,),
             ).fetchone()

@@ -12,6 +12,8 @@ from intraday.contracts import (
     ProviderRole,
     Regime,
     RiskLevel,
+    DecisionMode,
+    StateVariant,
 )
 from intraday.provider_client import HttpResponse
 from intraday.provider_profiles import ProviderCredential, ProviderSecretStore
@@ -225,6 +227,42 @@ def test_scoped_jev_workflows_have_independent_circuit_breakers(tmp_path):
         "spot_daily_entry",
         "perp_intraday_entry",
     }
+
+
+def test_compact_state_is_categorical_bounded_and_auditable(tmp_path):
+    calls = []
+
+    def transport(**request):
+        calls.append(json.loads(request["body"]))
+        return HttpResponse(200, {}, json.dumps(successful_response()).encode())
+
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    current = profile()
+    provider = JevDecisionProvider(
+        ProviderCredential(current, "private-key"),
+        store=store,
+        transport=transport,
+        clock=lambda: 10.0,
+    )
+
+    scoped = provider.decide_scoped(
+        snapshot(),
+        "BTCUSDT:perp:compact",
+        DecisionScope.PERP_INTRADAY,
+        NOW,
+        state_variant=StateVariant.COMPACT_V1,
+        decision_mode=DecisionMode.SHADOW,
+        experiment_pair_id="pair-1234567890123456",
+    )
+
+    state = calls[0]["state"]
+    assert list(state) == ["tokens"]
+    assert len(state["tokens"]) == 12
+    assert all(isinstance(token, str) and ":" in token for token in state["tokens"])
+    assert "100000" not in json.dumps(state)
+    assert scoped.state_variant == StateVariant.COMPACT_V1
+    assert scoped.decision_mode == DecisionMode.SHADOW
+    assert scoped.experiment_pair_id == "pair-1234567890123456"
 
 
 def test_jev_provider_rejects_invalid_answer_without_returning_partial_decision(tmp_path):

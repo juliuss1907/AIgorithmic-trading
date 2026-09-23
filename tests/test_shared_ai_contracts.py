@@ -14,6 +14,8 @@ from intraday.contracts import (
     Regime,
     RiskLevel,
     ScopedJevDecision,
+    DecisionMode,
+    StateVariant,
     ScopedRuleCandidate,
     SpotRuleParameters,
 )
@@ -128,6 +130,8 @@ def test_scoped_jev_decision_carries_workflow_without_changing_typed_decision():
     )
 
     assert scoped.decision.direction == Direction.BUY
+    assert scoped.state_variant == StateVariant.NUMERIC_V1
+    assert scoped.decision_mode == DecisionMode.PRIMARY
 
     with pytest.raises(ValidationError, match="workflow"):
         ScopedJevDecision(

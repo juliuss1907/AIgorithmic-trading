@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from intraday.contracts import (
     DecisionScope,
+    DecisionMode,
     Direction,
     FeatureSnapshot,
     JevDecision,
@@ -13,7 +14,9 @@ from intraday.contracts import (
     RiskLevel,
     ScopedJevDecision,
     SpotRuleParameters,
+    StateVariant,
 )
+from intraday.decision_experiments import record_compact_shadow
 from intraday.parent_runtime import (
     flatten_parent_paper_positions,
     run_parent_risk_cycle,
@@ -330,3 +333,42 @@ def test_parent_cycle_can_limit_provider_calls_to_due_scope(tmp_path):
     )
 
     assert provider.scopes == [DecisionScope.PERP_INTRADAY]
+
+
+def test_compact_shadow_is_journal_only_and_cannot_open_a_position(tmp_path):
+    class ShadowProvider(Provider):
+        def decide_scoped(
+            self, market, tick_id, scope, now, *, state_variant,
+            decision_mode, experiment_pair_id,
+        ):
+            scoped = super().decide_scoped(market, tick_id, scope, now)
+            return scoped.model_copy(update={
+                "state_variant": state_variant,
+                "decision_mode": decision_mode,
+                "experiment_pair_id": experiment_pair_id,
+            })
+
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    store.save_parent_portfolio_state(
+        active_state(), event_kind="activated", actor="test"
+    )
+
+    signal_id = record_compact_shadow(
+        store,
+        ShadowProvider(perp_direction=Direction.STRONG_BUY),
+        snapshot(),
+        scope=DecisionScope.PERP_INTRADAY,
+        rule_id="perp-rule-v1",
+        experiment_pair_id="pair-1234567890123456",
+        now=NOW,
+    )
+
+    state = store.load_parent_portfolio_state()
+    assert state.perp_quantity == 0
+    assert store.list_parent_paper_fills() == []
+    with sqlite3.connect(store.database) as connection:
+        row = connection.execute(
+            "SELECT gate_passed, gate_reason, state_variant, decision_mode "
+            "FROM signals WHERE id=?", (signal_id,),
+        ).fetchone()
+    assert row == (0, "shadow_observation_only", "compact_v1", "shadow")

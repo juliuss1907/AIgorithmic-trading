@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from intraday.contracts import DecisionScope
+from intraday.contracts import DecisionMode, DecisionScope, StateVariant
 from intraday.journal import export_training_data
 from intraday.store import IntradayStore
 
@@ -62,7 +62,7 @@ def trade(store, signal_id, *, trade_key="trade-1", pnl_pct=1.25,
     )
 
 
-def test_schema_v10_preserves_required_symbol_scope_and_paper_mode(tmp_path):
+def test_schema_v11_preserves_required_symbol_scope_and_paper_mode(tmp_path):
     database = tmp_path / "intraday.sqlite"
     store = IntradayStore(database)
     signal_id = signal(store)
@@ -80,11 +80,44 @@ def test_schema_v10_preserves_required_symbol_scope_and_paper_mode(tmp_path):
             "SELECT * FROM trades WHERE id=?", (trade_id,)
         ).fetchone()
 
-    assert version == "10"
+    assert version == "11"
     assert recorded_signal["symbol"] == "BTCUSDT"
     assert recorded_signal["scope"] == "perp_intraday"
+    assert recorded_signal["state_variant"] == "numeric_v1"
+    assert recorded_signal["decision_mode"] == "primary"
+    assert recorded_signal["experiment_pair_id"] is None
     assert recorded_trade["scope"] == "perp_intraday"
     assert recorded_trade["is_paper"] == 1
+
+
+def test_shadow_signal_metadata_is_persisted_without_a_trade(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+
+    signal_id = store.record_journal_signal(
+        decision_id="shadow-decision-1",
+        timestamp=NOW,
+        symbol="BTCUSDT",
+        scope=DecisionScope.PERP_INTRADAY,
+        state_snapshot='{"tokens":["scope:perp"]}',
+        raw_signals={"price": 100_000.0},
+        jev_answers={"direction": {"choice": "Buy"}},
+        gate_passed=False,
+        gate_reason="shadow_observation_only",
+        rules_version="perp-champion-v3",
+        llm_thesis=None,
+        state_variant=StateVariant.COMPACT_V1,
+        decision_mode=DecisionMode.SHADOW,
+        experiment_pair_id="pair-1234567890123456",
+    )
+
+    with sqlite3.connect(store.database) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute("SELECT * FROM signals WHERE id=?", (signal_id,)).fetchone()
+        trades = connection.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+    assert row["state_variant"] == "compact_v1"
+    assert row["decision_mode"] == "shadow"
+    assert row["experiment_pair_id"] == "pair-1234567890123456"
+    assert trades == 0
 
 
 def test_signal_and_trade_rows_are_idempotent_and_immutable(tmp_path):

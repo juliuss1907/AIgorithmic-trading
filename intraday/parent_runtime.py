@@ -90,6 +90,7 @@ def run_parent_paper_cycle(
     *,
     spot_rule: SpotRuleParameters | ScopedRuleCandidate,
     perp_rule: PerpRuleParameters | ScopedRuleCandidate,
+    experiment_pair_ids: dict[DecisionScope, str] | None = None,
     decision_scopes: tuple[DecisionScope, ...] = (
         DecisionScope.SPOT_DAILY,
         DecisionScope.PERP_INTRADAY,
@@ -108,6 +109,20 @@ def run_parent_paper_cycle(
     perp_parameters, perp_rule_id = _rule_parts(perp_rule, "perp_rule_parameters")
     fills = []
     provider_errors = []
+    experiment_pair_ids = experiment_pair_ids or {}
+
+    def decide(scope: DecisionScope):
+        tick_id = f"{snapshot.symbol}:{scope.value}:{int(now.timestamp() * 1000)}"
+        pair_id = experiment_pair_ids.get(scope)
+        if pair_id is None:
+            return provider.decide_scoped(snapshot, tick_id, scope, now)
+        return provider.decide_scoped(
+            snapshot,
+            tick_id,
+            scope,
+            now,
+            experiment_pair_id=pair_id,
+        )
 
     def execute(
         authorization,
@@ -188,12 +203,7 @@ def run_parent_paper_cycle(
             and spot_observation.entry
         ):
             try:
-                scoped = provider.decide_scoped(
-                    snapshot,
-                    f"{snapshot.symbol}:spot_daily:{int(now.timestamp() * 1000)}",
-                    DecisionScope.SPOT_DAILY,
-                    now,
-                )
+                scoped = decide(DecisionScope.SPOT_DAILY)
             except RuntimeError:
                 provider_errors.append(DecisionScope.SPOT_DAILY.value)
             else:
@@ -224,12 +234,7 @@ def run_parent_paper_cycle(
                     )
         if DecisionScope.PERP_INTRADAY in decision_scopes:
             try:
-                scoped = provider.decide_scoped(
-                    snapshot,
-                    f"{snapshot.symbol}:perp_intraday:{int(now.timestamp() * 1000)}",
-                    DecisionScope.PERP_INTRADAY,
-                    now,
-                )
+                scoped = decide(DecisionScope.PERP_INTRADAY)
             except RuntimeError:
                 provider_errors.append(DecisionScope.PERP_INTRADAY.value)
             else:

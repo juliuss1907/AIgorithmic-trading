@@ -12,6 +12,7 @@ from typing import Callable, Protocol
 
 from intraday.contracts import (
     DecisionScope,
+    DecisionMode,
     Direction,
     FeatureSnapshot,
     JevDecision,
@@ -21,6 +22,7 @@ from intraday.contracts import (
     Regime,
     RiskLevel,
     ScopedJevDecision,
+    StateVariant,
 )
 from intraday.provider_client import HttpResponse, Transport, http_transport
 from intraday.provider_profiles import ProviderCredential, ProviderSecretStore
@@ -39,6 +41,105 @@ class ProviderDecisionError(RuntimeError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+def compact_state_tokens(
+    snapshot: FeatureSnapshot, scope: DecisionScope | None
+) -> list[str]:
+    """Encode compact_v1 as a fixed, categorical 12-token vocabulary."""
+    values = snapshot.features
+
+    def value(name: str, *aliases: str):
+        for key in (name, *aliases):
+            if values.get(key) is not None:
+                return float(values[key])
+        return None
+
+    price = value("price", "mark_price")
+    mid = value("bb_mid")
+    macd = value("macd")
+    signal = value("macd_signal")
+    if None in (price, mid, macd, signal):
+        trend = "unknown"
+    elif price > mid and macd > signal:
+        trend = "up"
+    elif price < mid and macd < signal:
+        trend = "down"
+    else:
+        trend = "mixed"
+
+    rsi = value("rsi14")
+    if rsi is None:
+        momentum = "unknown"
+    elif rsi < 30:
+        momentum = "oversold"
+    elif rsi < 45:
+        momentum = "weak"
+    elif rsi <= 55:
+        momentum = "neutral"
+    elif rsi <= 70:
+        momentum = "strong"
+    else:
+        momentum = "overbought"
+
+    histogram = value("macd_hist")
+    macd_state = "unknown" if histogram is None else (
+        "bull" if histogram > 0 else "bear" if histogram < 0 else "flat"
+    )
+    upper, lower = value("bb_upper"), value("bb_lower")
+    if None in (upper, lower, mid) or not mid:
+        volatility = "unknown"
+    else:
+        width = (upper - lower) / mid
+        volatility = "compressed" if width < 0.02 else "normal" if width <= 0.06 else "expanded"
+    if None in (price, upper, lower):
+        band = "unknown"
+    else:
+        band = "above" if price > upper else "below" if price < lower else "inside"
+
+    imbalance = value("order_book_imbalance", "book_imbalance")
+    flow = "unknown" if imbalance is None else (
+        "ask" if imbalance < -0.15 else "bid" if imbalance > 0.15 else "balanced"
+    )
+    spread = value("spread_bps")
+    spread_state = "unknown" if spread is None else (
+        "tight" if spread < 1 else "normal" if spread <= 3 else "wide"
+    )
+    funding = value("funding_rate")
+    funding_state = "unknown" if funding is None else (
+        "negative" if funding < -0.0001 else "positive" if funding > 0.0001 else "neutral"
+    )
+    ratio = value("long_short_ratio")
+    positioning = "unknown" if ratio is None else (
+        "short" if ratio < 0.9 else "long" if ratio > 1.1 else "neutral"
+    )
+    efficiency = value("path_efficiency")
+    path = "unknown" if efficiency is None else (
+        "choppy" if efficiency < 0.25 else "mixed" if efficiency <= 0.55 else "efficient"
+    )
+    sentiment = value("sentiment_score")
+    sentiment_state = "missing" if sentiment is None else (
+        "negative" if sentiment < -0.2 else "positive" if sentiment > 0.2 else "neutral"
+    )
+    scope_value = {
+        DecisionScope.SPOT_DAILY: "spot",
+        DecisionScope.PERP_INTRADAY: "perp",
+        None: "global",
+    }[scope]
+    return [
+        f"scope:{scope_value}",
+        f"trend:{trend}",
+        f"momentum:{momentum}",
+        f"macd:{macd_state}",
+        f"volatility:{volatility}",
+        f"band:{band}",
+        f"flow:{flow}",
+        f"spread:{spread_state}",
+        f"funding:{funding_state}",
+        f"positioning:{positioning}",
+        f"path:{path}",
+        f"sentiment:{sentiment_state}",
+    ]
 
 
 class JevDecisionProvider:
@@ -114,8 +215,12 @@ class JevDecisionProvider:
 
     @staticmethod
     def _state(
-        snapshot: FeatureSnapshot, scope: DecisionScope | None = None
+        snapshot: FeatureSnapshot,
+        scope: DecisionScope | None = None,
+        variant: StateVariant = StateVariant.NUMERIC_V1,
     ) -> dict:
+        if variant == StateVariant.COMPACT_V1:
+            return {"tokens": compact_state_tokens(snapshot, scope)}
         state = {
             "snapshot_id": snapshot.snapshot_id,
             "symbol": snapshot.symbol,
@@ -288,8 +393,11 @@ class JevDecisionProvider:
         *,
         workflow: str,
         scope: DecisionScope | None,
+        state_variant: StateVariant = StateVariant.NUMERIC_V1,
+        decision_mode: DecisionMode = DecisionMode.PRIMARY,
+        experiment_pair_id: str | None = None,
     ) -> tuple[JevDecision, JevDecisionTrace]:
-        state = self._state(snapshot, scope)
+        state = self._state(snapshot, scope, state_variant)
         state_snapshot = json.dumps(state, sort_keys=True, separators=(",", ":"))
         payload = {
             "model": self.credential.profile.model,
@@ -373,7 +481,8 @@ class JevDecisionProvider:
         circuit[0] = 0
         circuit[1] = 0
         decision_id = hashlib.sha256(
-            f"{self.model_ref}:{tick_id}:{snapshot.checksum}".encode()
+            f"{self.model_ref}:{tick_id}:{snapshot.checksum}:{state_variant.value}:"
+            f"{decision_mode.value}:{experiment_pair_id or '-'}".encode()
         ).hexdigest()[:24]
         decision = JevDecision(
             decision_id=decision_id,
@@ -417,6 +526,10 @@ class JevDecisionProvider:
         tick_id: str,
         scope: DecisionScope,
         now,
+        *,
+        state_variant: StateVariant = StateVariant.NUMERIC_V1,
+        decision_mode: DecisionMode = DecisionMode.PRIMARY,
+        experiment_pair_id: str | None = None,
     ) -> ScopedJevDecision:
         workflow = {
             DecisionScope.SPOT_DAILY: "spot_daily_entry",
@@ -428,12 +541,18 @@ class JevDecisionProvider:
             now,
             workflow=workflow,
             scope=scope,
+            state_variant=state_variant,
+            decision_mode=decision_mode,
+            experiment_pair_id=experiment_pair_id,
         )
         return ScopedJevDecision(
             scope=scope,
             workflow=workflow,
             decision=decision,
             trace=trace,
+            state_variant=state_variant,
+            decision_mode=decision_mode,
+            experiment_pair_id=experiment_pair_id,
         )
 
 
@@ -485,12 +604,24 @@ class AssignedDecisionProvider:
         tick_id: str,
         scope: DecisionScope,
         now,
+        *,
+        state_variant: StateVariant = StateVariant.NUMERIC_V1,
+        decision_mode: DecisionMode = DecisionMode.PRIMARY,
+        experiment_pair_id: str | None = None,
     ) -> ScopedJevDecision:
         provider = self._active_provider(allow_fallback=False)
         decide_scoped = getattr(provider, "decide_scoped", None)
         if decide_scoped is None:
             raise ProviderDecisionError("scoped_workflow_unsupported")
-        return decide_scoped(snapshot, tick_id, scope, now)
+        return decide_scoped(
+            snapshot,
+            tick_id,
+            scope,
+            now,
+            state_variant=state_variant,
+            decision_mode=decision_mode,
+            experiment_pair_id=experiment_pair_id,
+        )
 
 
 class StubDecisionProvider:
