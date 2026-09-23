@@ -52,6 +52,37 @@ def test_bare_aigt_prints_help_and_exits_successfully(monkeypatch, capsys):
     assert output.startswith("usage: aigt")
     assert "provider" in output
     assert "migrate-state" in output
+    assert "journal" in output
+
+
+def test_journal_export_cli_writes_json_summary_and_jsonl(
+    monkeypatch, capsys, tmp_path
+):
+    database = tmp_path / "intraday.sqlite"
+    IntradayStore(database)
+    output_dir = tmp_path / "training_data"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "aigt",
+            "journal",
+            "export",
+            "--database",
+            str(database),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    main()
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["exported"] == 0
+    assert result["positive"] == 0
+    assert result["hold"] == 0
+    assert result["ambiguous_skipped"] == 0
+    assert Path(result["output_file"]).exists()
 
 
 def test_aigt_version_uses_project_version(monkeypatch, capsys):

@@ -39,6 +39,11 @@ from intraday.cross_venue_evaluation import (
     evaluate_cross_venue_promotion,
 )
 from intraday.hyperliquid import HyperliquidFeed
+from intraday.journal import (
+    count_training_candidates,
+    export_training_data,
+    training_output_path,
+)
 from intraday.market import BinanceUsdMClient
 from intraday.notifications import TelegramNotifier, drain_outbox
 from intraday.provider_client import ProviderPreflightClient
@@ -49,7 +54,10 @@ from intraday.portfolio_coordinator import (
     apply_operator_command,
 )
 from intraday.portfolio_soak import evaluate_portfolio_soak, run_soak_cycle
-from intraday.parent_runtime import run_parent_paper_cycle
+from intraday.parent_runtime import (
+    flatten_parent_paper_positions,
+    run_parent_paper_cycle,
+)
 from intraday.replay import compare_cross_venue
 from intraday.runtime import (
     process_pending_commands,
@@ -145,6 +153,15 @@ def _parser() -> argparse.ArgumentParser:
     paper_run.add_argument("--database", default=None)
     paper_run.add_argument("--secrets-file", default=None)
     paper_run.add_argument("--once", action="store_true")
+    journal = commands.add_parser("journal")
+    journal_commands = journal.add_subparsers(
+        dest="journal_command", required=True
+    )
+    journal_export = journal_commands.add_parser("export")
+    journal_export.add_argument("--database", default=None)
+    journal_export.add_argument("--output-dir", default="training_data")
+    journal_export.add_argument("--min-pnl-pct", type=float, default=0.5)
+    journal_export.add_argument("--max-pnl-pct", type=float, default=-0.5)
     return parser
 
 
@@ -549,8 +566,8 @@ def _portfolio_cli(arguments) -> None:
         spot_observation = None
         while True:
             now = datetime.now(timezone.utc)
-            process_pending_commands(store, now=now)
             snapshot = market.snapshot("BTCUSDT", now=now)
+            process_pending_commands(store, now=now, snapshot=snapshot)
             if cached_day != now.date() or spot_observation is None:
                 limit = max(
                     spot_rule.parameters.entry_window,
@@ -567,8 +584,8 @@ def _portfolio_cli(arguments) -> None:
                 provider,
                 snapshot,
                 spot_observation,
-                spot_rule=spot_rule.parameters,
-                perp_rule=perp_rule.parameters,
+                spot_rule=spot_rule,
+                perp_rule=perp_rule,
                 now=now,
             )
             print(json.dumps(result), flush=True)
@@ -608,12 +625,18 @@ def _portfolio_cli(arguments) -> None:
         return
     now = datetime.now(timezone.utc)
     try:
-        state = apply_operator_command(state, command, now=now)
+        if command == "flatten":
+            state = flatten_parent_paper_positions(
+                store, state, now=now, actor="cli"
+            )
+        else:
+            state = apply_operator_command(state, command, now=now)
     except ValueError as error:
         raise SystemExit(str(error)) from error
-    store.save_parent_portfolio_state(
-        state, event_kind=command, actor="cli"
-    )
+    if command != "flatten":
+        store.save_parent_portfolio_state(
+            state, event_kind=command, actor="cli"
+        )
     print(json.dumps(_parent_portfolio_payload(state), indent=2))
 
 
@@ -637,6 +660,36 @@ def _analysis_loop(config: IntradayConfig) -> None:
             time.sleep(config.llm_analysis_interval_seconds)
 
 
+def _journal_cli(arguments) -> None:
+    database = resolve_database_path(arguments.database)
+    IntradayStore(database)
+    now = datetime.now(timezone.utc)
+    try:
+        candidates = count_training_candidates(database)
+        rows = export_training_data(
+            arguments.min_pnl_pct,
+            arguments.max_pnl_pct,
+            database=database,
+            output_dir=arguments.output_dir,
+            now=now,
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    hold = sum(row["answer"]["direction"] == "hold" for row in rows)
+    result = {
+        "output_file": str(
+            training_output_path(arguments.output_dir, now).resolve()
+        ),
+        "exported": len(rows),
+        "positive": len(rows) - hold,
+        "hold": hold,
+        "ambiguous_skipped": candidates - len(rows),
+        "min_pnl_pct": arguments.min_pnl_pct,
+        "max_pnl_pct": arguments.max_pnl_pct,
+    }
+    print(json.dumps(result, indent=2))
+
+
 def main() -> None:
     parser = _parser()
     arguments = parser.parse_args()
@@ -648,6 +701,9 @@ def main() -> None:
         return
     if arguments.command == "provider":
         _provider_cli(arguments)
+        return
+    if arguments.command == "journal":
+        _journal_cli(arguments)
         return
     if arguments.command == "portfolio":
         _portfolio_cli(arguments)

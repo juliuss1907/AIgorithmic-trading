@@ -29,6 +29,22 @@ def _direction_label(value: str) -> str:
     return value.strip().lower().replace(" ", "_")
 
 
+def training_output_path(output_dir: str | Path, now: datetime) -> Path:
+    return Path(output_dir) / (
+        f"kev_finetune_{now.astimezone(timezone.utc):%Y%m%d}.jsonl"
+    )
+
+
+def count_training_candidates(database: str | Path | None = None) -> int:
+    with sqlite3.connect(resolve_database_path(database)) as connection:
+        return int(
+            connection.execute(
+                "SELECT COUNT(*) FROM signals s JOIN trades t ON t.signal_id=s.id "
+                "WHERE s.gate_passed=1 AND t.pnl_pct IS NOT NULL"
+            ).fetchone()[0]
+        )
+
+
 def export_training_data(
     min_pnl_pct: float = 0.5,
     max_pnl_pct: float = -0.5,
@@ -70,7 +86,7 @@ def export_training_data(
 
     target_dir = Path(output_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / f"kev_finetune_{now.astimezone(timezone.utc):%Y%m%d}.jsonl"
+    target = training_output_path(target_dir, now)
     temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     try:
         with temporary.open("w", encoding="utf-8", newline="\n") as handle:
