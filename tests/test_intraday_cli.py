@@ -53,6 +53,56 @@ def test_bare_aigt_prints_help_and_exits_successfully(monkeypatch, capsys):
     assert "provider" in output
     assert "migrate-state" in output
     assert "journal" in output
+    assert "start" in output
+    assert "stop" in output
+    assert "restart" in output
+    assert "logs" in output
+
+
+def test_global_aigt_routes_doctor_to_registered_docker_deployment(
+    monkeypatch, tmp_path
+):
+    from intraday import deployment as deployment_module
+
+    root = tmp_path / "checkout"
+    (root / "deploy" / "intraday").mkdir(parents=True)
+    (root / "deploy" / "intraday" / "compose.yaml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
+    (root / ".env.intraday").write_text("INTRADAY_MODE=paper\n", encoding="utf-8")
+    registered = deployment_module.Deployment.for_project(root)
+    calls = []
+    monkeypatch.setattr(deployment_module, "load_deployment", lambda: registered)
+    monkeypatch.setattr(
+        deployment_module,
+        "execute",
+        lambda command, *, cwd: calls.append((command, cwd)) or 0,
+    )
+    monkeypatch.setattr(sys, "argv", ["aigt", "doctor"])
+
+    main()
+
+    assert calls == [
+        (deployment_module.admin_command(registered, ["doctor"]), root)
+    ]
+
+
+def test_explicit_database_keeps_doctor_in_native_mode(monkeypatch, capsys, tmp_path):
+    from intraday import deployment as deployment_module
+
+    monkeypatch.setattr(
+        deployment_module,
+        "load_deployment",
+        lambda: pytest.fail("explicit database must bypass deployment discovery"),
+    )
+    database = tmp_path / "native.sqlite"
+    monkeypatch.setattr(
+        sys, "argv", ["aigt", "doctor", "--database", str(database)]
+    )
+
+    main()
+
+    assert json.loads(capsys.readouterr().out)["database"] == str(database)
 
 
 def test_experiment_status_and_retrospective_cli_are_available(

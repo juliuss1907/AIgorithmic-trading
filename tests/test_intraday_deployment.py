@@ -5,9 +5,11 @@ import pytest
 
 from intraday.deployment import (
     Deployment,
+    admin_command,
     compose_command,
     load_deployment,
     save_deployment,
+    service_command,
 )
 
 
@@ -57,3 +59,42 @@ def test_compose_command_uses_registered_absolute_files(tmp_path):
         "--quiet",
     ]
 
+
+def test_admin_command_preserves_aigt_arguments(tmp_path):
+    deployment = Deployment.for_project(project(tmp_path))
+
+    assert admin_command(deployment, ["provider", "setup"]) == [
+        *compose_command(deployment),
+        "--profile",
+        "admin",
+        "run",
+        "--rm",
+        "admin",
+        "provider",
+        "setup",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("action", "expected"),
+    [
+        ("start", ["up", "-d", "worker", "web"]),
+        ("stop", ["stop", "worker", "web"]),
+        ("restart", ["restart", "worker", "web"]),
+        ("logs", ["logs", "--tail", "50", "--follow", "worker", "web"]),
+    ],
+)
+def test_service_commands_are_bounded_to_aigt_services(tmp_path, action, expected):
+    deployment = Deployment.for_project(project(tmp_path))
+
+    assert service_command(deployment, action, tail=50, follow=True) == [
+        *compose_command(deployment),
+        *expected,
+    ]
+
+
+def test_service_command_rejects_unknown_actions(tmp_path):
+    deployment = Deployment.for_project(project(tmp_path))
+
+    with pytest.raises(ValueError, match="unsupported deployment action"):
+        service_command(deployment, "delete")

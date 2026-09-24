@@ -47,6 +47,7 @@ from intraday.decision_evaluation import (
     evaluate_compact_experiment,
     generate_retrospective,
 )
+from intraday import deployment as deployment_cli
 from intraday.hyperliquid import HyperliquidFeed
 from intraday.journal import (
     count_training_candidates,
@@ -120,6 +121,11 @@ def _parser() -> argparse.ArgumentParser:
     commands.choices["cross-venue-evaluate"].add_argument("--evidence", required=True)
     serve = commands.add_parser("serve")
     serve.add_argument("--database", default=None)
+    for name in ("start", "stop", "restart"):
+        commands.add_parser(name)
+    logs = commands.add_parser("logs")
+    logs.add_argument("--tail", type=int, default=200)
+    logs.add_argument("--no-follow", action="store_true")
     migrate_state = commands.add_parser("migrate-state")
     migrate_state.add_argument("--from", dest="source", required=True)
     migrate_state.add_argument("--database", default=None)
@@ -1060,6 +1066,34 @@ def main() -> None:
     if arguments.command is None:
         parser.print_help()
         return
+    raw_arguments = sys.argv[1:]
+    if arguments.command in {"start", "stop", "restart", "logs"}:
+        deployment = deployment_cli.load_deployment()
+        if deployment is None:
+            raise SystemExit("no global deployment is registered; run aigt setup")
+        command = deployment_cli.service_command(
+            deployment,
+            arguments.command,
+            tail=getattr(arguments, "tail", 200),
+            follow=not getattr(arguments, "no_follow", False),
+        )
+        code = deployment_cli.execute(command, cwd=deployment.project_root)
+        if code:
+            raise SystemExit(code)
+        return
+    explicit_native_paths = any(
+        item in raw_arguments for item in ("--database", "--secrets-file")
+    )
+    if arguments.command in {"doctor", "status", "provider"} and not explicit_native_paths:
+        deployment = deployment_cli.load_deployment()
+        if deployment is not None:
+            code = deployment_cli.execute(
+                deployment_cli.admin_command(deployment, raw_arguments),
+                cwd=deployment.project_root,
+            )
+            if code:
+                raise SystemExit(code)
+            return
     if arguments.command == "migrate-state":
         print(json.dumps(_migrate_state(arguments.source, arguments.database), indent=2))
         return

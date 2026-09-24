@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
 import tempfile
 import tomllib
 from dataclasses import dataclass
@@ -116,3 +117,44 @@ def compose_command(deployment: Deployment, *arguments: str) -> list[str]:
         *arguments,
     ]
 
+
+def admin_command(deployment: Deployment, arguments: list[str]) -> list[str]:
+    return compose_command(
+        deployment,
+        "--profile",
+        "admin",
+        "run",
+        "--rm",
+        "admin",
+        *arguments,
+    )
+
+
+def service_command(
+    deployment: Deployment,
+    action: str,
+    *,
+    tail: int = 200,
+    follow: bool = True,
+) -> list[str]:
+    arguments = {
+        "start": ["up", "-d", "worker", "web"],
+        "stop": ["stop", "worker", "web"],
+        "restart": ["restart", "worker", "web"],
+        "logs": [
+            "logs",
+            "--tail",
+            str(tail),
+            *(["--follow"] if follow else []),
+            "worker",
+            "web",
+        ],
+    }.get(action)
+    if arguments is None:
+        raise ValueError(f"unsupported deployment action: {action}")
+    return compose_command(deployment, *arguments)
+
+
+def execute(command: list[str], *, cwd: Path) -> int:
+    """Execute one deployment command with the caller's terminal attached."""
+    return subprocess.run(command, cwd=cwd, check=False).returncode
