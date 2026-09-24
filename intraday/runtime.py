@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -225,6 +226,7 @@ def run_analysis_cycle(
     *,
     now: datetime | None = None,
     client_factory=None,
+    cooldown_seconds: float = 3600,
 ) -> dict:
     now = now or datetime.now(timezone.utc)
     try:
@@ -238,25 +240,40 @@ def run_analysis_cycle(
     snapshot = store.latest_snapshot()
     if snapshot is None:
         return {"status": "skipped", "reason": "no_market_snapshot"}
+    evidence = {
+        "symbol": snapshot.symbol,
+        "features": snapshot.features,
+        "freshness": snapshot.freshness,
+        "quality_flags": snapshot.quality_flags,
+        "news_event_ids": [
+            item.event_id for item in store.list_news_events(limit=50)
+        ],
+    }
+    evidence_hash = hashlib.sha256(
+        json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    latest_run = store.latest_analysis_run()
+    if latest_run is not None:
+        completed_at = datetime.fromisoformat(latest_run["completed_at"])
+        if latest_run["evidence_hash"] == evidence_hash:
+            return {"status": "skipped", "reason": "evidence_unchanged"}
+        if (now - completed_at).total_seconds() < cooldown_seconds:
+            return {"status": "skipped", "reason": "analysis_cooldown"}
     try:
-        generate_scopes = {
-            scope
-            for scope in DecisionScope
-            if should_generate_scoped_rule(store, scope=scope, now=now)
-        }
         result = LLMAnalysisPipeline(client, store).run_scoped(
             snapshot,
             now=now,
-            generate_scopes=generate_scopes,
+            generate_scopes=set(),
         )
     except StructuredLLMError as error:
         return {"status": "degraded", "error_code": error.code}
     utc_now = now.astimezone(timezone.utc)
     day_start = utc_now.replace(hour=0, minute=0, second=0, microsecond=0)
     daily_cost = store.model_cost_since(day_start)
-    candidate_ids = {
-        candidate.scope.value: candidate.rule_id for candidate in result.candidates
-    }
+    store.record_analysis_run(
+        evidence_hash, completed_at=now, thesis_id=result.bundle.thesis_id
+    )
+    candidate_ids = {}
     return {
         "status": "ok",
         "thesis_id": result.bundle.thesis_id,
@@ -268,5 +285,46 @@ def run_analysis_cycle(
                 "queued_for_soak" if scope.value in candidate_ids else "unchanged"
             )
             for scope in DecisionScope
+        },
+    }
+
+
+def run_rule_proposal_cycle(
+    store: IntradayStore,
+    secret_store: ProviderSecretStore,
+    *,
+    now: datetime | None = None,
+    client_factory=None,
+) -> dict:
+    now = now or datetime.now(timezone.utc)
+    try:
+        client = active_llm_client(store, secret_store, client_factory=client_factory)
+    except StructuredLLMError as error:
+        return {"status": "degraded", "error_code": error.code}
+    if client is None:
+        return {"status": "skipped", "reason": "no_active_llm"}
+    bundle = store.latest_market_thesis_bundle()
+    retrospective = store.latest_retrospective()
+    if bundle is None or retrospective is None:
+        return {"status": "skipped", "reason": "missing_thesis_or_retrospective"}
+    scopes = {
+        scope for scope in DecisionScope
+        if should_generate_scoped_rule(store, scope=scope, now=now)
+    }
+    if not scopes:
+        return {"status": "skipped", "reason": "no_eligible_scope"}
+    try:
+        candidates = LLMAnalysisPipeline(client, store).generate_scoped_candidates(
+            bundle,
+            now=now,
+            generate_scopes=scopes,
+            retrospective=retrospective,
+        )
+    except StructuredLLMError as error:
+        return {"status": "degraded", "error_code": error.code}
+    return {
+        "status": "ok",
+        "candidate_ids": {
+            candidate.scope.value: candidate.rule_id for candidate in candidates
         },
     }

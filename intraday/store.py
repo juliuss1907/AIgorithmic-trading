@@ -37,6 +37,7 @@ from intraday.portfolio_soak import PortfolioSoakEvaluation
 from intraday.parent_paper import ParentPaperFill
 from intraday.outcomes import SignalOutcome
 from intraday.decision_evaluation import DecisionExperimentEvaluation
+from intraday.scoped_rule_lifecycle import ScopedRuleEvaluation
 
 
 def _json(model) -> str:
@@ -402,6 +403,34 @@ class IntradayStore:
                     content_hash TEXT NOT NULL,
                     payload_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS analysis_runs (
+                    evidence_hash TEXT PRIMARY KEY,
+                    completed_at TEXT NOT NULL,
+                    thesis_id TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS scoped_rule_evaluations (
+                    id TEXT PRIMARY KEY,
+                    candidate_id TEXT NOT NULL REFERENCES scoped_rules(id),
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    kind TEXT NOT NULL CHECK (kind IN ('replay', 'soak')),
+                    status TEXT NOT NULL CHECK (status IN ('deferred', 'reject', 'pass')),
+                    evaluated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_scoped_rule_evaluations
+                    ON scoped_rule_evaluations(candidate_id, kind, evaluated_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS scoped_rule_soak_ticks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    candidate_id TEXT NOT NULL REFERENCES scoped_rules(id),
+                    signal_id INTEGER NOT NULL REFERENCES signals(id),
+                    champion_allowed INTEGER NOT NULL CHECK (champion_allowed IN (0, 1)),
+                    challenger_allowed INTEGER NOT NULL CHECK (challenger_allowed IN (0, 1)),
+                    champion_score REAL NOT NULL,
+                    challenger_score REAL NOT NULL,
+                    hard_risk_violation INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(candidate_id, signal_id)
+                );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_retrospectives_date_hash
                     ON retrospectives(report_date, content_hash);
                 CREATE TRIGGER IF NOT EXISTS decision_evaluations_append_only_update
@@ -463,8 +492,209 @@ class IntradayStore:
                 "ON signals(experiment_pair_id, scope, state_variant)"
             )
             connection.execute(
-                "UPDATE schema_meta SET value='13' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='15' WHERE key='schema_version'"
             )
+
+    def load_scoped_rule(self, rule_id: str) -> ScopedRuleCandidate | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM scoped_rules WHERE id=?", (rule_id,)
+            ).fetchone()
+        return None if row is None else ScopedRuleCandidate.model_validate_json(row["payload_json"])
+
+    def scoped_rule_status(self, rule_id: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT status FROM scoped_rules WHERE id=?", (rule_id,)
+            ).fetchone()
+        return None if row is None else row["status"]
+
+    def list_scoped_rules(self, scope: DecisionScope | None = None) -> list[dict]:
+        query = "SELECT id, scope, parent_id, status, created_at FROM scoped_rules"
+        parameters: tuple = ()
+        if scope is not None:
+            query += " WHERE scope=?"
+            parameters = (scope.value,)
+        query += " ORDER BY created_at DESC, id DESC"
+        with self._connect() as connection:
+            return [dict(row) for row in connection.execute(query, parameters).fetchall()]
+
+    def update_scoped_rule_status(
+        self, rule_id: str, *, expected: str, status: str
+    ) -> None:
+        allowed = {
+            ("queued", "replay_passed"), ("queued", "rejected"),
+            ("replay_passed", "challenger"), ("challenger", "rejected"),
+        }
+        if (expected, status) not in allowed:
+            raise ValueError("unsupported scoped rule transition")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE scoped_rules SET status=? WHERE id=? AND status=?",
+                (status, rule_id, expected),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("scoped rule is not in the expected state")
+
+    def set_scoped_challenger(self, rule_id: str, *, now: datetime) -> dict:
+        candidate = self.load_scoped_rule(rule_id)
+        if candidate is None:
+            raise ValueError("unknown scoped rule")
+        with self._connect() as connection:
+            registry = connection.execute(
+                "SELECT champion_id, challenger_id FROM scoped_rule_registry WHERE scope=?",
+                (candidate.scope.value,),
+            ).fetchone()
+            status = connection.execute(
+                "SELECT status FROM scoped_rules WHERE id=?", (rule_id,)
+            ).fetchone()
+            if registry is None or registry["challenger_id"] is not None:
+                raise ValueError("scoped challenger slot is unavailable")
+            if status is None or status["status"] != "replay_passed":
+                raise ValueError("scoped challenger must pass replay first")
+            if candidate.parent_rule_id != registry["champion_id"]:
+                raise ValueError("scoped challenger lineage mismatch")
+            connection.execute(
+                "UPDATE scoped_rules SET status='challenger' WHERE id=?", (rule_id,)
+            )
+            connection.execute(
+                "UPDATE scoped_rule_registry SET challenger_id=?, updated_at=? WHERE scope=?",
+                (rule_id, now.isoformat(), candidate.scope.value),
+            )
+        return self.scoped_rule_registry(candidate.scope)
+
+    def promote_scoped_challenger(self, rule_id: str, *, now: datetime) -> dict:
+        candidate = self.load_scoped_rule(rule_id)
+        if candidate is None:
+            raise ValueError("unknown scoped rule")
+        with self._connect() as connection:
+            registry = connection.execute(
+                "SELECT champion_id, challenger_id FROM scoped_rule_registry WHERE scope=?",
+                (candidate.scope.value,),
+            ).fetchone()
+            if registry is None or registry["challenger_id"] != rule_id:
+                raise ValueError("candidate is not the active scoped challenger")
+            old = registry["champion_id"]
+            connection.execute(
+                "UPDATE scoped_rules SET status='hall_of_fame' WHERE id=?", (old,)
+            )
+            connection.execute(
+                "UPDATE scoped_rules SET status='champion' WHERE id=?", (rule_id,)
+            )
+            connection.execute(
+                "UPDATE scoped_rule_registry SET champion_id=?, challenger_id=NULL, "
+                "rollback_id=?, updated_at=? WHERE scope=?",
+                (rule_id, old, now.isoformat(), candidate.scope.value),
+            )
+        return self.scoped_rule_registry(candidate.scope)
+
+    def record_scoped_rule_evaluation(self, evaluation: ScopedRuleEvaluation) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO scoped_rule_evaluations VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    evaluation.evaluation_id, evaluation.candidate_id,
+                    evaluation.scope.value, evaluation.kind, evaluation.status,
+                    evaluation.evaluated_at.isoformat(), _json(evaluation),
+                ),
+            )
+
+    def scoped_rule_evaluation(self, evaluation_id: str) -> ScopedRuleEvaluation | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM scoped_rule_evaluations WHERE id=?",
+                (evaluation_id,),
+            ).fetchone()
+        return None if row is None else ScopedRuleEvaluation.model_validate_json(row["payload_json"])
+
+    def latest_scoped_rule_evaluation(
+        self, candidate_id: str, *, kind: str
+    ) -> ScopedRuleEvaluation | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM scoped_rule_evaluations "
+                "WHERE candidate_id=? AND kind=? ORDER BY evaluated_at DESC, id DESC LIMIT 1",
+                (candidate_id, kind),
+            ).fetchone()
+        return None if row is None else ScopedRuleEvaluation.model_validate_json(row["payload_json"])
+
+    def scoped_rule_replay_evidence(self, scope: DecisionScope) -> tuple[list[dict], dict]:
+        horizon = 900 if scope == DecisionScope.PERP_INTRADAY else 259_200
+        with self._connect() as connection:
+            total = connection.execute(
+                "SELECT COUNT(*) AS count, MIN(timestamp) AS first_at, MAX(timestamp) AS last_at "
+                "FROM signals WHERE scope=? AND state_variant='numeric_v1' "
+                "AND decision_mode='primary'",
+                (scope.value,),
+            ).fetchone()
+            rows = connection.execute(
+                "SELECT s.id, s.jev_answers, o.directional_return_pct "
+                "FROM signals s JOIN signal_outcomes o ON o.signal_id=s.id "
+                "AND o.horizon_sec=? WHERE s.scope=? AND s.state_variant='numeric_v1' "
+                "AND s.decision_mode='primary' ORDER BY s.timestamp, s.id",
+                (horizon, scope.value),
+            ).fetchall()
+        total_count = int(total["count"])
+        history_days = 0.0
+        if total["first_at"] and total["last_at"]:
+            history_days = max(0.0, (
+                datetime.fromisoformat(total["last_at"])
+                - datetime.fromisoformat(total["first_at"])
+            ).total_seconds() / 86_400)
+        return [dict(row) for row in rows], {
+            "signals": total_count, "outcomes": len(rows),
+            "coverage": len(rows) / total_count if total_count else 0.0,
+            "history_days": history_days,
+        }
+
+    def record_scoped_rule_soak_tick(
+        self, *, candidate_id: str, signal_id: int,
+        champion_allowed: bool, challenger_allowed: bool,
+        champion_score: float, challenger_score: float,
+        created_at: datetime, hard_risk_violation: bool = False,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO scoped_rule_soak_ticks "
+                "(candidate_id, signal_id, champion_allowed, challenger_allowed, "
+                "champion_score, challenger_score, hard_risk_violation, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    candidate_id, signal_id, int(champion_allowed),
+                    int(challenger_allowed), champion_score, challenger_score,
+                    int(hard_risk_violation), created_at.isoformat(),
+                ),
+            )
+
+    def list_scoped_rule_soak_ticks(self, candidate_id: str) -> list[dict]:
+        candidate = self.load_scoped_rule(candidate_id)
+        if candidate is None:
+            raise ValueError("unknown scoped rule")
+        horizon = 900 if candidate.scope == DecisionScope.PERP_INTRADAY else 259_200
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT t.*, o.directional_return_pct FROM scoped_rule_soak_ticks t "
+                "LEFT JOIN signal_outcomes o ON o.signal_id=t.signal_id "
+                "AND o.horizon_sec=? WHERE t.candidate_id=? "
+                "ORDER BY t.created_at, t.id", (horizon, candidate_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_analysis_run(
+        self, evidence_hash: str, *, completed_at: datetime, thesis_id: str
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO analysis_runs VALUES (?, ?, ?)",
+                (evidence_hash, completed_at.isoformat(), thesis_id),
+            )
+
+    def latest_analysis_run(self) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM analysis_runs ORDER BY completed_at DESC LIMIT 1"
+            ).fetchone()
+        return None if row is None else dict(row)
 
     def decision_experiment_pair_summary(self, scope: DecisionScope) -> dict:
         with self._connect() as connection:
@@ -1666,6 +1896,21 @@ class IntradayStore:
                 "JOIN scoped_rule_registry g ON g.champion_id=r.id "
                 "WHERE g.scope=?",
                 (scope.value,),
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else ScopedRuleCandidate.model_validate_json(row["payload_json"])
+        )
+
+    def load_scoped_challenger(
+        self, scope: DecisionScope
+    ) -> ScopedRuleCandidate | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT r.payload_json FROM scoped_rules r "
+                "JOIN scoped_rule_registry g ON g.challenger_id=r.id "
+                "WHERE g.scope=?", (scope.value,),
             ).fetchone()
         return (
             None

@@ -385,6 +385,58 @@ def test_analysis_cycle_skips_safely_without_active_llm_or_snapshot(tmp_path):
     }
 
 
+def test_hourly_analysis_skips_unchanged_evidence_and_never_generates_rules(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    store.record_snapshot(snapshot())
+    secrets = ProviderSecretStore(tmp_path / "providers.toml")
+    current = llm_profile()
+    store.sync_provider_profile(current)
+    store.record_provider_test(current.profile_id, status="ok", tested_at=NOW, latency_ms=1)
+    store.activate_provider(ProviderRole.LLM, current.profile_id, actor="test", now=NOW)
+    secrets.upsert(current, "private-key")
+    workflows = []
+
+    class Client:
+        model_ref = "llm-main@fingerprint"
+
+        def complete(self, *, workflow, **kwargs):
+            workflows.append(workflow)
+            if workflow in {"market_analyst", "news_analyst", "sentiment_analyst"}:
+                return assessment()
+            if workflow == "research_manager":
+                return MarketThesisBundleAssessment(
+                    intraday=HorizonThesis(
+                        scope=DecisionScope.PERP_INTRADAY,
+                        summary="Intraday evidence remains constructive with bounded risk.",
+                        stance="bullish", confidence=0.7,
+                        key_levels={"support": 98_000, "resistance": 102_000},
+                        risk_factors=("Funding reversal",), horizon_minutes=240,
+                    ),
+                    daily_swing=HorizonThesis(
+                        scope=DecisionScope.SPOT_DAILY,
+                        summary="Daily evidence remains constructive above major support.",
+                        stance="bullish", confidence=0.65,
+                        key_levels={"support": 95_000, "resistance": 110_000},
+                        risk_factors=("Macro reversal",), horizon_minutes=2_880,
+                    ),
+                )
+            raise AssertionError(f"unexpected rule call: {workflow}")
+
+    client = Client()
+    first = run_analysis_cycle(
+        store, secrets, now=NOW, client_factory=lambda credential: client
+    )
+    second = run_analysis_cycle(
+        store, secrets, now=NOW + timedelta(hours=2),
+        client_factory=lambda credential: client,
+    )
+
+    assert first["status"] == "ok"
+    assert first["candidate_ids"] == {}
+    assert second == {"status": "skipped", "reason": "evidence_unchanged"}
+    assert not any("rule_generator" in workflow for workflow in workflows)
+
+
 def test_daily_model_cost_is_summed_without_hard_stopping(tmp_path):
     store = IntradayStore(tmp_path / "intraday.sqlite")
     current = llm_profile()

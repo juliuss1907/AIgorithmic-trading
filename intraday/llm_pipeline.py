@@ -616,6 +616,25 @@ class LLMAnalysisPipeline:
         )
         self.store.record_scoped_analysis(reports, bundle)
 
+        candidates = self.generate_scoped_candidates(
+            bundle,
+            now=now,
+            generate_scopes=generate_scopes,
+        )
+        return ScopedAnalysisCycleResult(
+            reports=reports,
+            bundle=bundle,
+            candidates=tuple(candidates),
+        )
+
+    def generate_scoped_candidates(
+        self,
+        bundle: MarketThesisBundle,
+        *,
+        now: datetime,
+        generate_scopes: set[DecisionScope],
+        retrospective: dict | None = None,
+    ) -> list[ScopedRuleCandidate]:
         candidates = []
         for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY):
             champion = self._ensure_scoped_champion(scope, now)
@@ -644,6 +663,7 @@ class LLMAnalysisPipeline:
                 input_payload={
                     "thesis": horizon.model_dump(mode="json"),
                     "champion": champion.model_dump(mode="json"),
+                    "retrospective": retrospective,
                 },
                 now=now,
             )
@@ -670,8 +690,4 @@ class LLMAnalysisPipeline:
             )
             self.store.register_scoped_rule(candidate, status="queued")
             candidates.append(candidate)
-        return ScopedAnalysisCycleResult(
-            reports=reports,
-            bundle=bundle,
-            candidates=tuple(candidates),
-        )
+        return candidates

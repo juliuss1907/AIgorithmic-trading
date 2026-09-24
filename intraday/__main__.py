@@ -75,10 +75,17 @@ from intraday.runtime import (
     run_analysis_cycle,
     run_news_cycle,
     run_once,
+    run_rule_proposal_cycle,
 )
 from intraday.store import IntradayStore
 from intraday.spot_signal import BinanceSpotDailyClient, evaluate_donchian
 from intraday.scheduler import claim_cadence
+from intraday.scoped_rule_lifecycle import (
+    activate_scoped_rule,
+    evaluate_scoped_replay,
+    evaluate_scoped_soak,
+    start_scoped_rule_soak,
+)
 
 
 def _project_version() -> str:
@@ -185,6 +192,16 @@ def _parser() -> argparse.ArgumentParser:
     retrospective_run.add_argument("--database", default=None)
     retrospective_run.add_argument("--date", default=None)
     retrospective_run.add_argument("--once", action="store_true")
+    rules = portfolio_commands.add_parser("rules")
+    rules_commands = rules.add_subparsers(dest="rules_command", required=True)
+    rules_status = rules_commands.add_parser("status")
+    rules_status.add_argument("--database", default=None)
+    for name in ("replay", "start-soak", "evaluate", "activate"):
+        command = rules_commands.add_parser(name)
+        command.add_argument("candidate_id")
+        command.add_argument("--database", default=None)
+        if name == "activate":
+            command.add_argument("--evaluation-id", required=True)
     journal = commands.add_parser("journal")
     journal_commands = journal.add_subparsers(
         dest="journal_command", required=True
@@ -546,6 +563,40 @@ def _portfolio_cli(arguments) -> None:
             store, report_date=report_date, generated_at=generated_at
         ), indent=2))
         return
+    if command == "rules":
+        now = datetime.now(timezone.utc)
+        if arguments.rules_command == "status":
+            payload = {
+                scope.value: {
+                    "registry": store.scoped_rule_registry(scope),
+                    "rules": store.list_scoped_rules(scope),
+                }
+                for scope in DecisionScope
+            }
+            print(json.dumps(payload, indent=2))
+            return
+        try:
+            if arguments.rules_command == "replay":
+                result = evaluate_scoped_replay(
+                    store, arguments.candidate_id, now=now
+                ).model_dump(mode="json")
+            elif arguments.rules_command == "start-soak":
+                result = start_scoped_rule_soak(
+                    store, arguments.candidate_id, now=now
+                )
+            elif arguments.rules_command == "evaluate":
+                result = evaluate_scoped_soak(
+                    store, arguments.candidate_id, now=now
+                ).model_dump(mode="json")
+            else:
+                result = activate_scoped_rule(
+                    store, arguments.candidate_id,
+                    evaluation_id=arguments.evaluation_id, now=now,
+                )
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
+        print(json.dumps(result, indent=2))
+        return
     if command == "soak":
         if arguments.soak_command == "run":
             secret_store = ProviderSecretStore(
@@ -811,6 +862,18 @@ def _portfolio_cli(arguments) -> None:
                             evaluate_compact_experiment(
                                 store, scope=scope, evaluated_at=now
                             )
+                            challenger_id = store.scoped_rule_registry(scope).get(
+                                "challenger_id"
+                            )
+                            if challenger_id:
+                                evaluate_scoped_soak(
+                                    store, challenger_id, now=now
+                                )
+                        result["rule_proposal"] = run_rule_proposal_cycle(
+                            store,
+                            ProviderSecretStore(config.provider_secrets_file),
+                            now=now,
+                        )
                     except Exception as error:
                         store.finish_scheduler_run(
                             "daily_retrospective", retrospective_slot,

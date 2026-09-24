@@ -7,7 +7,7 @@
 - [x] Phase 2: compact Jev shadow A/B, journal variant/mode/pair.
 - [x] Phase 3: forward outcome engine cho Perp và Spot.
 - [x] Phase 4: evaluator A/B, eligibility gate và retrospective 09:00.
-- [ ] Phase 5: evidence-aware LLM thesis và manual rule lifecycle.
+- [x] Phase 5: evidence-aware LLM thesis và manual rule lifecycle.
 - [ ] Phase 6: dashboard vận hành, doctor và runbook.
 
 ## Sau khi build

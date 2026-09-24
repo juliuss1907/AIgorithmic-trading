@@ -62,7 +62,7 @@ def trade(store, signal_id, *, trade_key="trade-1", pnl_pct=1.25,
     )
 
 
-def test_schema_v13_preserves_required_symbol_scope_and_paper_mode(tmp_path):
+def test_schema_v15_preserves_required_symbol_scope_and_paper_mode(tmp_path):
     database = tmp_path / "intraday.sqlite"
     store = IntradayStore(database)
     signal_id = signal(store)
@@ -80,7 +80,7 @@ def test_schema_v13_preserves_required_symbol_scope_and_paper_mode(tmp_path):
             "SELECT * FROM trades WHERE id=?", (trade_id,)
         ).fetchone()
 
-    assert version == "13"
+    assert version == "15"
     assert recorded_signal["symbol"] == "BTCUSDT"
     assert recorded_signal["scope"] == "perp_intraday"
     assert recorded_signal["state_variant"] == "numeric_v1"

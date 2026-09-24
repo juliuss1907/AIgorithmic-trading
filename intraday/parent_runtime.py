@@ -16,6 +16,7 @@ from intraday.journal import record_scoped_signal
 from intraday.parent_paper import apply_paper_target
 from intraday.portfolio_coordinator import ParentPortfolioState
 from intraday.scoped_gate import ScopedEntryGate
+from intraday.scoped_rule_lifecycle import rule_allows_answers
 from intraday.spot_signal import DonchianObservation
 
 
@@ -124,6 +125,27 @@ def run_parent_paper_cycle(
             experiment_pair_id=pair_id,
         )
 
+    def record_challenger_tick(scope, signal_id, scoped):
+        champion = store.load_active_scoped_rule(scope)
+        challenger = store.load_scoped_challenger(scope)
+        if champion is None or challenger is None:
+            return
+        answers = scoped.trace.jev_answers if scoped.trace is not None else {}
+        try:
+            champion_allowed = rule_allows_answers(champion, answers)
+            challenger_allowed = rule_allows_answers(challenger, answers)
+        except (KeyError, TypeError, ValueError):
+            champion_allowed = challenger_allowed = False
+        store.record_scoped_rule_soak_tick(
+            candidate_id=challenger.rule_id,
+            signal_id=signal_id,
+            champion_allowed=champion_allowed,
+            challenger_allowed=challenger_allowed,
+            champion_score=0,
+            challenger_score=0,
+            created_at=now,
+        )
+
     def execute(
         authorization,
         *,
@@ -226,6 +248,7 @@ def run_parent_paper_cycle(
                     ),
                     rule_id=spot_rule_id,
                 )
+                record_challenger_tick(DecisionScope.SPOT_DAILY, signal_id, scoped)
                 if authorization.allowed:
                     execute(
                         authorization,
@@ -253,6 +276,7 @@ def run_parent_paper_cycle(
                     ),
                     rule_id=perp_rule_id,
                 )
+                record_challenger_tick(DecisionScope.PERP_INTRADAY, signal_id, scoped)
                 if authorization.allowed:
                     reducing = authorization.reduce_only
                     reason = None
