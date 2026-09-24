@@ -459,6 +459,39 @@ class IntradayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_rule_evaluations_candidate
                     ON rule_evaluations(candidate_id, evaluated_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS operator_action_requests (
+                    id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    action TEXT NOT NULL CHECK (action IN ('pause', 'resume')),
+                    actor TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN (
+                        'pending', 'approved', 'cancelled', 'expired',
+                        'applied', 'rejected'
+                    )),
+                    preview_json TEXT NOT NULL,
+                    requested_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    approved_at TEXT,
+                    cancelled_at TEXT,
+                    command_id TEXT UNIQUE REFERENCES commands(id),
+                    result_json TEXT,
+                    error_code TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_operator_action_requests_status
+                    ON operator_action_requests(status, expires_at, requested_at);
+                CREATE TABLE IF NOT EXISTS operator_action_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    request_id TEXT NOT NULL REFERENCES operator_action_requests(id),
+                    event_type TEXT NOT NULL CHECK (event_type IN (
+                        'requested', 'approved', 'cancelled', 'expired',
+                        'applied', 'rejected'
+                    )),
+                    actor TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_operator_action_events_request
+                    ON operator_action_events(request_id, id);
                 CREATE TABLE IF NOT EXISTS schema_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -492,7 +525,7 @@ class IntradayStore:
                 "ON signals(experiment_pair_id, scope, state_variant)"
             )
             connection.execute(
-                "UPDATE schema_meta SET value='15' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='16' WHERE key='schema_version'"
             )
 
     def load_scoped_rule(self, rule_id: str) -> ScopedRuleCandidate | None:
@@ -1651,6 +1684,240 @@ class IntradayStore:
                 raise ValueError("idempotency key conflicts with an existing command")
         return dict(row)
 
+    @staticmethod
+    def _operator_action_payload(row: sqlite3.Row) -> dict:
+        item = dict(row)
+        item["preview"] = json.loads(item.pop("preview_json"))
+        if item.get("result_json") is not None:
+            item["result"] = json.loads(item.pop("result_json"))
+        else:
+            item.pop("result_json", None)
+            item["result"] = None
+        return item
+
+    @staticmethod
+    def _require_aware_operator_time(value: datetime) -> str:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("operator action timestamps must be timezone-aware")
+        return value.astimezone(timezone.utc).isoformat()
+
+    @staticmethod
+    def _record_operator_action_event(
+        connection: sqlite3.Connection,
+        *,
+        request_id: str,
+        event_type: str,
+        actor: str,
+        payload: dict,
+        created_at: str,
+    ) -> None:
+        connection.execute(
+            "INSERT INTO operator_action_events "
+            "(request_id, event_type, actor, payload_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                request_id,
+                event_type,
+                actor,
+                json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                created_at,
+            ),
+        )
+
+    def create_operator_action_request(
+        self,
+        *,
+        request_id: str,
+        idempotency_key: str,
+        action: str,
+        actor: str,
+        requested_at: datetime,
+        expires_at: datetime,
+    ) -> dict:
+        if action not in {"pause", "resume"}:
+            raise ValueError("unsupported operator action")
+        if not request_id or not idempotency_key or not actor:
+            raise ValueError("operator action identity is required")
+        requested = self._require_aware_operator_time(requested_at)
+        expires = self._require_aware_operator_time(expires_at)
+        if expires_at <= requested_at:
+            raise ValueError("operator action expiry must follow its request time")
+        parent = self.load_parent_portfolio_state()
+        if parent is None:
+            raise ValueError("parent paper portfolio is not initialized")
+        preview = {
+            "entries_paused": parent.entries_paused,
+            "halt_reason": parent.halt_reason,
+            "paper_active": parent.paper_active,
+            "daily_return": parent.daily_return,
+            "drawdown": parent.drawdown,
+        }
+        preview_json = json.dumps(preview, sort_keys=True, separators=(",", ":"))
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO operator_action_requests "
+                "(id, idempotency_key, action, actor, status, preview_json, "
+                "requested_at, expires_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)",
+                (
+                    request_id,
+                    idempotency_key,
+                    action,
+                    actor,
+                    preview_json,
+                    requested,
+                    expires,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM operator_action_requests WHERE idempotency_key=?",
+                (idempotency_key,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("operator request id conflicts with an existing request")
+            if row["action"] != action or row["actor"] != actor:
+                raise ValueError("idempotency key conflicts with an existing operator action")
+            if cursor.rowcount == 1:
+                self._record_operator_action_event(
+                    connection,
+                    request_id=request_id,
+                    event_type="requested",
+                    actor=actor,
+                    payload={"action": action, "expires_at": expires, "preview": preview},
+                    created_at=requested,
+                )
+        return self._operator_action_payload(row)
+
+    def _expire_operator_action(
+        self, connection: sqlite3.Connection, request_id: str, *, now: datetime
+    ) -> None:
+        now_text = self._require_aware_operator_time(now)
+        row = connection.execute(
+            "SELECT status, expires_at, actor FROM operator_action_requests WHERE id=?",
+            (request_id,),
+        ).fetchone()
+        if (
+            row is not None
+            and row["status"] == "pending"
+            and datetime.fromisoformat(row["expires_at"]) <= now.astimezone(timezone.utc)
+        ):
+            connection.execute(
+                "UPDATE operator_action_requests SET status='expired' "
+                "WHERE id=? AND status='pending'",
+                (request_id,),
+            )
+            self._record_operator_action_event(
+                connection,
+                request_id=request_id,
+                event_type="expired",
+                actor="system",
+                payload={"expired_at": now_text},
+                created_at=now_text,
+            )
+
+    def operator_action_request(self, request_id: str, *, now: datetime) -> dict | None:
+        with self._connect() as connection:
+            self._expire_operator_action(connection, request_id, now=now)
+            row = connection.execute(
+                "SELECT * FROM operator_action_requests WHERE id=?", (request_id,)
+            ).fetchone()
+        return None if row is None else self._operator_action_payload(row)
+
+    def approve_operator_action_request(
+        self, request_id: str, *, actor: str, approved_at: datetime
+    ) -> dict:
+        approved = self._require_aware_operator_time(approved_at)
+        with self._connect() as connection:
+            self._expire_operator_action(connection, request_id, now=approved_at)
+            row = connection.execute(
+                "SELECT * FROM operator_action_requests WHERE id=?", (request_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError("operator action request not found")
+            if row["status"] != "pending":
+                raise ValueError("operator action request is not pending")
+            command_id = f"hermes:{request_id}"
+            connection.execute(
+                "INSERT INTO commands "
+                "(id, kind, actor, status, created_at, payload_json) "
+                "VALUES (?, ?, ?, 'pending', ?, ?)",
+                (
+                    command_id,
+                    f"portfolio_{row['action']}",
+                    actor,
+                    approved,
+                    json.dumps(
+                        {"operator_request_id": request_id},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
+            connection.execute(
+                "UPDATE operator_action_requests SET status='approved', "
+                "approved_at=?, command_id=? WHERE id=? AND status='pending'",
+                (approved, command_id, request_id),
+            )
+            self._record_operator_action_event(
+                connection,
+                request_id=request_id,
+                event_type="approved",
+                actor=actor,
+                payload={"action": row["action"], "command_id": command_id},
+                created_at=approved,
+            )
+            result = connection.execute(
+                "SELECT * FROM operator_action_requests WHERE id=?", (request_id,)
+            ).fetchone()
+        return self._operator_action_payload(result)
+
+    def cancel_operator_action_request(
+        self, request_id: str, *, actor: str, cancelled_at: datetime
+    ) -> dict:
+        cancelled = self._require_aware_operator_time(cancelled_at)
+        with self._connect() as connection:
+            self._expire_operator_action(connection, request_id, now=cancelled_at)
+            row = connection.execute(
+                "SELECT * FROM operator_action_requests WHERE id=?", (request_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError("operator action request not found")
+            if row["status"] != "pending":
+                raise ValueError("operator action request is not pending")
+            connection.execute(
+                "UPDATE operator_action_requests SET status='cancelled', "
+                "cancelled_at=? WHERE id=? AND status='pending'",
+                (cancelled, request_id),
+            )
+            self._record_operator_action_event(
+                connection,
+                request_id=request_id,
+                event_type="cancelled",
+                actor=actor,
+                payload={"action": row["action"]},
+                created_at=cancelled,
+            )
+            result = connection.execute(
+                "SELECT * FROM operator_action_requests WHERE id=?", (request_id,)
+            ).fetchone()
+        return self._operator_action_payload(result)
+
+    def list_operator_action_events(self, *, after_id: int = 0, limit: int = 100) -> list[dict]:
+        if after_id < 0 or not 1 <= limit <= 1000:
+            raise ValueError("invalid operator event cursor or limit")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, request_id, event_type, actor, payload_json, created_at "
+                "FROM operator_action_events WHERE id>? ORDER BY id LIMIT ?",
+                (after_id, limit),
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "payload": json.loads(row["payload_json"]),
+            }
+            for row in rows
+        ]
+
     def list_commands(self, *, status: str | None = None) -> list[dict]:
         query = "SELECT * FROM commands"
         parameters: tuple[str, ...] = ()
@@ -1693,6 +1960,29 @@ class IntradayStore:
             )
             if cursor.rowcount != 1:
                 raise ValueError("pending command not found")
+            action = connection.execute(
+                "SELECT id, actor FROM operator_action_requests "
+                "WHERE command_id=? AND status='approved'",
+                (command_id,),
+            ).fetchone()
+            if action is not None:
+                connection.execute(
+                    "UPDATE operator_action_requests SET status=?, result_json=?, "
+                    "error_code=? WHERE id=? AND status='approved'",
+                    (status, result_json, error_code, action["id"]),
+                )
+                self._record_operator_action_event(
+                    connection,
+                    request_id=action["id"],
+                    event_type=status,
+                    actor="command-worker",
+                    payload={
+                        "command_id": command_id,
+                        "error_code": error_code,
+                        "result": result,
+                    },
+                    created_at=(applied_at or datetime.now(timezone.utc)).isoformat(),
+                )
 
     def register_rule(self, rule: RuleCandidate, *, status: str = "queued") -> None:
         allowed = {"queued", "replay_passed", "challenger", "champion", "hall_of_fame", "rejected"}
