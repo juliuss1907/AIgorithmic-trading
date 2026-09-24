@@ -11,11 +11,12 @@
 - [x] Phase 6: dashboard vận hành, doctor và runbook.
 - [x] Phase 7a: Operator API, token scopes, action approval, audit và alert cursor.
 - [x] Phase 7b: Hermes `trading-ops` distribution, read tool, slash commands và cron scripts.
+- [x] Phase 8: global `aigt` deployment registry, Docker routing và safe setup.
 
 ## Sau khi build
 
 - [ ] Clone/cài repo lên VPS trước khi tích hợp Hermes.
-- [ ] Tạo Unix user và Telegram bot riêng, rồi cài profile `trading-ops` trên VPS.
+- [ ] Tạo Telegram bot riêng cho `trading-ops`; tách Unix user trước khi bật actions.
 - [ ] Chạy Hermes read-only 72 giờ; chỉ sau đó mới bật pause/resume.
 - [ ] Chạy paper soak liên tục 72 giờ.
 - [ ] Thu thập ít nhất 14 ngày và 1.000 numeric/compact pairs.

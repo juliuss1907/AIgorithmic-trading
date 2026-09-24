@@ -2,9 +2,9 @@
 
 ## Current state
 
-The AIGT-side Operator API and the installable Hermes distribution are built, but no Hermes profile,
-Telegram gateway, cron job, Unix user, or VPS service is installed by repository setup. This is
-intentional: the repository is not yet deployed to the target VPS.
+Hermes is an optional operator add-on. `aigt setup` always boots the AIGT core without Hermes;
+`aigt setup --with-hermes` additionally installs the read-only `trading-ops` profile. Setup never
+starts a Hermes gateway, configures Telegram, creates cron jobs, or enables actions.
 
 ## Trust boundaries
 
@@ -13,31 +13,33 @@ intentional: the repository is not yet deployed to the target VPS.
 - The model-visible tool can only call `snapshot` and `no-trade`.
 - Pause/resume are plugin slash commands and require a second `/trade_approve <request_id>` message.
 - Flatten, provider changes, rule activation, database access, and live execution are unavailable.
-- Use a dedicated Telegram bot and Unix user. Do not grant Docker socket, repo, SQLite, provider
-  secret, `.env.intraday`, or dashboard control-token access.
+- Use a dedicated Telegram bot. A shared Unix user is acceptable only for the initial read-only
+  soak because the profile exposes only `aigt-operator`; move it to a dedicated user before
+  enabling actions. Never expose Docker, SQLite, provider secrets or the dashboard control token
+  to the model.
 
 ## VPS prerequisites
 
-1. Clone and install AIGT on the VPS, then confirm the paper worker and web service are healthy.
-2. Install Hermes Agent `0.20.4` for the dedicated `hermes-trading` user.
-3. Create two different random tokens. Put them in AIGT as
-   `INTRADAY_OPERATOR_READ_TOKEN` and `INTRADAY_OPERATOR_ACTION_TOKEN`.
-4. Keep `INTRADAY_OPERATOR_ACTIONS_ENABLED=false` for the first 72 hours.
+1. Install global `aigt` from the clone with `uv tool install --editable .`.
+2. Run `aigt setup --with-hermes`; Docker/Compose are required, Hermes itself is optional.
+3. Confirm `aigt doctor`, `aigt status`, and `hermes -p trading-ops plugins doctor
+   aigt_operator --ci` pass.
+4. Keep `INTRADAY_OPERATOR_ACTIONS_ENABLED=false` and the Hermes action token empty.
 5. Configure a dedicated Telegram bot and allow only the owner's Telegram user/chat ID.
 
 ## Profile installation
 
-Run these commands only on the future VPS, as `hermes-trading`:
+Normal installation is one command from the repository root:
 
 ```bash
-hermes profile install ./integrations/hermes/trading-ops --name trading-ops --alias --yes
-trading-ops plugins doctor aigt_operator --ci
+aigt setup --with-hermes
 ```
 
-Populate the installed profile's `.env` with the loopback URL and tokens, mode `0600`. Configure the
-Telegram platform so the owner appears in both `allow_from` and `allow_admin_from`; set regular-user
-slash commands to the read-only `trade-status`, `trade-risk`, `trade-health`, `trade-experiment`,
-`trade-rules`, and `trade-cost` set.
+Setup creates the profile `.env` with the loopback URL and read credential at mode `0600`; the
+action credential remains empty. Configure Telegram separately so the owner appears in both
+`allow_from` and `allow_admin_from`; set regular-user slash commands to the read-only
+`trade-status`, `trade-risk`, `trade-health`, `trade-experiment`, `trade-rules`, and `trade-cost`
+set.
 
 Register cron after Telegram delivery works. `02:05 UTC` is `09:05 Asia/Ho_Chi_Minh` year-round:
 

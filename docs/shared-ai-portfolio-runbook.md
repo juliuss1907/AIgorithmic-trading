@@ -167,18 +167,23 @@ contains a different `decision_scope`.
 
 ## 7. Ubuntu VPS with Docker Compose
 
-Keep the dashboard on loopback and access it through SSH:
+Install the global CLI from the clone, then let it register and manage the Docker deployment:
 
 ```bash
-cp .env.example .env.intraday
-install -d -m 700 state/provider-secrets
-install -m 600 /dev/null state/provider-secrets/provider-secrets.toml
-docker compose --env-file .env.intraday -f deploy/intraday/compose.yaml up --build -d
+uv tool install --editable .
+uv tool update-shell
+aigt setup
+aigt doctor
 ssh -L 8081:127.0.0.1:8081 USER@VPS
 ```
 
+After setup, `aigt start`, `stop`, `restart`, `logs`, `status`, `doctor`, and `provider
+setup` work from any directory. `aigt setup --with-hermes` installs the optional read-only
+operator profile but never starts its gateway or cron jobs.
+
 The default `PORTFOLIO_WORKER_MODE=soak`. After a passing evaluation and manual activation,
-set it to `paper` and recreate only the worker:
+set it to `paper` and recreate only the worker. The raw Compose form below is retained for
+troubleshooting; routine service control uses `aigt restart`:
 
 ```bash
 docker compose --env-file .env.intraday -f deploy/intraday/compose.yaml \

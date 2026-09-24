@@ -22,11 +22,21 @@ Cài command global một lần từ repository:
 uv sync --frozen
 uv tool install --editable .
 uv tool update-shell
-aigt --version
+aigt setup                 # AIGT core, paper/soak
+# hoặc: aigt setup --with-hermes
 ```
 
-Sau khi mở terminal mới, `aigt` dùng được ở mọi thư mục. `python -m intraday` vẫn được
+Sau khi mở terminal mới, `aigt` dùng được ở mọi thư mục. `setup` ghi deployment Docker
+vào XDG config nên các lệnh sau tự tìm đúng Compose project, SQLite volume và provider
+secret mount; không cần lặp lại tiền tố `docker compose`. `python -m intraday` vẫn được
 giữ làm đường tương thích/debug trong project environment.
+
+```bash
+aigt start
+aigt stop
+aigt restart
+aigt logs
+```
 
 Kiểm tra cấu hình và trạng thái:
 
@@ -83,10 +93,14 @@ các launch gate intraday cũ nằm ở
 credential/activation nằm trong
 [docs/intraday-provider-runbook.md](docs/intraday-provider-runbook.md).
 
-Triển khai Docker cần tạo `.env.intraday` từ `.env.example`, thay control token, rồi:
+`aigt setup` tự tạo `.env.intraday` mode `0600`, sinh control/read token, giữ action
+token rỗng, validate Compose và khởi động worker + web. Docker Engine và Compose v2 là
+prerequisite; Hermes chỉ là add-on tùy chọn.
 
 ```bash
-docker compose --env-file .env.intraday -f deploy/intraday/compose.yaml up --build -d
+aigt setup
+aigt doctor
+aigt status
 ```
 
 Port dashboard chỉ publish trên loopback. Worker mặc định chạy `soak`; chuyển
@@ -122,23 +136,12 @@ Jev lỗi/timeout/circuit-open luôn thành `Hold`; hard-risk exit vẫn chạy.
 thesis/champion hợp lệ gần nhất. Dashboard tại `/api/providers` và `/api/analysts` chỉ
 trả metadata đã che; mutation cần Bearer control token và `Idempotency-Key`.
 
-Với Docker, tạo file trước để bind mount không biến nó thành directory:
+Khi deployment Docker đã được đăng ký, cùng lệnh global `aigt provider setup` tự mở
+wizard trong service `admin`. Service này mount secret read-write; `worker` chỉ đọc và
+`web` không mount secret. Truyền `--database` rõ ràng vẫn giữ đường native cho nghiên
+cứu/debug ngoài deployment đã đăng ký.
 
-```bash
-install -d -m 700 state/provider-secrets
-install -m 600 /dev/null state/provider-secrets/provider-secrets.toml
-docker compose --env-file .env.intraday -f deploy/intraday/compose.yaml \
-  --profile admin run --rm admin \
-  provider add jev-openrouter --role jev --kind openrouter-decisions \
-  --model typesafe/jev-1.13 --database /app/state/intraday/intraday.sqlite3 \
-  --secrets-file /run/provider-secrets/provider-secrets.toml
-```
-
-Service `admin` mount secret read-write để quản lý profile; `worker` mount read-only;
-`web` không mount file này. Sau khi thêm profile, chạy `provider test` rồi `provider
-activate` bằng cùng mẫu `docker compose ... run --rm admin`.
-
-### Hermes trading operator — chuẩn bị sẵn, chưa cài
+### Hermes trading operator — add-on tùy chọn
 
 AIGT có Operator API v1 tại `/api/operator/v1/*` và một Hermes distribution trong
 `integrations/hermes/trading-ops/`. Hermes giữ vai trò giám sát/điều hành qua Telegram;
@@ -148,8 +151,9 @@ Hai token read/action phải khác nhau. `INTRADAY_OPERATOR_ACTIONS_ENABLED=fals
 định, nên chỉ các projection status/no-trade/alerts hoạt động trong giai đoạn soak. Hermes
 không được đọc database, repo, provider secret hoặc dashboard control token.
 
-Distribution hiện chỉ được lưu và kiểm thử trong repo; chưa được cài vào Hermes hay VPS.
-Khi repo đã có trên VPS, làm theo
+`aigt setup --with-hermes` cài/cập nhật profile `trading-ops`, chuyển duy nhất read token
+và chạy plugin doctor. Thiếu Hermes không làm AIGT setup thất bại; setup không start
+gateway, Telegram hoặc cron. Khi cần hoàn thiện Telegram, làm theo
 [runbook Hermes trading operator](docs/runbooks/hermes-trading-ops.md).
 
 News worker hiện allowlist RSS của SEC, CFTC, Fed, CoinDesk, Decrypt và Cointelegraph.
