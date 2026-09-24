@@ -121,6 +121,9 @@ def _parser() -> argparse.ArgumentParser:
     commands.choices["cross-venue-evaluate"].add_argument("--evidence", required=True)
     serve = commands.add_parser("serve")
     serve.add_argument("--database", default=None)
+    setup = commands.add_parser("setup")
+    setup.add_argument("--project-root", type=Path, default=Path.cwd())
+    setup.add_argument("--with-hermes", action="store_true")
     for name in ("start", "stop", "restart"):
         commands.add_parser(name)
     logs = commands.add_parser("logs")
@@ -1065,6 +1068,16 @@ def main() -> None:
     arguments = parser.parse_args()
     if arguments.command is None:
         parser.print_help()
+        return
+    if arguments.command == "setup":
+        try:
+            result = deployment_cli.bootstrap(
+                arguments.project_root,
+                with_hermes=arguments.with_hermes,
+            )
+        except (ValueError, PermissionError, RuntimeError) as error:
+            raise SystemExit(str(error)) from error
+        print(json.dumps(result, indent=2))
         return
     raw_arguments = sys.argv[1:]
     if arguments.command in {"start", "stop", "restart", "logs"}:

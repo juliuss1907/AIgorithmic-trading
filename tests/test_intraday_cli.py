@@ -57,6 +57,7 @@ def test_bare_aigt_prints_help_and_exits_successfully(monkeypatch, capsys):
     assert "stop" in output
     assert "restart" in output
     assert "logs" in output
+    assert "setup" in output
 
 
 def test_global_aigt_routes_doctor_to_registered_docker_deployment(
@@ -85,6 +86,30 @@ def test_global_aigt_routes_doctor_to_registered_docker_deployment(
     assert calls == [
         (deployment_module.admin_command(registered, ["doctor"]), root)
     ]
+
+
+def test_aigt_setup_bootstraps_and_registers_the_selected_project(
+    monkeypatch, capsys, tmp_path
+):
+    from intraday import deployment as deployment_module
+
+    calls = []
+    expected = {"status": "ok", "project_root": str(tmp_path)}
+    monkeypatch.setattr(
+        deployment_module,
+        "bootstrap",
+        lambda root, *, with_hermes: calls.append((root, with_hermes)) or expected,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["aigt", "setup", "--project-root", str(tmp_path), "--with-hermes"],
+    )
+
+    main()
+
+    assert calls == [(tmp_path, True)]
+    assert json.loads(capsys.readouterr().out) == expected
 
 
 def test_explicit_database_keeps_doctor_in_native_mode(monkeypatch, capsys, tmp_path):
