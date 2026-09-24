@@ -21,6 +21,7 @@ from intraday.provider_client import (
     ProviderPreflightClient,
 )
 from intraday.__main__ import main
+from intraday.provider_connect import _choose_option, _masked_api_key
 from intraday.runtime import process_pending_commands
 
 
@@ -268,51 +269,317 @@ def test_provider_cli_add_and_list_redacts_api_key(monkeypatch, capsys, tmp_path
     assert json.loads(listed_output)[0]["has_secret"] is True
 
 
-def test_provider_setup_wizard_tests_and_activates_typesafe_profile(
+def test_connect_jev_openrouter_tests_and_activates_generated_profile(
     monkeypatch, capsys, tmp_path
 ):
     database = tmp_path / "intraday.sqlite"
     secrets_file = tmp_path / "providers.toml"
-    answers = iter(["jev", "typesafe-systemone", "jev-native", "jev-latest"])
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
-    monkeypatch.setattr(sys, "stdin", io.StringIO("native-private-key\n"))
+    prompts = []
+
+    def answer(prompt):
+        prompts.append(prompt)
+        return ""
+
+    monkeypatch.setattr("builtins.input", answer)
+    monkeypatch.setattr(
+        "intraday.provider_connect._masked_api_key",
+        lambda prompt: prompts.append(prompt) or "openrouter-private-key",
+        raising=False,
+    )
 
     class SuccessfulPreflight:
         def test(self, credential):
             from intraday.provider_client import ProviderPreflightResult
 
-            assert credential.profile.kind == ProviderKind.TYPESAFE_SYSTEMONE
-            assert credential.api_key == "native-private-key"
+            assert credential.profile.role == ProviderRole.JEV
+            assert credential.profile.kind == ProviderKind.OPENROUTER_DECISIONS
+            assert credential.profile.base_url == (
+                "https://openrouter.ai/api/alpha/decisions"
+            )
+            assert credential.profile.model == "typesafe/jev-1.13"
+            assert credential.api_key == "openrouter-private-key"
             return ProviderPreflightResult(status="ok", latency_ms=17)
 
     monkeypatch.setattr(
-        "intraday.__main__.ProviderPreflightClient", SuccessfulPreflight
+        "intraday.provider_connect.ProviderPreflightClient", SuccessfulPreflight
     )
     monkeypatch.setattr(
         sys,
         "argv",
         [
-            "intraday", "provider", "setup",
+            "intraday", "connect", "jev", "openrouter",
             "--database", str(database),
             "--secrets-file", str(secrets_file),
-            "--api-key-stdin",
         ],
     )
 
     main()
 
     output = json.loads(capsys.readouterr().out)
-    assert output == {
-        "profile_id": "jev-native",
+    assert output["profile_id"].startswith("jev-openrouter-")
+    assert output | {"profile_id": output["profile_id"]} == {
+        "profile_id": output["profile_id"],
         "role": "jev",
-        "kind": "typesafe-systemone",
+        "kind": "openrouter-decisions",
         "status": "ok",
         "latency_ms": 17,
         "active": True,
     }
-    assert "native-private-key" not in str(output)
+    assert "openrouter-private-key" not in str(output)
+    assert prompts == [
+        "Provider API key: ",
+        "Model ID [typesafe/jev-1.13]: ",
+    ]
     assignment = IntradayStore(database).provider_assignment(ProviderRole.JEV)
-    assert assignment["profile_id"] == "jev-native"
+    assert assignment["profile_id"] == output["profile_id"]
+
+
+def test_connect_jev_custom_prompts_for_systemone_endpoint(monkeypatch, capsys, tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    secrets_file = tmp_path / "providers.toml"
+    answers = iter(["https://jev.example.com/v1/systemone", "custom-jev-v2"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr(
+        "intraday.provider_connect._masked_api_key",
+        lambda _prompt: "custom-private-key",
+        raising=False,
+    )
+
+    class SuccessfulPreflight:
+        def test(self, credential):
+            from intraday.provider_client import ProviderPreflightResult
+
+            assert credential.profile.kind == ProviderKind.SYSTEMONE_COMPATIBLE
+            assert credential.profile.base_url == "https://jev.example.com/v1/systemone"
+            assert credential.profile.model == "custom-jev-v2"
+            return ProviderPreflightResult(status="ok", latency_ms=23)
+
+    monkeypatch.setattr(
+        "intraday.provider_connect.ProviderPreflightClient", SuccessfulPreflight
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "intraday", "connect", "jev", "custom-provider",
+            "--database", str(database),
+            "--secrets-file", str(secrets_file),
+        ],
+    )
+
+    main()
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["kind"] == "systemone-compatible"
+    assert output["active"] is True
+
+
+def test_connect_jev_menu_defaults_and_selects_typesafe(monkeypatch, capsys, tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    secrets_file = tmp_path / "providers.toml"
+    answers = iter(["2", ""])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr(
+        "intraday.provider_connect._masked_api_key", lambda _prompt: "typesafe-private-key"
+    )
+
+    class SuccessfulPreflight:
+        def test(self, credential):
+            from intraday.provider_client import ProviderPreflightResult
+
+            assert credential.profile.kind == ProviderKind.TYPESAFE_SYSTEMONE
+            assert credential.profile.model == "jev-latest"
+            return ProviderPreflightResult(status="ok", latency_ms=11)
+
+    monkeypatch.setattr(
+        "intraday.provider_connect.ProviderPreflightClient", SuccessfulPreflight
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "intraday", "connect", "jev",
+            "--database", str(database),
+            "--secrets-file", str(secrets_file),
+        ],
+    )
+
+    main()
+
+    output = capsys.readouterr().out
+    assert "Choose Jev provider:" in output
+    assert '"kind": "typesafe-systemone"' in output
+
+
+def test_masked_api_key_uses_star_password_prompt(monkeypatch):
+    calls = []
+
+    def fake_prompt(message, **options):
+        calls.append((message, options))
+        return "private-key"
+
+    monkeypatch.setattr("intraday.provider_connect.toolkit_prompt", fake_prompt)
+
+    assert _masked_api_key("Provider API key: ") == "private-key"
+    assert calls[0][0] == "Provider API key: "
+    assert calls[0][1]["is_password"] is True
+
+
+@pytest.mark.parametrize("selection", ["0", "-1", "4", "not-a-number"])
+def test_connect_menu_rejects_out_of_range_selection(selection, monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _prompt: selection)
+
+    with pytest.raises(SystemExit, match="invalid provider selection"):
+        _choose_option(ProviderRole.JEV)
+
+
+@pytest.mark.parametrize(
+    ("option", "url", "expected_kind"),
+    [
+        (
+            "anthropic-compatible",
+            "https://models.example.com/v1/messages",
+            ProviderKind.ANTHROPIC_COMPATIBLE,
+        ),
+        (
+            "openai-compatible",
+            "https://models.example.com/v1/chat/completions",
+            ProviderKind.OPENAI_COMPATIBLE,
+        ),
+    ],
+)
+def test_connect_llm_selects_compatible_wire_protocol(
+    option, url, expected_kind, monkeypatch, capsys, tmp_path
+):
+    database = tmp_path / f"{option}.sqlite"
+    secrets_file = tmp_path / f"{option}.toml"
+    answers = iter([url, "model-v1"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr(
+        "intraday.provider_connect._masked_api_key",
+        lambda _prompt: "llm-private-key",
+        raising=False,
+    )
+
+    class SuccessfulPreflight:
+        def test(self, credential):
+            from intraday.provider_client import ProviderPreflightResult
+
+            assert credential.profile.role == ProviderRole.LLM
+            assert credential.profile.kind == expected_kind
+            expected_url = (
+                "https://models.example.com/v1"
+                if option == "openai-compatible"
+                else url
+            )
+            assert credential.profile.base_url == expected_url
+            return ProviderPreflightResult(status="ok", latency_ms=31)
+
+    monkeypatch.setattr(
+        "intraday.provider_connect.ProviderPreflightClient", SuccessfulPreflight
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "intraday", "connect", "llm", option,
+            "--database", str(database),
+            "--secrets-file", str(secrets_file),
+        ],
+    )
+
+    main()
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["kind"] == expected_kind.value
+    assert output["active"] is True
+
+
+def test_connect_failure_does_not_persist_or_replace_active_provider(
+    monkeypatch, capsys, tmp_path
+):
+    database = tmp_path / "intraday.sqlite"
+    secrets_file = tmp_path / "providers.toml"
+    store = IntradayStore(database)
+    current = profile()
+    ProviderSecretStore(secrets_file).upsert(current, "existing-private-key")
+    store.sync_provider_profile(current)
+    store.record_provider_test(
+        current.profile_id, status="ok", tested_at=NOW, latency_ms=10
+    )
+    store.activate_provider(
+        ProviderRole.JEV, current.profile_id, actor="test", now=NOW
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+    monkeypatch.setattr(
+        "intraday.provider_connect._masked_api_key",
+        lambda _prompt: "rejected-private-key",
+        raising=False,
+    )
+
+    class FailedPreflight:
+        def test(self, _credential):
+            from intraday.provider_client import ProviderPreflightResult
+
+            return ProviderPreflightResult(
+                status="error", latency_ms=19, error_code="auth_failed"
+            )
+
+    monkeypatch.setattr(
+        "intraday.provider_connect.ProviderPreflightClient", FailedPreflight
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "intraday", "connect", "jev", "openrouter",
+            "--database", str(database),
+            "--secrets-file", str(secrets_file),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        main()
+
+    assert exit_info.value.code == 1
+    output = capsys.readouterr().out
+    assert json.loads(output)["error_code"] == "auth_failed"
+    assert "rejected-private-key" not in output
+    assert [item.profile_id for item in ProviderSecretStore(secrets_file).list_profiles()] == [
+        current.profile_id
+    ]
+    assert store.provider_assignment(ProviderRole.JEV)["profile_id"] == current.profile_id
+
+
+def test_connect_rejects_insecure_custom_url_before_preflight(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda prompt: {
+            "Provider URL: ": "http://jev.example.com/v1/systemone",
+            "Model ID: ": "custom-jev",
+        }[prompt],
+    )
+    monkeypatch.setattr(
+        "intraday.provider_connect._masked_api_key", lambda _prompt: "private-key"
+    )
+    monkeypatch.setattr(
+        "intraday.provider_connect.ProviderPreflightClient",
+        lambda: pytest.fail("invalid URL must not reach preflight"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "intraday", "connect", "jev", "custom-provider",
+            "--database", str(tmp_path / "intraday.sqlite"),
+            "--secrets-file", str(tmp_path / "providers.toml"),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="HTTPS"):
+        main()
 
 
 def test_jev_preflight_uses_decisions_wire_contract_without_leaking_key():
@@ -403,6 +670,39 @@ def test_typesafe_native_preflight_uses_systemone_wire_contract():
     assert payload["questions"]["reachable"]["type"] == "noul"
 
 
+def test_systemone_compatible_preflight_uses_custom_endpoint():
+    requests = []
+
+    def transport(**request):
+        requests.append(request)
+        return HttpResponse(
+            status_code=200,
+            headers={},
+            body=b'{"answers":{"reachable":{"noul":1.0}}}',
+        )
+
+    from intraday.provider_profiles import ProviderCredential
+
+    current = ProviderProfile.create(
+        profile_id="jev-custom",
+        role=ProviderRole.JEV,
+        kind=ProviderKind.SYSTEMONE_COMPATIBLE,
+        base_url="https://jev.example.com/v1/systemone",
+        model="custom-jev-v2",
+        credential_version="credential-v1",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+    result = ProviderPreflightClient(transport=transport).test(
+        ProviderCredential(current, "custom-private")
+    )
+
+    assert result.status == "ok"
+    assert requests[0]["url"] == "https://jev.example.com/v1/systemone"
+    assert json.loads(requests[0]["body"])["model"] == "custom-jev-v2"
+
+
 def test_anthropic_preflight_uses_messages_wire_contract():
     requests = []
 
@@ -446,8 +746,12 @@ def test_anthropic_preflight_uses_messages_wire_contract():
     [
         (ProviderRole.LLM, ProviderKind.TYPESAFE_SYSTEMONE,
          "https://api.typesafe.ai/v1/systemone"),
+        (ProviderRole.LLM, ProviderKind.SYSTEMONE_COMPATIBLE,
+         "https://jev.example.com/v1/systemone"),
         (ProviderRole.JEV, ProviderKind.ANTHROPIC_MESSAGES,
          "https://api.anthropic.com/v1/messages"),
+        (ProviderRole.JEV, ProviderKind.ANTHROPIC_COMPATIBLE,
+         "https://models.example.com/v1/messages"),
         (ProviderRole.JEV, ProviderKind.OPENAI_COMPATIBLE,
          "https://api.example.com/v1"),
     ],

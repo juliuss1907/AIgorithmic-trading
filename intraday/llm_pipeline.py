@@ -230,7 +230,10 @@ class StructuredLLMClient:
     ) -> T:
         input_text = json.dumps(input_payload, sort_keys=True, separators=(",", ":"))
         schema = self._strict_schema(response_model)
-        if self.credential.profile.kind == ProviderKind.ANTHROPIC_MESSAGES:
+        if self.credential.profile.kind in {
+            ProviderKind.ANTHROPIC_MESSAGES,
+            ProviderKind.ANTHROPIC_COMPATIBLE,
+        }:
             request_url = self.credential.profile.base_url
             request_headers = {
                 "x-api-key": self.credential.api_key,
@@ -290,7 +293,10 @@ class StructuredLLMClient:
             if len(response.body) > 2_000_000:
                 raise StructuredLLMError("invalid_response")
             response_payload = json.loads(response.body)
-            if self.credential.profile.kind == ProviderKind.ANTHROPIC_MESSAGES:
+            if self.credential.profile.kind in {
+                ProviderKind.ANTHROPIC_MESSAGES,
+                ProviderKind.ANTHROPIC_COMPATIBLE,
+            }:
                 content = next(
                     item["text"]
                     for item in response_payload["content"]

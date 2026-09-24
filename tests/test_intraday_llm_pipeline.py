@@ -1,6 +1,8 @@
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from intraday.contracts import (
     AnalysisAssessment,
     AnalystReport,
@@ -127,7 +129,16 @@ def test_structured_llm_client_uses_strict_json_schema_and_audits_call(tmp_path)
     assert "private-llm-key" not in call.model_dump_json()
 
 
-def test_structured_llm_client_supports_anthropic_messages(tmp_path):
+@pytest.mark.parametrize(
+    ("kind", "base_url"),
+    [
+        (ProviderKind.ANTHROPIC_MESSAGES, "https://api.anthropic.com/v1/messages"),
+        (ProviderKind.ANTHROPIC_COMPATIBLE, "https://models.example.com/v1/messages"),
+    ],
+)
+def test_structured_llm_client_supports_anthropic_messages(
+    kind, base_url, tmp_path
+):
     requests = []
 
     def transport(**request):
@@ -144,8 +155,8 @@ def test_structured_llm_client_supports_anthropic_messages(tmp_path):
     current = ProviderProfile.create(
         profile_id="llm-anthropic",
         role=ProviderRole.LLM,
-        kind=ProviderKind.ANTHROPIC_MESSAGES,
-        base_url="https://api.anthropic.com/v1/messages",
+        kind=kind,
+        base_url=base_url,
         model="claude-sonnet-4-5",
         credential_version="credential-v1",
         created_at=NOW,
@@ -168,7 +179,7 @@ def test_structured_llm_client_supports_anthropic_messages(tmp_path):
 
     assert result.stance == "bullish"
     request = requests[0]
-    assert request["url"] == "https://api.anthropic.com/v1/messages"
+    assert request["url"] == base_url
     assert request["headers"]["x-api-key"] == "anthropic-private"
     assert request["headers"]["anthropic-version"] == "2023-06-01"
     body = json.loads(request["body"])

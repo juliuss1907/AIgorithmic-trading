@@ -50,6 +50,7 @@ def test_bare_aigt_prints_help_and_exits_successfully(monkeypatch, capsys):
 
     output = capsys.readouterr().out
     assert output.startswith("usage: aigt")
+    assert "connect" in output
     assert "provider" in output
     assert "migrate-state" in output
     assert "journal" in output
@@ -58,6 +59,49 @@ def test_bare_aigt_prints_help_and_exits_successfully(monkeypatch, capsys):
     assert "restart" in output
     assert "logs" in output
     assert "setup" in output
+
+
+def test_provider_setup_command_has_been_removed(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["aigt", "provider", "setup"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        main()
+
+    assert exit_info.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_global_aigt_routes_connect_to_registered_docker_deployment(
+    monkeypatch, tmp_path
+):
+    from intraday import deployment as deployment_module
+
+    root = tmp_path / "checkout"
+    (root / "deploy" / "intraday").mkdir(parents=True)
+    (root / "deploy" / "intraday" / "compose.yaml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
+    (root / ".env.intraday").write_text("INTRADAY_MODE=paper\n", encoding="utf-8")
+    registered = deployment_module.Deployment.for_project(root)
+    calls = []
+    monkeypatch.setattr(deployment_module, "load_deployment", lambda: registered)
+    monkeypatch.setattr(
+        deployment_module,
+        "execute",
+        lambda command, *, cwd: calls.append((command, cwd)) or 0,
+    )
+    monkeypatch.setattr(sys, "argv", ["aigt", "connect", "jev", "openrouter"])
+
+    main()
+
+    assert calls == [
+        (
+            deployment_module.admin_command(
+                registered, ["connect", "jev", "openrouter"]
+            ),
+            root,
+        )
+    ]
 
 
 def test_global_aigt_routes_doctor_to_registered_docker_deployment(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import getpass
 import json
 import os
 import secrets
@@ -58,6 +57,7 @@ from intraday.market import BinanceUsdMClient, MultiCadenceMarketCache, StaleMar
 from intraday.notifications import TelegramNotifier, drain_outbox
 from intraday.outcomes import evaluate_pending_outcomes
 from intraday.provider_client import ProviderPreflightClient
+from intraday.provider_connect import _masked_api_key, connect_provider
 from intraday.provider_profiles import ProviderSecretStore
 from intraday.providers import AssignedDecisionProvider, StubDecisionProvider
 from intraday.portfolio_coordinator import (
@@ -147,10 +147,6 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--model", required=True)
     add.add_argument("--api-key-stdin", action="store_true")
     add.add_argument("--replace", action="store_true")
-    setup = provider_commands.add_parser("setup")
-    setup.add_argument("--database", default=None)
-    setup.add_argument("--secrets-file", default=None)
-    setup.add_argument("--api-key-stdin", action="store_true")
     activate = provider_commands.add_parser("activate")
     activate.add_argument("role", choices=[item.value for item in ProviderRole])
     activate.add_argument("profile_id")
@@ -160,6 +156,24 @@ def _parser() -> argparse.ArgumentParser:
     deactivate.add_argument("role", choices=[item.value for item in ProviderRole])
     deactivate.add_argument("--database", default=None)
     deactivate.add_argument("--secrets-file", default=None)
+    connect = commands.add_parser("connect")
+    connect_roles = connect.add_subparsers(dest="connect_role", required=True)
+    connect_jev = connect_roles.add_parser("jev")
+    connect_jev.add_argument(
+        "provider_option",
+        nargs="?",
+        choices=("openrouter", "typesafe", "custom-provider"),
+    )
+    connect_llm = connect_roles.add_parser("llm")
+    connect_llm.add_argument(
+        "provider_option",
+        nargs="?",
+        choices=("anthropic-compatible", "openai-compatible"),
+    )
+    for command in (connect_jev, connect_llm):
+        command.add_argument("--database", default=None)
+        command.add_argument("--secrets-file", default=None)
+        command.add_argument("--api-key-stdin", action="store_true")
     portfolio = commands.add_parser("portfolio")
     portfolio_commands = portfolio.add_subparsers(
         dest="portfolio_command", required=True
@@ -238,98 +252,6 @@ def _provider_cli(arguments) -> None:
     store = IntradayStore(database)
     command = arguments.provider_command
 
-    if command == "setup":
-        try:
-            role = ProviderRole(input("Role [jev/llm]: ").strip().lower())
-        except ValueError as error:
-            raise SystemExit("role must be jev or llm") from error
-        allowed = {
-            ProviderRole.JEV: (
-                ProviderKind.TYPESAFE_SYSTEMONE,
-                ProviderKind.OPENROUTER_DECISIONS,
-            ),
-            ProviderRole.LLM: (
-                ProviderKind.OPENAI_COMPATIBLE,
-                ProviderKind.ANTHROPIC_MESSAGES,
-            ),
-        }[role]
-        default_kind = allowed[0]
-        kind_value = input(
-            f"Protocol [{'/'.join(item.value for item in allowed)}] "
-            f"(default {default_kind.value}): "
-        ).strip() or default_kind.value
-        try:
-            kind = ProviderKind(kind_value)
-        except ValueError as error:
-            raise SystemExit("unsupported provider protocol") from error
-        if kind not in allowed:
-            raise SystemExit(f"{kind.value} cannot be used for the {role.value} role")
-        profile_id = input("Profile id: ").strip()
-        model_default = "jev-latest" if kind == ProviderKind.TYPESAFE_SYSTEMONE else ""
-        model = input(
-            f"Model{f' (default {model_default})' if model_default else ''}: "
-        ).strip() or model_default
-        if not model:
-            raise SystemExit("model is required")
-        endpoints = {
-            ProviderKind.TYPESAFE_SYSTEMONE: "https://api.typesafe.ai/v1/systemone",
-            ProviderKind.OPENROUTER_DECISIONS: "https://openrouter.ai/api/alpha/decisions",
-            ProviderKind.ANTHROPIC_MESSAGES: "https://api.anthropic.com/v1/messages",
-        }
-        base_url = endpoints.get(kind)
-        if base_url is None:
-            base_url = input(
-                "OpenAI-compatible base URL "
-                "(for example https://api.openai.com/v1): "
-            ).strip()
-        if arguments.api_key_stdin:
-            api_key = sys.stdin.readline().rstrip("\r\n")
-        else:
-            api_key = getpass.getpass("Provider API key: ")
-        now = datetime.now(timezone.utc)
-        if store.provider_profile(profile_id) is not None:
-            raise SystemExit("provider profile already exists")
-        profile = ProviderProfile.create(
-            profile_id=profile_id,
-            role=role,
-            kind=kind,
-            base_url=base_url,
-            model=model,
-            credential_version=secrets.token_hex(16),
-            created_at=now,
-            updated_at=now,
-        )
-        secret_store.upsert(profile, api_key, replace=False)
-        store.sync_provider_profile(profile)
-        result = ProviderPreflightClient().test(secret_store.get(profile_id))
-        store.record_provider_test(
-            profile_id,
-            status=result.status,
-            tested_at=now,
-            latency_ms=result.latency_ms,
-            error_code=result.error_code,
-        )
-        active = False
-        if result.status == "ok":
-            store.activate_provider(role, profile_id, actor="cli", now=now)
-            active = True
-        print(
-            json.dumps(
-                {
-                    "profile_id": profile_id,
-                    "role": role.value,
-                    "kind": kind.value,
-                    "status": result.status,
-                    "latency_ms": result.latency_ms,
-                    "active": active,
-                },
-                indent=2,
-            )
-        )
-        if not active:
-            raise SystemExit(1)
-        return
-
     if command == "add":
         kind = ProviderKind(arguments.kind)
         role = ProviderRole(arguments.role)
@@ -345,7 +267,7 @@ def _provider_cli(arguments) -> None:
         if arguments.api_key_stdin:
             api_key = sys.stdin.readline().rstrip("\r\n")
         else:
-            api_key = getpass.getpass("Provider API key: ")
+            api_key = _masked_api_key("Provider API key: ")
         now = datetime.now(timezone.utc)
         existing = store.provider_profile(arguments.profile_id)
         if existing is not None and not arguments.replace:
@@ -1097,7 +1019,7 @@ def main() -> None:
     explicit_native_paths = any(
         item in raw_arguments for item in ("--database", "--secrets-file")
     )
-    if arguments.command in {"doctor", "status", "provider"} and not explicit_native_paths:
+    if arguments.command in {"doctor", "status", "provider", "connect"} and not explicit_native_paths:
         deployment = deployment_cli.load_deployment()
         if deployment is not None:
             code = deployment_cli.execute(
@@ -1112,6 +1034,13 @@ def main() -> None:
         return
     if arguments.command == "provider":
         _provider_cli(arguments)
+        return
+    if arguments.command == "connect":
+        connect_provider(
+            arguments,
+            database=resolve_database_path(arguments.database),
+            secrets_file=Path(arguments.secrets_file or _default_secrets_file()),
+        )
         return
     if arguments.command == "journal":
         _journal_cli(arguments)

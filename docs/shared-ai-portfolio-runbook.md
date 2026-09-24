@@ -11,23 +11,24 @@ point these commands at its SQLite database or replace its timer.
 
 ## 1. Configure providers locally
 
-Run the wizard twice. API keys are entered through a hidden prompt and are stored only in a
-mode-0600 TOML file outside SQLite and Git.
+Run the two connection wizards. Each typed API-key character is shown as `*`; the key is
+stored only in a mode-0600 TOML file outside SQLite and Git.
 
 ```bash
-aigt provider setup
-# jev -> typesafe-systemone -> model jev-latest
+aigt connect jev
+# OpenRouter / TypeSafe / custom System One-compatible provider
 
-aigt provider setup
-# llm -> openai-compatible or anthropic-messages
+aigt connect llm
+# Anthropic-compatible / OpenAI-compatible provider
 
 aigt provider list
 aigt doctor
 ```
 
-The role matrix is enforced: TypeSafe/OpenRouter can only fill the Jev role;
-OpenAI-compatible/Anthropic Messages can only fill the LLM role. `setup` runs a paid minimal
-preflight and activates the profile only when it succeeds.
+The command fixes the role before provider selection, so Jev and LLM protocols cannot be
+mixed. `connect` runs a paid minimal preflight and activates the generated profile only
+when it succeeds. A failed preflight is not persisted and does not replace the active
+provider.
 
 ## 2. Verify configuration and cadence health
 

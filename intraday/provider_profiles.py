@@ -18,6 +18,14 @@ from pathlib import Path
 from intraday.contracts import ProviderProfile
 
 
+def validate_provider_api_key(api_key: str) -> str:
+    if not api_key or api_key != api_key.strip():
+        raise ValueError("provider API key must be nonempty without surrounding whitespace")
+    if len(api_key) > 4096 or any(character in api_key for character in "\r\n\0"):
+        raise ValueError("provider API key contains invalid characters")
+    return api_key
+
+
 @dataclass(frozen=True)
 class ProviderCredential:
     profile: ProviderProfile
@@ -126,14 +134,6 @@ class ProviderSecretStore:
                 pass
             raise
 
-    @staticmethod
-    def _validate_api_key(api_key: str) -> str:
-        if not api_key or api_key != api_key.strip():
-            raise ValueError("provider API key must be nonempty without surrounding whitespace")
-        if len(api_key) > 4096 or any(character in api_key for character in "\r\n\0"):
-            raise ValueError("provider API key contains invalid characters")
-        return api_key
-
     def upsert(
         self,
         profile: ProviderProfile,
@@ -146,7 +146,7 @@ class ProviderSecretStore:
             raise ValueError("provider profile already exists; pass --replace to update it")
         credentials[profile.profile_id] = ProviderCredential(
             profile=profile,
-            api_key=self._validate_api_key(api_key),
+            api_key=validate_provider_api_key(api_key),
         )
         self._write_all(credentials)
 

@@ -121,23 +121,25 @@ aigt cross-venue-evaluate \
 ### Kết nối Jev và LLM qua CLI
 
 Secret được lưu trong TOML ngoài Git/SQLite, phải thuộc current user và có mode `0600`.
-Không có tham số `--api-key`; nhập ẩn tại prompt hoặc pipe qua stdin có chủ đích:
+Không có tham số `--api-key`; mỗi ký tự nhập vào được hiển thị thành `*`, hoặc có thể pipe
+qua stdin có chủ đích:
 
 ```bash
-aigt provider setup  # jev: typesafe-systemone or openrouter-decisions
-aigt provider setup  # llm: openai-compatible or anthropic-messages
+aigt connect jev  # OpenRouter / TypeSafe / custom System One-compatible
+aigt connect llm  # Anthropic-compatible / OpenAI-compatible
 aigt provider list
 ```
 
-Wizard thực hiện một request nhỏ có tính phí rồi activate khi preflight thành công.
+Wizard thực hiện một request nhỏ có tính phí trước khi lưu, rồi activate khi preflight
+thành công. Kết nối lỗi không được lưu và không thay provider đang active.
 Các lệnh `add/test/activate/deactivate` chi tiết vẫn được giữ cho automation. Assignment
 mới được worker đọc ở tick 5 giây kế tiếp.
 Jev lỗi/timeout/circuit-open luôn thành `Hold`; hard-risk exit vẫn chạy. LLM lỗi giữ
 thesis/champion hợp lệ gần nhất. Dashboard tại `/api/providers` và `/api/analysts` chỉ
 trả metadata đã che; mutation cần Bearer control token và `Idempotency-Key`.
 
-Khi deployment Docker đã được đăng ký, cùng lệnh global `aigt provider setup` tự mở
-wizard trong service `admin`. Service này mount secret read-write; `worker` chỉ đọc và
+Khi deployment Docker đã được đăng ký, các lệnh global `aigt connect jev` và
+`aigt connect llm` tự mở wizard trong service `admin`. Service này mount secret read-write; `worker` chỉ đọc và
 `web` không mount secret. Truyền `--database` rõ ràng vẫn giữ đường native cho nghiên
 cứu/debug ngoài deployment đã đăng ký.
 

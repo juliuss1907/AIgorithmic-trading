@@ -33,19 +33,25 @@ aigt migrate-state --from state/intraday/intraday.sqlite3
 The migration never removes its source and refuses to overwrite an existing target.
 Stop the old worker before migrating, then use `aigt` for subsequent runs.
 
-Use the hidden prompt for normal interactive setup:
+Use the interactive connection commands for normal setup. The API-key prompt displays
+one `*` per typed character while keeping the key out of logs and shell history:
 
 ```bash
-aigt provider add jev-openrouter \
-  --role jev --kind openrouter-decisions --model typesafe/jev-1.13
+aigt connect jev
+# OpenRouter / TypeSafe / custom System One-compatible provider
 
-aigt provider add llm-main \
-  --role llm --kind openai-compatible \
-  --base-url https://api.openai.com/v1 --model YOUR_MODEL
+aigt connect llm
+# Anthropic-compatible / OpenAI-compatible provider
 ```
 
+The Jev OpenRouter and TypeSafe choices supply their official endpoints and suggested
+models. Custom Jev, Anthropic-compatible, and OpenAI-compatible choices ask for the
+provider URL and model ID. A minimal paid preflight runs before anything is saved; a
+failed connection leaves the current active provider unchanged.
+
 For automation, `--api-key-stdin` reads exactly one line. Do not put a key in a command
-argument, `.env`, shell history, issue, or log.
+argument, `.env`, shell history, issue, or log. The advanced `provider add`, `test`, and
+`activate` commands remain available for non-interactive workflows.
 
 Each profile must pass a live preflight before activation:
 

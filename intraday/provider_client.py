@@ -80,6 +80,7 @@ class ProviderPreflightClient:
         if profile.kind in {
             ProviderKind.OPENROUTER_DECISIONS,
             ProviderKind.TYPESAFE_SYSTEMONE,
+            ProviderKind.SYSTEMONE_COMPATIBLE,
         }:
             return profile.base_url, {
                 "model": profile.model,
@@ -95,7 +96,10 @@ class ProviderPreflightClient:
                     }
                 },
             }
-        if profile.kind == ProviderKind.ANTHROPIC_MESSAGES:
+        if profile.kind in {
+            ProviderKind.ANTHROPIC_MESSAGES,
+            ProviderKind.ANTHROPIC_COMPATIBLE,
+        }:
             return profile.base_url, {
                 "model": profile.model,
                 "messages": [{"role": "user", "content": "Reply with: ok"}],
@@ -115,10 +119,14 @@ class ProviderPreflightClient:
         if kind in {
             ProviderKind.OPENROUTER_DECISIONS,
             ProviderKind.TYPESAFE_SYSTEMONE,
+            ProviderKind.SYSTEMONE_COMPATIBLE,
         }:
             answer = payload.get("answers", {}).get("reachable", {})
             return isinstance(answer, dict) and isinstance(answer.get("noul"), (int, float))
-        if kind == ProviderKind.ANTHROPIC_MESSAGES:
+        if kind in {
+            ProviderKind.ANTHROPIC_MESSAGES,
+            ProviderKind.ANTHROPIC_COMPATIBLE,
+        }:
             content = payload.get("content")
             return (
                 isinstance(content, list)
@@ -136,7 +144,10 @@ class ProviderPreflightClient:
             "Accept": "application/json",
             "User-Agent": "AIgorithmic-Trading/0.1 provider-preflight",
         }
-        if credential.profile.kind == ProviderKind.ANTHROPIC_MESSAGES:
+        if credential.profile.kind in {
+            ProviderKind.ANTHROPIC_MESSAGES,
+            ProviderKind.ANTHROPIC_COMPATIBLE,
+        }:
             headers.update(
                 {
                     "x-api-key": credential.api_key,
