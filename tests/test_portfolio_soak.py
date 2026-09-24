@@ -14,7 +14,11 @@ from intraday.contracts import (
     ScopedJevDecision,
 )
 from intraday.portfolio_coordinator import ParentPortfolioState
-from intraday.portfolio_soak import evaluate_portfolio_soak, run_soak_cycle
+from intraday.portfolio_soak import (
+    evaluate_portfolio_soak,
+    run_soak_cycle,
+    run_spot_soak_observation,
+)
 from intraday.store import IntradayStore
 
 
@@ -121,6 +125,33 @@ def test_soak_cycle_exercises_both_scoped_jev_workflows_without_trading(tmp_path
     assert all(row["gate_passed"] == 0 for row in signals)
     assert all(row["gate_reason"] == "soak_observation_only" for row in signals)
     assert all(row["rules_version"] == "soak_no_active_rule" for row in signals)
+
+
+def test_spot_soak_records_no_setup_without_calling_jev(tmp_path):
+    class Provider:
+        def decide_scoped(self, *args, **kwargs):
+            raise AssertionError("Spot Jev must not run without an eligible setup")
+
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+
+    status = run_spot_soak_observation(
+        store,
+        Provider(),
+        snapshot(),
+        now=START,
+        rule=None,
+        candles=None,
+    )
+
+    assert status == "skipped_no_setup"
+    assert store.list_portfolio_soak_ticks() == [
+        {
+            "scope": "spot_daily",
+            "status": "skipped_no_setup",
+            "hard_risk_violation": 0,
+            "created_at": START.isoformat(),
+        }
+    ]
 
 
 def test_cli_evaluates_soak_then_requires_exact_pass_id_for_activation(

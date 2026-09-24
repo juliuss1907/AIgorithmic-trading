@@ -157,6 +157,7 @@ def test_combined_portfolio_page_api_and_control_inbox(tmp_path):
 
     page = client.get("/portfolio")
     api = client.get("/api/portfolio")
+    operations = client.get("/api/operations")
     unauthorized = client.post(
         "/api/portfolio/commands",
         json={"kind": "pause"},
@@ -174,8 +175,17 @@ def test_combined_portfolio_page_api_and_control_inbox(tmp_path):
     assert page.status_code == 200
     assert "Combined paper portfolio" in page.text
     assert "60 / 40" in page.text
+    assert "Cadence health" in page.text
+    assert "Decision experiment" in page.text
+    assert "Outcome coverage" in page.text
+    assert "Latest retrospective" in page.text
     assert api.json()["portfolio"]["paper_active"] is False
     assert api.json()["limits"]["leverage"] == 3
+    assert operations.status_code == 200
+    assert operations.json()["schema_version"] == 15
+    assert operations.json()["scheduler"] == []
+    assert set(operations.json()["experiments"]) == {"spot_daily", "perp_intraday"}
+    assert operations.json()["daily_model_cost_usd"] == 0.0
     assert unauthorized.status_code == 401
     assert accepted.status_code == 202
     assert accepted.json()["kind"] == "portfolio_flatten"

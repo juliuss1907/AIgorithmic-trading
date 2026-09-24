@@ -134,6 +134,140 @@
         <p>Complete the decision-only soak and activate it with a passing evaluation ID.</p>
       </div>
       {% endif %}
+
+      <section class="ledger" aria-labelledby="cadence-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Durable scheduler records</p>
+            <h2 id="cadence-heading">Cadence health</h2>
+          </div>
+          <small>Latest completed or running slot for each registered job</small>
+        </div>
+        {% if operations.scheduler %}
+        <div class="table-wrap" tabindex="0" aria-label="Cadence health table">
+          <table>
+            <thead><tr><th>Job</th><th>Status</th><th>Scheduled (UTC)</th><th>Finished (UTC)</th><th>Error</th></tr></thead>
+            <tbody>
+              {% for run in operations.scheduler %}
+              <tr>
+                <td><code>{{ run.job_name }}</code></td>
+                <td>{{ run.status|upper }}</td>
+                <td>{{ run.scheduled_for }}</td>
+                <td>{{ run.finished_at or "—" }}</td>
+                <td>{{ run.error_code or "—" }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty" role="status">
+          <strong>No scheduler run has been recorded.</strong>
+          <p>Start the soak or paper worker to register durable cadence slots.</p>
+        </div>
+        {% endif %}
+      </section>
+
+      <section class="ledger" aria-labelledby="experiment-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Numeric primary vs compact shadow</p>
+            <h2 id="experiment-heading">Decision experiment</h2>
+          </div>
+          <small>Eligibility requires 14 days, 1,000 pairs and ≥95% availability</small>
+        </div>
+        <div class="table-wrap" tabindex="0" aria-label="Decision experiment table">
+          <table>
+            <thead><tr><th>Scope</th><th>Status</th><th>Pairs</th><th>Availability</th><th>Accuracy N / C</th><th>Brier N / C</th><th>Token reduction</th></tr></thead>
+            <tbody>
+              {% for scope, experiment in operations.experiments.items() %}
+              {% set evaluation = experiment.evaluation %}
+              <tr>
+                <td>{{ scope|replace("_", " ")|title }}</td>
+                <td>{{ evaluation.status|upper if evaluation else "COLLECTING" }}</td>
+                <td>{{ experiment.summary.paired_signals }} / {{ experiment.summary.primary_pairs }}</td>
+                <td>{{ "%.1f"|format(experiment.summary.availability * 100) }}%</td>
+                <td>{% if evaluation %}{{ "%.1f"|format(evaluation.metrics.numeric_accuracy * 100) }}% / {{ "%.1f"|format(evaluation.metrics.compact_accuracy * 100) }}%{% else %}—{% endif %}</td>
+                <td>{% if evaluation %}{{ "%.3f"|format(evaluation.metrics.numeric_brier) }} / {{ "%.3f"|format(evaluation.metrics.compact_brier) }}{% else %}—{% endif %}</td>
+                <td>{% if evaluation and evaluation.metrics.token_reduction is not none %}{{ "%+.1f"|format(evaluation.metrics.token_reduction * 100) }}%{% else %}—{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="portfolio-layout" aria-label="Learning evidence">
+        <article class="risk-panel" aria-labelledby="outcome-heading">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Forward labels</p>
+              <h2 id="outcome-heading">Outcome coverage</h2>
+            </div>
+          </div>
+          <dl class="risk-list">
+            {% for scope, experiment in operations.experiments.items() %}
+            <div>
+              <dt>{{ scope|replace("_", " ")|title }} · {{ experiment.outcomes.horizon_sec }}s</dt>
+              <dd>{{ experiment.outcomes.outcomes }} / {{ experiment.outcomes.signals }} · {{ "%.1f"|format(experiment.outcomes.coverage * 100) }}%</dd>
+            </div>
+            {% endfor %}
+          </dl>
+        </article>
+
+        <article class="risk-panel" aria-labelledby="retrospective-heading">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Deterministic daily review</p>
+              <h2 id="retrospective-heading">Latest retrospective</h2>
+            </div>
+          </div>
+          {% if operations.retrospective %}
+          <p class="status-line"><strong>{{ operations.retrospective.report_date }}</strong></p>
+          <p class="muted">
+            Spot candidates {{ operations.retrospective.scopes.spot_daily.total_candidates }} ·
+            Perp candidates {{ operations.retrospective.scopes.perp_intraday.total_candidates }}
+          </p>
+          <code>{{ operations.retrospective.report_id }}</code>
+          {% else %}
+          <div class="empty" role="status">
+            <strong>No retrospective yet.</strong>
+            <p>The first report is scheduled for 09:00 Asia/Ho_Chi_Minh.</p>
+          </div>
+          {% endif %}
+        </article>
+      </section>
+
+      <section class="ledger" aria-labelledby="model-usage-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Provider telemetry</p>
+            <h2 id="model-usage-heading">Model usage</h2>
+          </div>
+          <small>UTC day cost: ${{ "%.6f"|format(operations.daily_model_cost_usd) }} · schema v{{ operations.schema_version }}</small>
+        </div>
+        {% if operations.recent_model_calls %}
+        <div class="table-wrap" tabindex="0" aria-label="Recent model calls">
+          <table>
+            <thead><tr><th>Started (UTC)</th><th>Workflow</th><th>Role</th><th>Status</th><th>Latency</th><th>Input tokens</th><th>Cost</th></tr></thead>
+            <tbody>
+              {% for call in operations.recent_model_calls %}
+              <tr>
+                <td>{{ call.started_at }}</td><td><code>{{ call.workflow }}</code></td><td>{{ call.role }}</td><td>{{ call.status|upper }}</td>
+                <td>{{ call.latency_ms }}ms</td><td>{{ call.input_tokens if call.input_tokens is not none else "—" }}</td>
+                <td>{% if call.cost_usd is not none %}${{ "%.6f"|format(call.cost_usd) }}{% else %}—{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty" role="status">
+          <strong>No model calls recorded.</strong>
+          <p>Provider credentials remain outside the dashboard and SQLite.</p>
+        </div>
+        {% endif %}
+      </section>
     </main>
 
     <footer>

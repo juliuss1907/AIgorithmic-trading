@@ -33,6 +33,7 @@ body {
 .skip-link:focus { top: 1rem; }
 
 .masthead, main, footer { width: min(calc(100% - 2rem), 76rem); margin-inline: auto; }
+main, section, article { min-width: 0; }
 
 .masthead {
   display: flex;
@@ -72,7 +73,7 @@ nav { display: flex; align-items: center; gap: 1rem; }
 .intelligence { padding: 3rem 0 0; }
 .section-head { display: flex; justify-content: space-between; align-items: end; gap: 1rem; margin-bottom: 1rem; }
 .section-head h2 { font: 500 1.75rem/1.2 Georgia, serif; }
-.section-head small { color: var(--muted); }
+.section-head small { color: var(--muted); overflow-wrap: anywhere; }
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 table { width: 100%; border-collapse: collapse; text-align: left; }
 th, td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -81,6 +82,7 @@ tbody tr:last-child td { border-bottom: 0; }
 code { color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.8125rem; }
 .direction { display: inline-block; padding: 0.125rem 0.5rem; border: 1px solid var(--line); border-radius: 999px; }
 .empty { padding: 3rem 1.5rem; border: 1px dashed var(--line); border-radius: var(--radius); text-align: center; }
+.empty strong { display: block; overflow-wrap: anywhere; }
 .empty p { margin: 0.25rem 0 0; color: var(--muted); overflow-wrap: anywhere; }
 .thesis {
   display: grid;

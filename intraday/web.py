@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 
 from intraday.contracts import DecisionScope, ProviderRole
+from intraday.decision_evaluation import EVALUATION_HORIZONS
 from intraday.store import IntradayStore
 
 
@@ -50,6 +51,32 @@ def create_app(
     app.mount("/static", StaticFiles(directory=ASSETS / "static"), name="static")
     app.state.store = store
     app.state.cross_venue_mode = cross_venue_mode
+
+    def operations_snapshot() -> dict:
+        now = datetime.now(timezone.utc)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        experiments = {}
+        for scope in DecisionScope:
+            evaluation = store.latest_decision_experiment_evaluation(scope)
+            experiments[scope.value] = {
+                "summary": store.decision_experiment_pair_summary(scope),
+                "evaluation": (
+                    evaluation.model_dump(mode="json") if evaluation else None
+                ),
+                "outcomes": store.signal_outcome_summary(
+                    scope=scope, horizon_sec=EVALUATION_HORIZONS[scope]
+                ),
+            }
+        return {
+            "schema_version": store.schema_version(),
+            "scheduler": store.latest_scheduler_runs(),
+            "experiments": experiments,
+            "retrospective": store.latest_retrospective(),
+            "daily_model_cost_usd": store.model_cost_since(day_start),
+            "recent_model_calls": [
+                call.model_dump(mode="json") for call in store.list_model_calls(limit=10)
+            ],
+        }
 
     def require_control(authorization: str | None = Header(default=None)) -> None:
         if control_token is None:
@@ -117,6 +144,7 @@ def create_app(
     def portfolio_page(request: Request):
         parent = store.load_parent_portfolio_state()
         bundle = store.latest_market_thesis_bundle()
+        operations = operations_snapshot()
         return templates.TemplateResponse(
             request=request,
             name="portfolio.html",
@@ -129,6 +157,7 @@ def create_app(
                 ),
                 "soak": store.latest_portfolio_soak_evaluation(),
                 "events": store.list_parent_portfolio_events(limit=20),
+                "operations": operations,
             },
         )
 
@@ -180,6 +209,10 @@ def create_app(
                 else None
             ),
         }
+
+    @app.get("/api/operations")
+    def operations():
+        return operations_snapshot()
 
     @app.get("/api/decisions")
     def decisions(limit: int = Query(default=100, ge=1, le=1000)):

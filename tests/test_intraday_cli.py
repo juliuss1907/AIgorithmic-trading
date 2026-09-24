@@ -242,6 +242,20 @@ def test_doctor_reports_safe_defaults(monkeypatch, capsys, tmp_path):
     assert result["leverage"] == 3
     assert result["cross_venue_mode"] == "shadow"
     assert result["hyperliquid_enabled"] is True
+    assert result["schema_version"] == 15
+    assert result["cadences_seconds"] == {
+        "risk": 5.0,
+        "order_book": 15.0,
+        "perp_numeric": 30.0,
+        "derivatives": 60.0,
+        "compact_shadow": 900.0,
+        "llm_analysis": 3600,
+    }
+    assert result["retrospective"] == {
+        "hour": 9,
+        "timezone": "Asia/Ho_Chi_Minh",
+    }
+    assert result["scheduler"] == []
 
 
 def test_one_stub_tick_is_persisted_without_exchange_execution(tmp_path):

@@ -63,7 +63,11 @@ from intraday.portfolio_coordinator import (
     ParentPortfolioState,
     apply_operator_command,
 )
-from intraday.portfolio_soak import evaluate_portfolio_soak, run_soak_cycle
+from intraday.portfolio_soak import (
+    evaluate_portfolio_soak,
+    run_soak_cycle,
+    run_spot_soak_observation,
+)
 from intraday.parent_runtime import (
     flatten_parent_paper_positions,
     run_parent_risk_cycle,
@@ -495,6 +499,20 @@ def _doctor(config: IntradayConfig) -> dict:
         "cross_venue_activation_allowed": store.cross_venue_activation_allowed(),
         "telegram_enabled": config.telegram_enabled,
         "database": str(store.database),
+        "schema_version": store.schema_version(),
+        "cadences_seconds": {
+            "risk": config.risk_interval_seconds,
+            "order_book": config.order_book_interval_seconds,
+            "perp_numeric": config.perp_decision_interval_seconds,
+            "derivatives": config.derivatives_interval_seconds,
+            "compact_shadow": config.compact_shadow_interval_seconds,
+            "llm_analysis": config.llm_analysis_interval_seconds,
+        },
+        "retrospective": {
+            "hour": config.retrospective_hour_vietnam,
+            "timezone": "Asia/Ho_Chi_Minh",
+        },
+        "scheduler": store.latest_scheduler_runs(),
     }
 
 
@@ -608,6 +626,7 @@ def _portfolio_cli(arguments) -> None:
                 fallback=StubDecisionProvider(direction=Direction.HOLD),
             )
             market = MultiCadenceMarketCache(BinanceUsdMClient())
+            spot_market = BinanceSpotDailyClient()
             config = IntradayConfig.from_environment(database=arguments.database)
             interval = config.risk_interval_seconds
             background_started = False
@@ -640,12 +659,60 @@ def _portfolio_cli(arguments) -> None:
                     config.perp_decision_interval_seconds,
                 )
                 result = {"status": "waiting_for_next_slot"}
+                spot_slot = claim_cadence(
+                    store, "portfolio_soak_spot", now, 86_400
+                )
+                if spot_slot is not None:
+                    try:
+                        spot_rule = store.load_active_scoped_rule(
+                            DecisionScope.SPOT_DAILY
+                        )
+                        daily = None
+                        if spot_rule is not None:
+                            limit = max(
+                                spot_rule.parameters.entry_window,
+                                spot_rule.parameters.exit_window,
+                                spot_rule.parameters.atr_period,
+                            ) + 2
+                            daily = spot_market.candles(
+                                limit=max(35, limit), now=now
+                            )
+                        result["spot_daily"] = run_spot_soak_observation(
+                            store,
+                            provider,
+                            snapshot,
+                            now=now,
+                            rule=spot_rule,
+                            candles=daily,
+                        )
+                    except Exception as error:
+                        store.record_portfolio_soak_tick(
+                            scope=DecisionScope.SPOT_DAILY,
+                            status="gate_error",
+                            created_at=now,
+                        )
+                        result["spot_daily"] = "gate_error"
+                        store.finish_scheduler_run(
+                            "portfolio_soak_spot",
+                            spot_slot,
+                            status="error",
+                            error_code=type(error).__name__,
+                            finished_at=now,
+                        )
+                    else:
+                        store.finish_scheduler_run(
+                            "portfolio_soak_spot",
+                            spot_slot,
+                            status="success",
+                            finished_at=now,
+                        )
                 if slot is not None:
                     try:
-                        result = run_soak_cycle(
+                        perp_result = run_soak_cycle(
                             store, provider, snapshot, now=now,
                             scopes=(DecisionScope.PERP_INTRADAY,),
                         )
+                        result.update(perp_result)
                     except Exception as error:
                         store.finish_scheduler_run(
                             "portfolio_soak_perp", slot, status="error",

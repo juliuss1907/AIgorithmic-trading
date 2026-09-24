@@ -29,14 +29,41 @@ The role matrix is enforced: TypeSafe/OpenRouter can only fill the Jev role;
 OpenAI-compatible/Anthropic Messages can only fill the LLM role. `setup` runs a paid minimal
 preflight and activates the profile only when it succeeds.
 
-## 2. Run the decision-only soak
+## 2. Verify configuration and cadence health
+
+The default operating contract is deliberately multi-cadence:
+
+| Work | Cadence | May call a model? |
+|---|---:|---|
+| Deterministic risk and mark-to-market | 5 seconds | No |
+| Binance order book refresh | 15 seconds | No |
+| Perp numeric Jev decision | 30 seconds | Jev |
+| Funding, OI and long/short refresh | 60 seconds | No |
+| Compact Jev shadow pair | 15 minutes | Jev, observation only |
+| News ingest | 30 minutes | No; scripts ingest and normalize feeds |
+| Evidence-aware market thesis | 60 minutes, only when evidence changes | LLM |
+| Retrospective and rule proposal | 09:00 Asia/Ho_Chi_Minh | Deterministic review, then LLM proposal |
+| Spot daily decision | New closed daily candle and eligible Donchian setup | Jev |
+
+Confirm the effective values before starting a worker:
+
+```bash
+aigt doctor
+```
+
+The output includes the schema version, configured cadence values, active provider profiles,
+and the latest durable scheduler record for each job. `execution_enabled` remains `false` in
+this release.
+
+## 3. Run the decision-only soak
 
 ```bash
 aigt portfolio soak run
 ```
 
-This calls both `spot_daily_entry` and `perp_intraday_entry` workflows and records health
-evidence. It does not call the paper ledger and cannot create a fill. In another terminal:
+This records decision-health evidence without calling the paper ledger and cannot create a
+fill. Perp decisions follow the 30-second cadence. Spot does not call Jev every loop; it is
+event-driven by a newly closed daily candle and an eligible Donchian setup. In another terminal:
 
 ```bash
 aigt serve
@@ -53,7 +80,7 @@ The result passes only with recent evidence from both scopes, at least 100 perp 
 at least three spot samples, at least 95% availability per scope, and zero recorded hard-risk
 violations. A pass still does not activate fills.
 
-## 3. Manually activate paper fills
+## 4. Manually activate paper fills
 
 Copy the exact passing evaluation id:
 
@@ -77,7 +104,44 @@ aigt portfolio flatten
 aigt status
 ```
 
-## 4. Export the immutable trade journal
+## 5. Review learning evidence and rule candidates
+
+Open `http://127.0.0.1:8081/portfolio` to inspect:
+
+- latest durable scheduler status and errors;
+- numeric-primary versus compact-shadow pairs and the current eligibility result;
+- forward-outcome coverage for Perp 15-minute and Spot 3-day labels;
+- the latest 09:00 retrospective, model-call telemetry and UTC daily cost;
+- scoped champion, challenger and rollback rule IDs.
+
+The same operational snapshot is read-only at `/api/operations`. CLI equivalents are:
+
+```bash
+aigt portfolio experiment status
+aigt portfolio experiment evaluate --scope all
+aigt portfolio retrospective run --once
+aigt portfolio rules status
+```
+
+Compact state remains shadow-only. It cannot be eligible until it has at least 14 days,
+1,000 paired samples, 95% availability, no more than a 2 percentage-point accuracy regression,
+no more than a 0.02 Brier regression, and at least 15% input-token reduction. Eligibility never
+activates it automatically.
+
+Daily LLM rule proposals enter a separate lifecycle for each scope. The operator must run:
+
+```bash
+aigt portfolio rules replay CANDIDATE_ID
+aigt portfolio rules start-soak CANDIDATE_ID
+# wait at least 72 hours while the paper worker records decision-only comparisons
+aigt portfolio rules evaluate CANDIDATE_ID
+aigt portfolio rules activate CANDIDATE_ID --evaluation-id PASSING_EVALUATION_ID
+```
+
+Activation accepts only the exact latest passing evaluation ID. A challenger never creates a
+fill while it is soaking.
+
+## 6. Export the immutable trade journal
 
 The SQLite journal stores every returned Jev evaluation, including rejected gates. Each
 signal retains the canonical state JSON prepared before the provider call, raw numeric
@@ -101,7 +165,7 @@ thresholds is skipped. Values are percentage points, not decimal return ratios. 
 evaluations from one market tick remain separate examples because their serialized state
 contains a different `decision_scope`.
 
-## 5. Ubuntu VPS with Docker Compose
+## 7. Ubuntu VPS with Docker Compose
 
 Keep the dashboard on loopback and access it through SSH:
 
@@ -123,3 +187,10 @@ docker compose --env-file .env.intraday -f deploy/intraday/compose.yaml \
 
 Back up the named volume before upgrades. The build contains no live-order adapter and accepts
 no Binance trading credentials.
+
+## 8. Evidence windows are operational work, not build completion
+
+Passing the automated tests proves contracts and deterministic behavior; it does not create a
+track record. Before considering any broader deployment, keep the worker and dashboard running,
+complete the initial 72-hour soak, then collect at least 14 days of numeric/compact evidence.
+Review provider errors, scheduler gaps, outcome coverage, costs, and rule evaluations manually.

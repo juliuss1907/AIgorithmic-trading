@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from intraday.contracts import DecisionScope, FeatureSnapshot
 from intraday.journal import record_scoped_signal
+from intraday.spot_signal import evaluate_donchian
 
 
 class PortfolioSoakEvaluation(BaseModel):
@@ -80,6 +81,40 @@ def run_soak_cycle(
     return result
 
 
+def run_spot_soak_observation(
+    store,
+    provider,
+    snapshot: FeatureSnapshot,
+    *,
+    now: datetime,
+    rule,
+    candles: list[list] | None,
+) -> str:
+    """Record the daily Spot heartbeat and call Jev only for a valid setup."""
+    if rule is None or not candles:
+        store.record_portfolio_soak_tick(
+            scope=DecisionScope.SPOT_DAILY,
+            status="skipped_no_setup",
+            created_at=now,
+        )
+        return "skipped_no_setup"
+    observation = evaluate_donchian(candles, rule.parameters)
+    if not observation.entry:
+        store.record_portfolio_soak_tick(
+            scope=DecisionScope.SPOT_DAILY,
+            status="skipped_no_setup",
+            created_at=now,
+        )
+        return "skipped_no_setup"
+    return run_soak_cycle(
+        store,
+        provider,
+        snapshot,
+        now=now,
+        scopes=(DecisionScope.SPOT_DAILY,),
+    )[DecisionScope.SPOT_DAILY.value]
+
+
 def evaluate_portfolio_soak(
     records: list[dict], *, evaluated_at: datetime
 ) -> PortfolioSoakEvaluation:
@@ -117,10 +152,18 @@ def evaluate_portfolio_soak(
         DecisionScope.SPOT_DAILY.value: 3,
         DecisionScope.PERP_INTRADAY.value: 100,
     }
+    maximum_heartbeat_age = {
+        DecisionScope.SPOT_DAILY.value: 26 * 3600,
+        DecisionScope.PERP_INTRADAY.value: 3600,
+    }
     for scope, minimum in minimum_samples.items():
         if counts[scope] < minimum:
             waiting.append(f"{scope}_minimum_samples")
-        if latest[scope] is None or (evaluated_at - latest[scope]).total_seconds() > 3600:
+        if (
+            latest[scope] is None
+            or (evaluated_at - latest[scope]).total_seconds()
+            > maximum_heartbeat_age[scope]
+        ):
             waiting.append(f"{scope}_recent_heartbeat_missing")
     failures = []
     if violations:

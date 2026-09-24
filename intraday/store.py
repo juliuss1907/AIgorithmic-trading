@@ -947,6 +947,53 @@ class IntradayStore:
             ).fetchone()
         return None if row is None else dict(row)
 
+    def latest_scheduler_runs(self) -> list[dict]:
+        """Return one durable health record for each scheduler job."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT current.* FROM scheduler_runs current "
+                "WHERE current.rowid=(SELECT candidate.rowid FROM scheduler_runs candidate "
+                "WHERE candidate.job_name=current.job_name "
+                "ORDER BY julianday(candidate.scheduled_for) DESC, "
+                "candidate.scheduled_for DESC LIMIT 1) "
+                "ORDER BY current.job_name"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def schema_version(self) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM schema_meta WHERE key='schema_version'"
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("database schema version is missing")
+        return int(row["value"])
+
+    def signal_outcome_summary(
+        self, *, scope: DecisionScope, horizon_sec: int
+    ) -> dict:
+        """Summarize recorded primary decisions and their selected forward horizon."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(s.id) AS signals, COUNT(o.id) AS outcomes, "
+                "MAX(o.observed_at) AS latest_observed_at "
+                "FROM signals s LEFT JOIN signal_outcomes o "
+                "ON o.signal_id=s.id AND o.horizon_sec=? "
+                "WHERE s.scope=? AND s.state_variant='numeric_v1' "
+                "AND s.decision_mode='primary'",
+                (horizon_sec, scope.value),
+            ).fetchone()
+        signals = int(row["signals"])
+        outcomes = int(row["outcomes"])
+        return {
+            "scope": scope.value,
+            "horizon_sec": horizon_sec,
+            "signals": signals,
+            "outcomes": outcomes,
+            "coverage": outcomes / signals if signals else 0.0,
+            "latest_observed_at": row["latest_observed_at"],
+        }
+
     def record_tick(
         self,
         snapshot: FeatureSnapshot,

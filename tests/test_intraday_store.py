@@ -124,3 +124,33 @@ def test_scheduler_slots_are_claimed_once_across_store_instances(tmp_path):
     record = restarted.scheduler_run("perp_numeric", NOW)
     assert record["status"] == "success"
     assert record["finished_at"] is not None
+
+
+def test_operational_health_reports_latest_scheduler_run_and_schema(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    later = datetime(2026, 9, 21, 12, 1, tzinfo=timezone.utc)
+
+    assert store.claim_scheduler_run("perp_numeric", NOW, started_at=NOW)
+    store.finish_scheduler_run(
+        "perp_numeric", NOW, status="success", finished_at=NOW
+    )
+    assert store.claim_scheduler_run("perp_numeric", later, started_at=later)
+    store.finish_scheduler_run(
+        "perp_numeric",
+        later,
+        status="error",
+        error_code="ProviderTimeout",
+        finished_at=later,
+    )
+
+    assert store.schema_version() == 15
+    assert store.latest_scheduler_runs() == [
+        {
+            "job_name": "perp_numeric",
+            "scheduled_for": later.isoformat(),
+            "status": "error",
+            "started_at": later.isoformat(),
+            "finished_at": later.isoformat(),
+            "error_code": "ProviderTimeout",
+        }
+    ]
