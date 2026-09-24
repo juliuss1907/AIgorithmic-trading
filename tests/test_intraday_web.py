@@ -182,7 +182,7 @@ def test_combined_portfolio_page_api_and_control_inbox(tmp_path):
     assert api.json()["portfolio"]["paper_active"] is False
     assert api.json()["limits"]["leverage"] == 3
     assert operations.status_code == 200
-    assert operations.json()["schema_version"] == 16
+    assert operations.json()["schema_version"] == 17
     assert operations.json()["scheduler"] == []
     assert set(operations.json()["experiments"]) == {"spot_daily", "perp_intraday"}
     assert operations.json()["daily_model_cost_usd"] == 0.0

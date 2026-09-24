@@ -57,6 +57,10 @@ class IntradayConfig:
     dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 8081
     control_token: str | None = None
+    operator_read_token: str | None = None
+    operator_action_token: str | None = None
+    operator_actions_enabled: bool = False
+    operator_request_ttl_seconds: int = 300
     news_enabled: bool = True
     news_interval_seconds: float = 1800
     cross_venue_mode: str = "shadow"
@@ -91,6 +95,18 @@ class IntradayConfig:
             raise ValueError("real execution is not implemented")
         if not 1 <= self.dashboard_port <= 65535:
             raise ValueError("invalid dashboard port")
+        if (
+            self.operator_read_token is not None
+            and self.operator_action_token is not None
+            and self.operator_read_token == self.operator_action_token
+        ):
+            raise ValueError("operator read and action tokens must be different")
+        if self.operator_actions_enabled and not (
+            self.operator_read_token and self.operator_action_token
+        ):
+            raise ValueError("operator actions require separate read and action tokens")
+        if not 60 <= self.operator_request_ttl_seconds <= 900:
+            raise ValueError("operator request TTL must be between 60 and 900 seconds")
         if self.news_interval_seconds < 300:
             raise ValueError("news interval must be at least five minutes")
         if self.cross_venue_mode not in {"off", "shadow", "active"}:
@@ -134,6 +150,14 @@ class IntradayConfig:
             dashboard_host=os.getenv("INTRADAY_DASHBOARD_HOST", "127.0.0.1"),
             dashboard_port=int(os.getenv("INTRADAY_DASHBOARD_PORT", "8081")),
             control_token=os.getenv("INTRADAY_CONTROL_TOKEN") or None,
+            operator_read_token=os.getenv("INTRADAY_OPERATOR_READ_TOKEN") or None,
+            operator_action_token=os.getenv("INTRADAY_OPERATOR_ACTION_TOKEN") or None,
+            operator_actions_enabled=_boolean(
+                "INTRADAY_OPERATOR_ACTIONS_ENABLED", False
+            ),
+            operator_request_ttl_seconds=int(
+                os.getenv("INTRADAY_OPERATOR_REQUEST_TTL_SECONDS", "300")
+            ),
             news_enabled=_boolean("INTRADAY_NEWS_ENABLED", True),
             news_interval_seconds=float(os.getenv("INTRADAY_NEWS_INTERVAL_SECONDS", "1800")),
             cross_venue_mode=os.getenv("INTRADAY_CROSS_VENUE_MODE", "shadow"),

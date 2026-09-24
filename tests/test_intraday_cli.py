@@ -147,6 +147,28 @@ def test_multi_cadence_defaults_are_safe_and_explicit():
     assert config.news_interval_seconds == 1800
     assert config.llm_analysis_interval_seconds == 3600
     assert config.retrospective_hour_vietnam == 9
+    assert config.operator_actions_enabled is False
+    assert config.operator_read_token is None
+    assert config.operator_action_token is None
+
+
+def test_operator_credentials_are_separate_and_actions_require_both(monkeypatch):
+    monkeypatch.setenv("INTRADAY_OPERATOR_READ_TOKEN", "read-token")
+    monkeypatch.setenv("INTRADAY_OPERATOR_ACTION_TOKEN", "action-token")
+    monkeypatch.setenv("INTRADAY_OPERATOR_ACTIONS_ENABLED", "true")
+
+    config = IntradayConfig.from_environment()
+
+    assert config.operator_read_token == "read-token"
+    assert config.operator_action_token == "action-token"
+    assert config.operator_actions_enabled is True
+
+    with pytest.raises(ValueError, match="must be different"):
+        IntradayConfig(
+            operator_read_token="shared-token",
+            operator_action_token="shared-token",
+            operator_actions_enabled=True,
+        )
 
 
 def test_explicit_database_precedes_environment_and_xdg(monkeypatch, tmp_path):

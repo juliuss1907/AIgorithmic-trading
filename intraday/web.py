@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from intraday.contracts import DecisionScope, ProviderRole
 from intraday.decision_evaluation import EVALUATION_HORIZONS
+from intraday.operator_service import build_operator_snapshot
 from intraday.store import IntradayStore
 
 
@@ -39,11 +40,20 @@ class PortfolioCommandRequest(BaseModel):
     kind: Literal["pause", "resume", "flatten"]
 
 
+class OperatorActionCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["pause", "resume"]
+
+
 def create_app(
     *,
     database: str | Path = "state/intraday/intraday.sqlite3",
     control_token: str | None = None,
     cross_venue_mode: str = "shadow",
+    operator_read_token: str | None = None,
+    operator_action_token: str | None = None,
+    operator_actions_enabled: bool = False,
+    operator_request_ttl_seconds: int = 300,
 ) -> FastAPI:
     app = FastAPI(title="Crypto Intraday Control Room", version="0.1.0")
     store = IntradayStore(database)
@@ -51,6 +61,9 @@ def create_app(
     app.mount("/static", StaticFiles(directory=ASSETS / "static"), name="static")
     app.state.store = store
     app.state.cross_venue_mode = cross_venue_mode
+
+    if not 60 <= operator_request_ttl_seconds <= 900:
+        raise ValueError("operator request TTL must be between 60 and 900 seconds")
 
     def operations_snapshot() -> dict:
         now = datetime.now(timezone.utc)
@@ -89,13 +102,68 @@ def create_app(
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
+    def require_operator_read(authorization: str | None = Header(default=None)) -> None:
+        if operator_read_token is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "operator reads are disabled"
+            )
+        expected = f"Bearer {operator_read_token}"
+        if authorization is None or not secrets.compare_digest(authorization, expected):
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                "invalid operator read credential",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    def require_operator_action(authorization: str | None = Header(default=None)) -> None:
+        if operator_action_token is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "operator actions are disabled"
+            )
+        expected = f"Bearer {operator_action_token}"
+        if authorization is None or not secrets.compare_digest(authorization, expected):
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                "invalid operator action credential",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if not operator_actions_enabled:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "operator actions are disabled"
+            )
+
+    def require_idempotency_key(value: str) -> str:
+        if not 4 <= len(value) <= 128 or not all(
+            character.isalnum() or character in "._:-" for character in value
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid idempotency key"
+            )
+        return value
+
+    def public_operator_action(item: dict) -> dict:
+        return {
+            name: item.get(name)
+            for name in (
+                "id",
+                "action",
+                "actor",
+                "status",
+                "preview",
+                "requested_at",
+                "expires_at",
+                "approved_at",
+                "cancelled_at",
+                "command_id",
+                "result",
+                "error_code",
+            )
+        }
+
     def queue_provider_command(
         *, idempotency_key: str, kind: str, payload: dict
     ) -> dict:
-        if not 4 <= len(idempotency_key) <= 128 or not all(
-            character.isalnum() or character in "._:-" for character in idempotency_key
-        ):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid idempotency key")
+        require_idempotency_key(idempotency_key)
         try:
             return store.enqueue_command(
                 f"web:{idempotency_key}",
@@ -240,6 +308,113 @@ def create_app(
             "thesis": thesis.model_dump(mode="json") if thesis else None,
             "daily_cost_usd": store.model_cost_since(day_start),
         }
+
+    @app.get("/api/operator/v1/snapshot")
+    def operator_snapshot(_: None = Depends(require_operator_read)):
+        return build_operator_snapshot(
+            store,
+            now=datetime.now(timezone.utc),
+            actions_enabled=operator_actions_enabled,
+            approval_ttl_seconds=operator_request_ttl_seconds,
+        )
+
+    @app.get("/api/operator/v1/no-trade")
+    def operator_no_trade(
+        scope: DecisionScope,
+        window_minutes: int = Query(default=60, ge=5, le=1440),
+        _: None = Depends(require_operator_read),
+    ):
+        now = datetime.now(timezone.utc)
+        result = store.signal_gate_summary(
+            since=now - timedelta(minutes=window_minutes), scope=scope
+        )
+        result.update(
+            {"schema_version": "1", "generated_at": now.isoformat(), "window_minutes": window_minutes}
+        )
+        return result
+
+    @app.get("/api/operator/v1/alerts")
+    def operator_alerts(
+        after_id: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+        _: None = Depends(require_operator_read),
+    ):
+        alerts = store.list_operator_alerts(after_id=after_id, limit=limit)
+        return {
+            "schema_version": "1",
+            "alerts": alerts,
+            "next_cursor": alerts[-1]["id"] if alerts else after_id,
+        }
+
+    @app.post(
+        "/api/operator/v1/action-requests", status_code=status.HTTP_202_ACCEPTED
+    )
+    def create_operator_action(
+        request: OperatorActionCreateRequest,
+        _: None = Depends(require_operator_action),
+        idempotency_key: str = Header(alias="Idempotency-Key"),
+    ):
+        require_idempotency_key(idempotency_key)
+        now = datetime.now(timezone.utc)
+        try:
+            item = store.create_operator_action_request(
+                request_id=f"opreq_{secrets.token_hex(12)}",
+                idempotency_key=f"hermes:{idempotency_key}",
+                action=request.action,
+                actor="hermes-trading-ops",
+                requested_at=now,
+                expires_at=now + timedelta(seconds=operator_request_ttl_seconds),
+            )
+        except ValueError as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
+        return public_operator_action(item)
+
+    @app.get("/api/operator/v1/action-requests/{request_id}")
+    def get_operator_action(
+        request_id: str,
+        _: None = Depends(require_operator_action),
+    ):
+        item = store.operator_action_request(request_id, now=datetime.now(timezone.utc))
+        if item is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "operator action not found")
+        return public_operator_action(item)
+
+    @app.post(
+        "/api/operator/v1/action-requests/{request_id}/approve",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def approve_operator_action(
+        request_id: str,
+        _: None = Depends(require_operator_action),
+    ):
+        try:
+            item = store.approve_operator_action_request(
+                request_id,
+                actor="hermes-trading-ops",
+                approved_at=datetime.now(timezone.utc),
+            )
+        except KeyError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
+        return public_operator_action(item)
+
+    @app.post("/api/operator/v1/action-requests/{request_id}/cancel")
+    def cancel_operator_action(
+        request_id: str,
+        _: None = Depends(require_operator_action),
+    ):
+        try:
+            item = store.cancel_operator_action_request(
+                request_id,
+                actor="hermes-trading-ops",
+                cancelled_at=datetime.now(timezone.utc),
+            )
+        except KeyError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
+        return public_operator_action(item)
 
     @app.post("/api/providers/{profile_id}/tests", status_code=status.HTTP_202_ACCEPTED)
     def test_provider(

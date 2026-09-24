@@ -151,5 +151,55 @@ def test_expired_cancelled_and_replayed_operator_actions_never_queue_twice(tmp_p
 def test_operator_action_schema_migration_is_additive(tmp_path):
     store = IntradayStore(tmp_path / "intraday.sqlite")
 
-    assert store.schema_version() == 16
+    assert store.schema_version() == 17
     assert store.list_operator_action_events() == []
+
+
+def test_scheduler_errors_and_risk_transitions_create_deduplicated_alerts(tmp_path):
+    store = _initialized_store(tmp_path)
+    slot = NOW + timedelta(minutes=1)
+
+    assert store.claim_scheduler_run("paper_perp_numeric", slot, started_at=slot)
+    store.finish_scheduler_run(
+        "paper_perp_numeric",
+        slot,
+        status="error",
+        error_code="ProviderTimeout",
+        finished_at=slot,
+    )
+    store.save_parent_portfolio_state(
+        ParentPortfolioState(
+            mark_price=100_000,
+            day_start_equity=10_000,
+            high_water_mark=11_000,
+            entries_paused=True,
+            halt_reason="parent_drawdown_limit",
+            paper_active=True,
+            updated_at=slot + timedelta(seconds=5),
+        ),
+        event_kind="paper_cycle",
+        actor="worker",
+    )
+    store.save_parent_portfolio_state(
+        ParentPortfolioState(
+            mark_price=100_000,
+            day_start_equity=10_000,
+            high_water_mark=11_000,
+            entries_paused=True,
+            halt_reason="parent_drawdown_limit",
+            paper_active=True,
+            updated_at=slot + timedelta(seconds=10),
+        ),
+        event_kind="paper_cycle",
+        actor="worker",
+    )
+
+    alerts = store.list_operator_alerts(after_id=0)
+    assert [alert["kind"] for alert in alerts] == [
+        "scheduler_error",
+        "parent_drawdown_limit",
+    ]
+    assert alerts[0]["payload"]["error_code"] == "ProviderTimeout"
+    assert store.list_operator_alerts(after_id=alerts[0]["id"])[0]["kind"] == (
+        "parent_drawdown_limit"
+    )

@@ -492,6 +492,17 @@ class IntradayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_operator_action_events_request
                     ON operator_action_events(request_id, id);
+                CREATE TABLE IF NOT EXISTS operator_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    delivery_key TEXT NOT NULL UNIQUE,
+                    kind TEXT NOT NULL,
+                    severity TEXT NOT NULL CHECK (severity IN ('warning', 'critical')),
+                    message TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_operator_alerts_cursor
+                    ON operator_alerts(id, created_at);
                 CREATE TABLE IF NOT EXISTS schema_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -525,7 +536,7 @@ class IntradayStore:
                 "ON signals(experiment_pair_id, scope, state_variant)"
             )
             connection.execute(
-                "UPDATE schema_meta SET value='16' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='17' WHERE key='schema_version'"
             )
 
     def load_scoped_rule(self, rule_id: str) -> ScopedRuleCandidate | None:
@@ -968,6 +979,19 @@ class IntradayStore:
             )
             if cursor.rowcount != 1:
                 raise ValueError("running scheduler slot not found")
+            if status == "error":
+                self._record_operator_alert(
+                    connection,
+                    delivery_key=(
+                        f"scheduler:{job_name}:"
+                        f"{scheduled_for.astimezone(timezone.utc).isoformat()}"
+                    ),
+                    kind="scheduler_error",
+                    severity="critical",
+                    message=f"Scheduler job {job_name} failed.",
+                    payload={"job_name": job_name, "error_code": error_code},
+                    created_at=finished_at,
+                )
 
     def scheduler_run(self, job_name: str, scheduled_for: datetime) -> dict | None:
         with self._connect() as connection:
@@ -1142,6 +1166,14 @@ class IntradayStore:
     ) -> None:
         payload = _json(state)
         with self._connect() as connection:
+            previous_row = connection.execute(
+                "SELECT payload_json FROM parent_portfolio_state WHERE singleton=1"
+            ).fetchone()
+            previous = (
+                None
+                if previous_row is None
+                else ParentPortfolioState.model_validate_json(previous_row["payload_json"])
+            )
             connection.execute(
                 "INSERT INTO parent_portfolio_state VALUES (1, ?, ?) "
                 "ON CONFLICT(singleton) DO UPDATE SET "
@@ -1153,6 +1185,35 @@ class IntradayStore:
                 "(kind, actor, payload_json, created_at) VALUES (?, ?, ?, ?)",
                 (event_kind, actor, payload, state.updated_at.isoformat()),
             )
+            if previous is not None:
+                if previous.drawdown > -0.08 and state.drawdown <= -0.08:
+                    self._record_operator_alert(
+                        connection,
+                        delivery_key=f"risk:drawdown:{state.updated_at.isoformat()}",
+                        kind="parent_drawdown_limit",
+                        severity="critical",
+                        message="Parent portfolio drawdown limit was breached.",
+                        payload={
+                            "drawdown": state.drawdown,
+                            "entries_paused": state.entries_paused,
+                            "halt_reason": state.halt_reason,
+                        },
+                        created_at=state.updated_at,
+                    )
+                if previous.daily_return > -0.015 and state.daily_return <= -0.015:
+                    self._record_operator_alert(
+                        connection,
+                        delivery_key=f"risk:daily-loss:{state.updated_at.isoformat()}",
+                        kind="daily_loss_limit",
+                        severity="critical",
+                        message="Parent portfolio daily loss limit was breached.",
+                        payload={
+                            "daily_return": state.daily_return,
+                            "entries_paused": state.entries_paused,
+                            "halt_reason": state.halt_reason,
+                        },
+                        created_at=state.updated_at,
+                    )
 
     def load_parent_portfolio_state(self) -> ParentPortfolioState | None:
         with self._connect() as connection:
@@ -1578,6 +1639,49 @@ class IntradayStore:
             result.append(item)
         return result
 
+    def signal_gate_summary(
+        self,
+        *,
+        since: datetime,
+        scope: DecisionScope | None = None,
+    ) -> dict:
+        if since.tzinfo is None or since.utcoffset() is None:
+            raise ValueError("signal summary boundary must be timezone-aware")
+        query = (
+            "SELECT scope, gate_passed, gate_reason FROM signals "
+            "WHERE julianday(timestamp)>=julianday(?) "
+            "AND decision_mode='primary'"
+        )
+        parameters: list[str] = [since.astimezone(timezone.utc).isoformat()]
+        if scope is not None:
+            query += " AND scope=?"
+            parameters.append(scope.value)
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(parameters)).fetchall()
+        reasons: dict[str, int] = {}
+        scopes = {item.value: {"evaluations": 0, "passed": 0, "rejected": 0} for item in DecisionScope}
+        passed = 0
+        for row in rows:
+            scopes[row["scope"]]["evaluations"] += 1
+            if row["gate_passed"]:
+                passed += 1
+                scopes[row["scope"]]["passed"] += 1
+                continue
+            scopes[row["scope"]]["rejected"] += 1
+            for reason in (row["gate_reason"] or "unknown").split(";"):
+                code = reason.strip()
+                if code:
+                    reasons[code] = reasons.get(code, 0) + 1
+        return {
+            "scope": scope.value if scope is not None else "all",
+            "since": since.astimezone(timezone.utc).isoformat(),
+            "evaluations": len(rows),
+            "passed": passed,
+            "rejected": len(rows) - passed,
+            "reason_codes": dict(sorted(reasons.items())),
+            "scopes": scopes,
+        }
+
     def list_snapshots(self, limit: int = 100_000) -> list[FeatureSnapshot]:
         if not 1 <= limit <= 2_000_000:
             raise ValueError("limit must be between 1 and 2000000")
@@ -1723,6 +1827,54 @@ class IntradayStore:
                 created_at,
             ),
         )
+
+    @staticmethod
+    def _record_operator_alert(
+        connection: sqlite3.Connection,
+        *,
+        delivery_key: str,
+        kind: str,
+        severity: str,
+        message: str,
+        payload: dict,
+        created_at: datetime,
+    ) -> None:
+        if severity not in {"warning", "critical"}:
+            raise ValueError("invalid operator alert severity")
+        connection.execute(
+            "INSERT OR IGNORE INTO operator_alerts "
+            "(delivery_key, kind, severity, message, payload_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                delivery_key,
+                kind,
+                severity,
+                message,
+                json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                IntradayStore._require_aware_operator_time(created_at),
+            ),
+        )
+
+    def list_operator_alerts(self, *, after_id: int = 0, limit: int = 100) -> list[dict]:
+        if after_id < 0 or not 1 <= limit <= 1000:
+            raise ValueError("invalid operator alert cursor or limit")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, kind, severity, message, payload_json, created_at "
+                "FROM operator_alerts WHERE id>? ORDER BY id LIMIT ?",
+                (after_id, limit),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "kind": row["kind"],
+                "severity": row["severity"],
+                "message": row["message"],
+                "payload": json.loads(row["payload_json"]),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
 
     def create_operator_action_request(
         self,
@@ -1982,6 +2134,20 @@ class IntradayStore:
                         "result": result,
                     },
                     created_at=(applied_at or datetime.now(timezone.utc)).isoformat(),
+                )
+                completed_at = applied_at or datetime.now(timezone.utc)
+                self._record_operator_alert(
+                    connection,
+                    delivery_key=f"operator-action:{action['id']}:{status}",
+                    kind=f"operator_action_{status}",
+                    severity="warning" if status == "applied" else "critical",
+                    message=f"Operator action {action['id']} was {status}.",
+                    payload={
+                        "request_id": action["id"],
+                        "command_id": command_id,
+                        "error_code": error_code,
+                    },
+                    created_at=completed_at,
                 )
 
     def register_rule(self, rule: RuleCandidate, *, status: str = "queued") -> None:
