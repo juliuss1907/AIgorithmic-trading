@@ -4,6 +4,7 @@ import os
 import sqlite3
 import stat
 import sys
+from argparse import Namespace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -21,7 +22,7 @@ from intraday.provider_client import (
     ProviderPreflightClient,
 )
 from intraday.__main__ import main
-from intraday.provider_connect import _choose_option, _masked_api_key
+from intraday.provider_connect import _choose_option, _masked_api_key, _read_api_key
 from intraday.runtime import process_pending_commands
 
 
@@ -377,8 +378,13 @@ def test_connect_jev_custom_prompts_for_systemone_endpoint(monkeypatch, capsys, 
 def test_connect_jev_menu_defaults_and_selects_typesafe(monkeypatch, capsys, tmp_path):
     database = tmp_path / "intraday.sqlite"
     secrets_file = tmp_path / "providers.toml"
-    answers = iter(["2", ""])
+    answers = iter([""])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr(
+        "intraday.provider_connect.toolkit_choice",
+        lambda *args, **kwargs: "typesafe",
+        raising=False,
+    )
     monkeypatch.setattr(
         "intraday.provider_connect._masked_api_key", lambda _prompt: "typesafe-private-key"
     )
@@ -407,7 +413,6 @@ def test_connect_jev_menu_defaults_and_selects_typesafe(monkeypatch, capsys, tmp
     main()
 
     output = capsys.readouterr().out
-    assert "Choose Jev provider:" in output
     assert '"kind": "typesafe-systemone"' in output
 
 
@@ -425,12 +430,54 @@ def test_masked_api_key_uses_star_password_prompt(monkeypatch):
     assert calls[0][1]["is_password"] is True
 
 
-@pytest.mark.parametrize("selection", ["0", "-1", "4", "not-a-number"])
-def test_connect_menu_rejects_out_of_range_selection(selection, monkeypatch):
-    monkeypatch.setattr("builtins.input", lambda _prompt: selection)
+def test_connect_menu_uses_arrow_choice_with_openrouter_default(monkeypatch):
+    calls = []
 
-    with pytest.raises(SystemExit, match="invalid provider selection"):
+    def fake_choice(message, **options):
+        calls.append((message, options))
+        return "typesafe"
+
+    monkeypatch.setattr(
+        "intraday.provider_connect.toolkit_choice", fake_choice, raising=False
+    )
+
+    assert _choose_option(ProviderRole.JEV) == "typesafe"
+    assert calls == [
+        (
+            "Choose Jev provider:",
+            {
+                "options": [
+                    ("openrouter", "OpenRouter"),
+                    ("typesafe", "TypeSafe"),
+                    ("custom-provider", "Custom provider"),
+                ],
+                "default": "openrouter",
+                "bottom_toolbar": "↑/↓ move · Enter select · Ctrl+C cancel",
+            },
+        )
+    ]
+
+
+def test_connect_menu_reports_keyboard_cancellation(monkeypatch):
+    def cancel(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        "intraday.provider_connect.toolkit_choice", cancel, raising=False
+    )
+
+    with pytest.raises(SystemExit, match="connection cancelled"):
         _choose_option(ProviderRole.JEV)
+
+
+def test_api_key_prompt_reports_keyboard_cancellation(monkeypatch):
+    def cancel(_message):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("intraday.provider_connect._masked_api_key", cancel)
+
+    with pytest.raises(SystemExit, match="connection cancelled"):
+        _read_api_key(Namespace(api_key_stdin=False))
 
 
 @pytest.mark.parametrize(

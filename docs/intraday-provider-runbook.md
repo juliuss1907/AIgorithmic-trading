@@ -44,6 +44,7 @@ aigt connect llm
 # Anthropic-compatible / OpenAI-compatible provider
 ```
 
+Use `↑`/`↓` to move through either menu, `Enter` to select, and `Ctrl+C` to cancel.
 The Jev OpenRouter and TypeSafe choices supply their official endpoints and suggested
 models. Custom Jev, Anthropic-compatible, and OpenAI-compatible choices ask for the
 provider URL and model ID. A minimal paid preflight runs before anything is saved; a

@@ -25,6 +25,7 @@ aigt provider list
 aigt doctor
 ```
 
+Use `↑`/`↓` to move, `Enter` to select, and `Ctrl+C` to cancel either menu.
 The command fixes the role before provider selection, so Jev and LLM protocols cannot be
 mixed. `connect` runs a paid minimal preflight and activates the generated profile only
 when it succeeds. A failed preflight is not persisted and does not replace the active

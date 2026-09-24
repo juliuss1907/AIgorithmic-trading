@@ -130,6 +130,7 @@ aigt connect llm  # Anthropic-compatible / OpenAI-compatible
 aigt provider list
 ```
 
+Trong menu provider, dùng `↑`/`↓` để di chuyển, `Enter` để chọn và `Ctrl+C` để hủy.
 Wizard thực hiện một request nhỏ có tính phí trước khi lưu, rồi activate khi preflight
 thành công. Kết nối lỗi không được lưu và không thay provider đang active.
 Các lệnh `add/test/activate/deactivate` chi tiết vẫn được giữ cho automation. Assignment
