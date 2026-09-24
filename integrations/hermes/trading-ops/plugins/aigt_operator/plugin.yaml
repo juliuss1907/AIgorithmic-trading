@@ -1,0 +1,6 @@
+name: aigt-operator
+version: 0.1.0
+description: "Scoped AIGT read tool and deterministic Telegram operator commands"
+kind: standalone
+provides_tools:
+  - aigt_operator_read

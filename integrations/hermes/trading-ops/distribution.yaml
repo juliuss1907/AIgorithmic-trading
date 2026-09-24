@@ -1,0 +1,24 @@
+name: trading-ops
+version: 0.1.0
+description: "Read-mostly Telegram operator for the AIGT paper-trading system"
+hermes_requires: ">=0.20.4"
+author: "AIgorithmic Trading"
+license: "MIT"
+env_requires:
+  - name: AIGT_OPERATOR_URL
+    description: "Loopback URL of the AIGT Operator API"
+    required: false
+    default: "http://127.0.0.1:8081"
+  - name: AIGT_OPERATOR_READ_TOKEN
+    description: "Read-only Operator API credential"
+    required: true
+  - name: AIGT_OPERATOR_ACTION_TOKEN
+    description: "Pause/resume credential; leave unset during read-only soak"
+    required: false
+distribution_owned:
+  - SOUL.md
+  - config.yaml
+  - skills/
+  - plugins/
+  - scripts/
+  - distribution.yaml

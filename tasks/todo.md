@@ -9,9 +9,14 @@
 - [x] Phase 4: evaluator A/B, eligibility gate và retrospective 09:00.
 - [x] Phase 5: evidence-aware LLM thesis và manual rule lifecycle.
 - [x] Phase 6: dashboard vận hành, doctor và runbook.
+- [x] Phase 7a: Operator API, token scopes, action approval, audit và alert cursor.
+- [x] Phase 7b: Hermes `trading-ops` distribution, read tool, slash commands và cron scripts.
 
 ## Sau khi build
 
+- [ ] Clone/cài repo lên VPS trước khi tích hợp Hermes.
+- [ ] Tạo Unix user và Telegram bot riêng, rồi cài profile `trading-ops` trên VPS.
+- [ ] Chạy Hermes read-only 72 giờ; chỉ sau đó mới bật pause/resume.
 - [ ] Chạy paper soak liên tục 72 giờ.
 - [ ] Thu thập ít nhất 14 ngày và 1.000 numeric/compact pairs.
 - [ ] Đánh giá compact eligibility; không auto-activate.

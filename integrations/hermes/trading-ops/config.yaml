@@ -1,0 +1,8 @@
+toolsets:
+  - aigt-operator
+plugins:
+  enabled:
+    - aigt_operator
+skills:
+  always_load:
+    - aigt-operator

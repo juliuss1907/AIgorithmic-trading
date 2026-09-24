@@ -28,6 +28,8 @@ thay đổi hard-risk hoặc tự kích hoạt rule.
 5. Đánh giá A/B và tạo retrospective deterministic lúc 09:00.
 6. Tách hourly thesis khỏi daily rule proposal; thêm rule lifecycle thủ công.
 7. Bổ sung dashboard vận hành, doctor và chạy paper soak.
+8. Thêm Operator API và Hermes `trading-ops` distribution; rollout VPS tách riêng sau khi
+   repo và Hermes đã được cài trên máy đích.
 
 ## Điều kiện hoàn thành
 
@@ -37,6 +39,7 @@ thay đổi hard-risk hoặc tự kích hoạt rule.
 - Migration bảo toàn journal cũ và append-only triggers.
 - Rule/compact state không tự động promotion.
 - Full test suite pass và hệ thống chạy paper ổn định tối thiểu 72 giờ.
+- Hermes/Telegram không nằm trong hot path; mất gateway không được dừng Jev, LLM hoặc risk loop.
 
 ## Git policy
 

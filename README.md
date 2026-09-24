@@ -138,6 +138,20 @@ Service `admin` mount secret read-write để quản lý profile; `worker` mount
 `web` không mount file này. Sau khi thêm profile, chạy `provider test` rồi `provider
 activate` bằng cùng mẫu `docker compose ... run --rm admin`.
 
+### Hermes trading operator — chuẩn bị sẵn, chưa cài
+
+AIGT có Operator API v1 tại `/api/operator/v1/*` và một Hermes distribution trong
+`integrations/hermes/trading-ops/`. Hermes giữ vai trò giám sát/điều hành qua Telegram;
+trading LLM, Jev và deterministic risk engine không thay đổi và không phụ thuộc Hermes.
+
+Hai token read/action phải khác nhau. `INTRADAY_OPERATOR_ACTIONS_ENABLED=false` là mặc
+định, nên chỉ các projection status/no-trade/alerts hoạt động trong giai đoạn soak. Hermes
+không được đọc database, repo, provider secret hoặc dashboard control token.
+
+Distribution hiện chỉ được lưu và kiểm thử trong repo; chưa được cài vào Hermes hay VPS.
+Khi repo đã có trên VPS, làm theo
+[runbook Hermes trading operator](docs/runbooks/hermes-trading-ops.md).
+
 News worker hiện allowlist RSS của SEC, CFTC, Fed, CoinDesk, Decrypt và Cointelegraph.
 The Block, Wu Blockchain và Binance announcements được hiện là `disabled` kèm lý do
 thay vì dùng scraper hoặc nguồn mirror không được xác minh.
