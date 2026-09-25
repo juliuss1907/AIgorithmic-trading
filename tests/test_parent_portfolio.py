@@ -2,7 +2,7 @@ import json
 import sys
 from datetime import datetime, timezone
 
-from intraday.contracts import DecisionScope
+from intraday.contracts import DecisionScope, FeatureSnapshot
 from intraday.__main__ import main
 from intraday.portfolio_coordinator import (
     ParentPortfolioCoordinator,
@@ -34,6 +34,26 @@ def state(**values):
     }
     defaults.update(values)
     return ParentPortfolioState(**defaults)
+
+
+def market_snapshot(*, market: str, price: float) -> FeatureSnapshot:
+    return FeatureSnapshot.create(
+        symbol="BTCUSDT",
+        market=market,
+        timeframe="1d" if market == "binance_spot" else "1h",
+        feature_schema_version="2",
+        event_time=NOW,
+        built_at=NOW,
+        bid=price - 10,
+        ask=price + 10,
+        features={
+            "price": price - 100,
+            "candle_close_price": price - 100,
+            "reference_price": price,
+            **({} if market == "binance_spot" else {"mark_price": price}),
+        },
+        freshness={"candles": True, "order_book": True},
+    )
 
 
 def test_parent_budget_allows_maximum_spot_and_perp_sleeves_together():
@@ -162,6 +182,10 @@ def test_portfolio_cli_status_pause_resume_and_flatten(monkeypatch, capsys, tmp_
         high_water_mark=10_300,
     )
     store.save_parent_portfolio_state(current, event_kind="initialized", actor="test")
+    store.record_snapshot(market_snapshot(market="binance_spot", price=90_000))
+    store.record_snapshot(
+        market_snapshot(market="binance_usdm_perp", price=110_000)
+    )
 
     def invoke(*arguments):
         monkeypatch.setattr(
@@ -178,11 +202,16 @@ def test_portfolio_cli_status_pause_resume_and_flatten(monkeypatch, capsys, tmp_
     flattened = invoke("flatten")
 
     assert status["mode"] == "paper"
-    assert status["spot_notional"] == 2_000
-    assert status["perp_notional"] == -1_000
+    assert status["spot_price"] == 90_000
+    assert status["perp_mark_price"] == 110_000
+    assert status["spot_notional"] == 1_800
+    assert status["perp_notional"] == -1_100
     assert paused["entries_paused"] is True
     assert resumed["entries_paused"] is False
     assert flattened["spot_notional"] == 0
     assert flattened["perp_notional"] == 0
     assert flattened["entries_paused"] is True
+    fills = {fill.scope: fill for fill in store.list_parent_paper_fills()}
+    assert fills[DecisionScope.SPOT_DAILY].price < 90_000
+    assert fills[DecisionScope.PERP_INTRADAY].price > 110_000
     assert len(store.list_parent_portfolio_events()) == 4

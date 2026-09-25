@@ -7,6 +7,7 @@ from intraday.contracts import (
     AnalysisAssessment,
     AnalystReport,
     DecisionScope,
+    FeatureSnapshot,
     HorizonThesis,
     MarketThesisBundle,
     ProviderKind,
@@ -222,6 +223,43 @@ def test_combined_portfolio_page_api_and_control_inbox(tmp_path):
         updated_at=now,
     )
     store.save_parent_portfolio_state(state, event_kind="initialized", actor="test")
+    store.record_snapshot(
+        FeatureSnapshot.create(
+            symbol="BTCUSDT",
+            market="binance_usdm_perp",
+            timeframe="1h",
+            feature_schema_version="2",
+            event_time=now,
+            built_at=now,
+            bid=109_990,
+            ask=110_010,
+            features={
+                "price": 109_000,
+                "mark_price": 110_000,
+                "reference_price": 110_000,
+                "candle_close_price": 109_000,
+            },
+            freshness={"candles": True, "order_book": True},
+        )
+    )
+    store.record_snapshot(
+        FeatureSnapshot.create(
+            symbol="BTCUSDT",
+            market="binance_spot",
+            timeframe="1d",
+            feature_schema_version="2",
+            event_time=now,
+            built_at=now,
+            bid=89_990,
+            ask=90_010,
+            features={
+                "price": 89_000,
+                "reference_price": 90_000,
+                "candle_close_price": 89_000,
+            },
+            freshness={"candles": True, "order_book": True},
+        )
+    )
     client = TestClient(create_app(database=database, control_token="control-token"))
 
     page = client.get("/portfolio")
@@ -246,11 +284,15 @@ def test_combined_portfolio_page_api_and_control_inbox(tmp_path):
     assert "60 / 40" in page.text
     assert "Spot reference" in page.text
     assert "Perp mark" in page.text
+    assert "90000.00" in page.text
+    assert "110000.00" in page.text
     assert "Cadence health" in page.text
     assert "Decision experiment" in page.text
     assert "Outcome coverage" in page.text
     assert "Latest retrospective" in page.text
     assert api.json()["portfolio"]["paper_active"] is False
+    assert api.json()["portfolio"]["spot_price"] == 90_000
+    assert api.json()["portfolio"]["perp_mark_price"] == 110_000
     assert api.json()["limits"]["leverage"] == 3
     assert operations.status_code == 200
     assert operations.json()["schema_version"] == 18

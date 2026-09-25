@@ -64,6 +64,7 @@ from intraday.portfolio_coordinator import (
     ParentPortfolioState,
     apply_operator_command,
 )
+from intraday.portfolio_view import latest_parent_market_view
 from intraday.portfolio_soak import (
     CURRENT_SOAK_EVIDENCE_VERSION,
     evaluate_portfolio_soak,
@@ -939,6 +940,7 @@ def _portfolio_cli(arguments) -> None:
     state = store.load_parent_portfolio_state()
     if state is None:
         raise SystemExit("parent paper portfolio is not initialized")
+    state = latest_parent_market_view(store, state)
     if command == "activate-paper":
         evaluation = store.portfolio_soak_evaluation(arguments.evaluation_id)
         latest_evaluation = store.latest_portfolio_soak_evaluation()
@@ -970,8 +972,17 @@ def _portfolio_cli(arguments) -> None:
     now = datetime.now(timezone.utc)
     try:
         if command == "flatten":
+            perp_snapshot = store.latest_snapshot(market="binance_usdm_perp")
+            spot_snapshot = store.latest_snapshot(market="binance_spot")
             state = flatten_parent_paper_positions(
-                store, state, now=now, actor="cli"
+                store,
+                state,
+                now=now,
+                spot_bid=spot_snapshot.bid if spot_snapshot else None,
+                spot_ask=spot_snapshot.ask if spot_snapshot else None,
+                perp_bid=perp_snapshot.bid if perp_snapshot else None,
+                perp_ask=perp_snapshot.ask if perp_snapshot else None,
+                actor="cli",
             )
         else:
             state = apply_operator_command(state, command, now=now)
@@ -1107,6 +1118,8 @@ def main() -> None:
         store = IntradayStore(config.database)
         result = _doctor(config)
         parent = store.load_parent_portfolio_state()
+        if parent is not None:
+            parent = latest_parent_market_view(store, parent)
         result["portfolio"] = (
             _parent_portfolio_payload(parent) if parent is not None else None
         )

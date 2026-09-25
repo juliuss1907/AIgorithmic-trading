@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from intraday.contracts import DecisionScope, ProviderRole
 from intraday.decision_evaluation import EVALUATION_HORIZONS
 from intraday.operator_service import build_operator_snapshot
+from intraday.portfolio_view import latest_parent_market_view
 from intraday.store import IntradayStore
 
 
@@ -217,6 +218,8 @@ def create_app(
     @app.get("/portfolio", response_class=HTMLResponse)
     def portfolio_page(request: Request):
         parent = store.load_parent_portfolio_state()
+        if parent is not None:
+            parent = latest_parent_market_view(store, parent)
         bundle = store.latest_market_thesis_bundle()
         operations = operations_snapshot()
         return templates.TemplateResponse(
@@ -265,6 +268,8 @@ def create_app(
     @app.get("/api/portfolio")
     def parent_portfolio():
         parent = store.load_parent_portfolio_state()
+        if parent is not None:
+            parent = latest_parent_market_view(store, parent)
         return {
             "portfolio": parent.model_dump(mode="json") if parent else None,
             "limits": {
