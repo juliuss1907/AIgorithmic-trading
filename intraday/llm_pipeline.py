@@ -298,6 +298,7 @@ class StructuredLLMClient:
             if hostname == "openrouter.ai" or (
                 hostname is not None and hostname.endswith(".openrouter.ai")
             ):
+                request_payload.pop("temperature", None)
                 request_payload["provider"] = {"require_parameters": True}
         body = json.dumps(request_payload, sort_keys=True, separators=(",", ":")).encode()
         request_hash = hashlib.sha256(body).hexdigest()

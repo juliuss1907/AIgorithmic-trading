@@ -194,6 +194,7 @@ def test_structured_llm_client_requires_openrouter_structured_output_support(
     body = json.loads(requests[0]["body"])
     assert body["provider"] == {"require_parameters": True}
     assert body["max_tokens"] == 4096
+    assert "temperature" not in body
 
 
 def test_structured_llm_client_classifies_invalid_json_and_keeps_safe_metadata(
