@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from intraday.contracts import FeatureSnapshot, SpotRuleParameters
-from intraday.market import compute_indicators
+from intraday.market import StaleMarketData, compute_indicators
 
 
 SPOT_PUBLIC_BASE_URL = "https://api.binance.com"
@@ -177,4 +177,77 @@ class BinanceSpotDailyClient:
             raise ValueError("unsupported depth limit")
         return self._fetch_json(
             "/api/v3/depth", {"symbol": symbol, "limit": limit}
+        )
+
+
+class MultiCadenceSpotCache:
+    """Cache closed daily candles separately from live Binance Spot quotes."""
+
+    def __init__(
+        self,
+        client: BinanceSpotDailyClient,
+        *,
+        quote_interval_seconds: float = 15,
+    ):
+        self.client = client
+        self.quote_interval_seconds = quote_interval_seconds
+        self._values: dict[str, object] = {}
+        self._updated: dict[str, datetime] = {}
+        self._candle_day = None
+
+    def snapshot(
+        self,
+        symbol: str = "BTCUSDT",
+        *,
+        now: datetime | None = None,
+        sentiment_score: float | None = 0.0,
+        candle_limit: int = 100,
+    ) -> FeatureSnapshot:
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("spot cache time must be timezone-aware")
+        now = now.astimezone(timezone.utc)
+        if self._candle_day != now.date() or "candles" not in self._values:
+            try:
+                candles = self.client.candles(
+                    symbol=symbol, limit=candle_limit, now=now
+                )
+            except Exception:
+                candles = None
+            if candles:
+                self._values["candles"] = candles
+                self._updated["candles"] = now
+                self._candle_day = now.date()
+        quote_updated = self._updated.get("order_book")
+        if (
+            quote_updated is None
+            or (now - quote_updated).total_seconds() >= self.quote_interval_seconds
+        ):
+            try:
+                book = self.client.order_book(symbol=symbol, limit=20)
+            except Exception:
+                book = None
+            if book is not None:
+                self._values["order_book"] = book
+                self._updated["order_book"] = now
+
+        maximum_age = {"candles": 26 * 3600, "order_book": 30}
+        stale = [
+            name
+            for name, age in maximum_age.items()
+            if name not in self._values
+            or name not in self._updated
+            or (now - self._updated[name]).total_seconds() > age
+        ]
+        if stale:
+            raise StaleMarketData(
+                "stale spot market components: " + ",".join(stale)
+            )
+        return build_spot_feature_snapshot(
+            symbol=symbol,
+            candles=self._values["candles"],
+            book=self._values["order_book"],
+            event_time=now,
+            built_at=now,
+            sentiment_score=sentiment_score,
         )

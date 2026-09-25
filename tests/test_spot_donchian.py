@@ -1,9 +1,14 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from intraday.contracts import SpotRuleParameters
-from intraday.spot_signal import build_spot_feature_snapshot, evaluate_donchian
+from intraday.market import StaleMarketData
+from intraday.spot_signal import (
+    MultiCadenceSpotCache,
+    build_spot_feature_snapshot,
+    evaluate_donchian,
+)
 
 
 def rows(closes):
@@ -77,3 +82,43 @@ def test_spot_snapshot_uses_book_midpoint_and_closed_daily_candle():
     assert snapshot.bid == 140
     assert snapshot.ask == 140.2
     assert snapshot.features["volume_1d"] == 10
+
+
+def test_spot_cache_refreshes_quotes_without_refetching_daily_candles():
+    class Client:
+        def __init__(self):
+            self.candle_calls = 0
+            self.book_calls = 0
+
+        def candles(self, **kwargs):
+            self.candle_calls += 1
+            return rows([100 + index for index in range(40)])
+
+        def order_book(self, **kwargs):
+            self.book_calls += 1
+            return {"bids": [["140", "2"]], "asks": [["140.2", "1"]]}
+
+    client = Client()
+    cache = MultiCadenceSpotCache(client, quote_interval_seconds=15)
+    now = datetime(2026, 9, 25, 1, tzinfo=timezone.utc)
+
+    for seconds in (0, 5, 15):
+        snapshot = cache.snapshot(now=now + timedelta(seconds=seconds))
+
+    assert snapshot.features["reference_price"] == pytest.approx(140.1)
+    assert client.candle_calls == 1
+    assert client.book_calls == 2
+
+
+def test_spot_cache_fails_closed_when_quote_is_unavailable():
+    class Client:
+        def candles(self, **kwargs):
+            return rows([100 + index for index in range(40)])
+
+        def order_book(self, **kwargs):
+            raise TimeoutError
+
+    cache = MultiCadenceSpotCache(Client())
+
+    with pytest.raises(StaleMarketData, match="order_book"):
+        cache.snapshot(now=datetime(2026, 9, 25, 1, tzinfo=timezone.utc))
