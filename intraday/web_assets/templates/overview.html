@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta http-equiv="refresh" content="10">
+    <title>AIGT operations</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Đi tới nội dung chính</a>
+    <header class="masthead operations-head">
+      <div>
+        <p class="eyebrow">BTCUSDT · portfolio worker · paper / soak</p>
+        <h1>AIGT operations</h1>
+      </div>
+      <div class="head-actions">
+        <nav aria-label="Điều hướng chính">
+          <a class="nav-link" href="/portfolio">Portfolio</a>
+          <a class="nav-link" href="/system-plan">System plan</a>
+        </nav>
+        <span class="system-state state-{{ dashboard.status.code|lower }}">
+          <span aria-hidden="true"></span>{{ dashboard.status.label }}
+        </span>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="strip operations-strip" aria-label="Tình trạng hệ thống">
+        <article>
+          <h2>72-hour soak</h2>
+          <strong>{{ "%.1f"|format(dashboard.soak.progress_pct) }}%</strong>
+          <small>
+            {% if dashboard.soak.target_at %}
+              Còn {{ dashboard.soak.remaining_seconds|duration }} · kết thúc
+              <time datetime="{{ dashboard.soak.target_at }}" title="{{ dashboard.soak.target_at }} UTC">{{ dashboard.soak.target_at|vn_time }}</time>
+            {% else %}
+              Chờ signal model-backed đầu tiên
+            {% endif %}
+          </small>
+        </article>
+        <article>
+          <h2>Perp cadence</h2>
+          <strong>{{ dashboard.scopes.perp_intraday.latest_status or "Waiting" }}</strong>
+          <small>{% if dashboard.scopes.perp_intraday.heartbeat_age_seconds is not none %}{{ dashboard.scopes.perp_intraday.heartbeat_age_seconds|duration }} trước{% else %}Chưa có heartbeat{% endif %} · {{ dashboard.scopes.perp_intraday.samples }} mẫu</small>
+        </article>
+        <article>
+          <h2>Spot heartbeat</h2>
+          <strong>{{ dashboard.scopes.spot_daily.latest_status or "Waiting" }}</strong>
+          <small>{% if dashboard.scopes.spot_daily.heartbeat_age_seconds is not none %}{{ dashboard.scopes.spot_daily.heartbeat_age_seconds|duration }} trước{% else %}Chưa có heartbeat{% endif %} · no-setup vẫn là healthy</small>
+        </article>
+        <article>
+          <h2>Providers</h2>
+          <strong>{{ (dashboard.providers.jev.active|int) + (dashboard.providers.llm.active|int) }} / 2 active</strong>
+          <small>Jev {{ dashboard.providers.jev.latest_call.status if dashboard.providers.jev.latest_call else "waiting" }} · LLM {{ dashboard.providers.llm.latest_call.status if dashboard.providers.llm.latest_call else "waiting" }}</small>
+        </article>
+        <article>
+          <h2>Paper fills</h2>
+          <strong>{{ dashboard.counts.fills }}</strong>
+          <small>{{ dashboard.counts.signals }} journal signals · {{ dashboard.counts.trades }} closed trades</small>
+        </article>
+      </section>
+
+      <section class="soak-overview" aria-labelledby="soak-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Live read-model · {{ dashboard.soak.evidence_version }}</p>
+            <h2 id="soak-heading">Soak campaign</h2>
+          </div>
+          <small>Cập nhật <time datetime="{{ dashboard.generated_at }}" title="{{ dashboard.generated_at }} UTC">{{ dashboard.generated_at|vn_time }}</time></small>
+        </div>
+        <div class="progress-track" role="progressbar" aria-label="Tiến độ soak 72 giờ" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ dashboard.soak.progress_pct|round(1) }}">
+          <span style="width: {{ dashboard.soak.progress_pct }}%"></span>
+        </div>
+        {% if dashboard.status.reasons %}
+        <p class="status-detail"><strong>Cần chú ý:</strong> {{ dashboard.status.reasons|join(", ") }}</p>
+        {% endif %}
+        <dl class="metric-rows">
+          <div><dt>Bắt đầu model-backed</dt><dd>{% if dashboard.soak.started_at %}<time datetime="{{ dashboard.soak.started_at }}" title="{{ dashboard.soak.started_at }} UTC">{{ dashboard.soak.started_at|vn_time }}</time>{% else %}—{% endif %}</dd></div>
+          <div><dt>Perp availability</dt><dd>{{ "%.1f"|format(dashboard.scopes.perp_intraday.availability * 100) }}% · {{ "healthy" if dashboard.scopes.perp_intraday.healthy else "waiting / stale" }}</dd></div>
+          <div><dt>Spot availability</dt><dd>{{ "%.1f"|format(dashboard.scopes.spot_daily.availability * 100) }}% · {{ "healthy" if dashboard.scopes.spot_daily.healthy else "waiting / stale" }}</dd></div>
+          <div><dt>Hard-risk violations</dt><dd>{{ dashboard.soak.preview.hard_risk_violations }}</dd></div>
+          <div><dt>Live projection</dt><dd>{{ dashboard.soak.preview.status|upper }} · không tự kích hoạt paper</dd></div>
+        </dl>
+      </section>
+
+      <section class="ledger" aria-labelledby="market-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Price semantics</p>
+            <h2 id="market-heading">Market context</h2>
+          </div>
+          <small>Current reference khác với nến đã đóng</small>
+        </div>
+        <div class="market-lines">
+          {% for name, market in (("Spot · daily", dashboard.markets.spot), ("Perp · hourly", dashboard.markets.perp)) %}
+          <article>
+            <div><span class="label">{{ name }}</span><strong>{{ market.market if market else "Waiting for snapshot" }}</strong></div>
+            <dl>
+              <div><dt>Current reference</dt><dd>{{ "%.2f"|format(market.reference_price) if market and market.reference_price is not none else "—" }}</dd></div>
+              <div><dt>Closed candle</dt><dd>{{ "%.2f"|format(market.candle_close_price) if market and market.candle_close_price is not none else "—" }}</dd></div>
+              <div><dt>Event time</dt><dd>{% if market %}<time datetime="{{ market.event_time }}" title="{{ market.event_time }} UTC">{{ market.event_time|vn_time }}</time>{% else %}—{% endif %}</dd></div>
+            </dl>
+          </article>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="ledger" aria-labelledby="signals-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Safe journal projection</p>
+            <h2 id="signals-heading">Recent Jev signals</h2>
+          </div>
+          <small>20 signal gần nhất · refresh mỗi 10 giây</small>
+        </div>
+        {% if dashboard.signals.recent %}
+        <div class="table-wrap" tabindex="0" aria-label="Các signal Jev gần nhất">
+          <table>
+            <thead><tr><th>Time (VN)</th><th>Scope</th><th>Direction</th><th>Confidence</th><th>Regime</th><th>Quality</th><th>Risk</th><th>Outcome</th></tr></thead>
+            <tbody>
+              {% for signal in dashboard.signals.recent %}
+              <tr>
+                <td><time datetime="{{ signal.timestamp }}" title="{{ signal.timestamp }} UTC">{{ signal.timestamp|vn_time }}</time></td>
+                <td>{{ signal.scope }}</td>
+                <td><span class="direction">{{ signal.direction or "Unknown" }}</span></td>
+                <td>{{ "%.0f"|format(signal.confidence * 100) + "%" if signal.confidence is not none else "—" }}</td>
+                <td>{{ signal.regime or "—" }}</td>
+                <td>{{ "%.1f / 5"|format(signal.entry_quality) if signal.entry_quality is not none else "—" }}</td>
+                <td>{{ signal.risk_level or "—" }}</td>
+                <td><span class="outcome outcome-{{ signal.outcome|lower }}">{{ signal.outcome }}</span></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty" role="status"><strong>Chưa có Jev signal.</strong><p>Worker sẽ ghi mọi evaluation, kể cả signal không vượt gate.</p></div>
+        {% endif %}
+      </section>
+
+      <section class="operations-columns" aria-label="Phân tích và provider">
+        <article class="operations-panel">
+          <div class="section-head">
+            <div><p class="eyebrow">LLM cold path</p><h2>Market thesis</h2></div>
+          </div>
+          {% if dashboard.thesis %}
+          <div class="thesis-lines">
+            <div><span class="label">Perp intraday · {{ "%.0f"|format(dashboard.thesis.intraday.confidence * 100) }}%</span><strong>{{ dashboard.thesis.intraday.stance|capitalize }}</strong><p>{{ dashboard.thesis.intraday.summary }}</p></div>
+            <div><span class="label">Spot daily · {{ "%.0f"|format(dashboard.thesis.daily_swing.confidence * 100) }}%</span><strong>{{ dashboard.thesis.daily_swing.stance|capitalize }}</strong><p>{{ dashboard.thesis.daily_swing.summary }}</p></div>
+          </div>
+          {% else %}
+          <div class="empty compact-empty" role="status"><strong>Chưa có thesis.</strong><p>Đang chờ analysis cycle hợp lệ đầu tiên.</p></div>
+          {% endif %}
+        </article>
+        <article class="operations-panel">
+          <div class="section-head">
+            <div><p class="eyebrow">Redacted telemetry</p><h2>Model providers</h2></div>
+            <small>Cost hôm nay ${{ "%.4f"|format(dashboard.daily_model_cost_usd) }}</small>
+          </div>
+          <dl class="metric-rows provider-rows">
+            {% for role in ("jev", "llm") %}
+            {% set provider = dashboard.providers[role] %}
+            <div>
+              <dt>{{ role|upper }} · {{ provider.model or "not configured" }}</dt>
+              <dd>{{ provider.latest_call.status if provider.latest_call else "waiting" }}{% if provider.latest_call %} · {{ provider.latest_call.latency_ms }} ms{% endif %}</dd>
+            </div>
+            {% endfor %}
+          </dl>
+        </article>
+      </section>
+
+      <section class="ledger" aria-labelledby="scheduler-heading">
+        <div class="section-head">
+          <div><p class="eyebrow">Durable cadence</p><h2 id="scheduler-heading">Scheduler & safety</h2></div>
+          <small>Isolated 3× · actions không hiển thị secret</small>
+        </div>
+        {% if dashboard.scheduler %}
+        <div class="table-wrap" tabindex="0" aria-label="Tình trạng scheduler">
+          <table><thead><tr><th>Job</th><th>Status</th><th>Scheduled (VN)</th><th>Finished (VN)</th></tr></thead><tbody>
+            {% for run in dashboard.scheduler %}<tr><td>{{ run.job_name }}</td><td>{{ run.status }}</td><td>{{ run.scheduled_for|vn_time }}</td><td>{{ run.finished_at|vn_time }}</td></tr>{% endfor %}
+          </tbody></table>
+        </div>
+        {% else %}
+        <div class="empty compact-empty" role="status"><strong>Chưa có scheduler record.</strong><p>Worker vẫn có thể đang khởi tạo; kiểm tra lại sau một cadence.</p></div>
+        {% endif %}
+      </section>
+    </main>
+
+    <footer>
+      <p>Dashboard này chỉ đọc. <a class="text-link" href="/legacy-intraday">Mở intraday dashboard cũ</a> · UTC nằm trong tooltip của mọi timestamp.</p>
+    </footer>
+  </body>
+</html>

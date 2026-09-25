@@ -6,6 +6,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
@@ -25,6 +26,28 @@ from intraday.store import IntradayStore
 
 
 ASSETS = Path(__file__).with_name("web_assets")
+VIETNAM_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+
+
+def _vn_time(value) -> str:
+    if value is None:
+        return "—"
+    parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+    return parsed.astimezone(VIETNAM_TZ).strftime("%d/%m/%Y %H:%M:%S ICT")
+
+
+def _duration(value) -> str:
+    if value is None:
+        return "—"
+    seconds = max(0, int(value))
+    days, seconds = divmod(seconds, 86_400)
+    hours, seconds = divmod(seconds, 3_600)
+    minutes, _ = divmod(seconds, 60)
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
 
 
 class CommandRequest(BaseModel):
@@ -63,6 +86,8 @@ def create_app(
     app = FastAPI(title="Crypto Intraday Control Room", version="0.1.0")
     store = IntradayStore(database)
     templates = Jinja2Templates(directory=ASSETS / "templates")
+    templates.env.filters["vn_time"] = _vn_time
+    templates.env.filters["duration"] = _duration
     app.mount("/static", StaticFiles(directory=ASSETS / "static"), name="static")
     app.state.store = store
     app.state.cross_venue_mode = cross_venue_mode
@@ -182,6 +207,15 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
+        snapshot = build_dashboard_snapshot(store, now=datetime.now(timezone.utc))
+        return templates.TemplateResponse(
+            request=request,
+            name="overview.html",
+            context={"dashboard": snapshot},
+        )
+
+    @app.get("/legacy-intraday", response_class=HTMLResponse)
+    def legacy_dashboard(request: Request):
         runtime = store.load_runtime_state() or {}
         portfolio = store.load_portfolio_state() or {}
         cross_venue = store.venue_health("hyperliquid")

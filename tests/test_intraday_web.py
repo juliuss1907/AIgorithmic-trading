@@ -23,12 +23,18 @@ def test_dashboard_and_status_are_available_without_control_credentials(tmp_path
     client = TestClient(create_app(database=tmp_path / "intraday.sqlite"))
 
     page = client.get("/")
+    legacy = client.get("/legacy-intraday")
     status = client.get("/api/status")
 
     assert page.status_code == 200
-    assert "Intraday control room" in page.text
-    assert "Paper only" in page.text
-    assert "Hyperliquid" in page.text
+    assert "AIGT operations" in page.text
+    assert "Waiting for first model-backed signal" in page.text
+    assert "Recent Jev signals" in page.text
+    assert 'href="/portfolio"' in page.text
+    assert legacy.status_code == 200
+    assert "Intraday control room" in legacy.text
+    assert "Paper only" in legacy.text
+    assert "Hyperliquid" in legacy.text
     assert status.json()["mode"] == "paper"
     assert status.json()["counts"]["decisions"] == 0
     assert status.json()["cross_venue"]["venue"] == "hyperliquid"
@@ -169,6 +175,41 @@ def test_analyst_api_and_dashboard_show_latest_scoped_thesis_bundle(tmp_path):
     assert analysts.json()["thesis"]["intraday"]["horizon_minutes"] == 240
     assert dashboard.status_code == 200
     assert "Intraday evidence supports a cautious neutral posture." in dashboard.text
+
+
+def test_unified_dashboard_uses_safe_signal_projection(tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime.now(timezone.utc)
+    store.record_journal_signal(
+        decision_id="dashboard-safe-signal",
+        timestamp=now,
+        symbol="BTCUSDT",
+        scope=DecisionScope.PERP_INTRADAY,
+        state_snapshot='{"secret_marker":"must-not-render"}',
+        raw_signals={"price": 100_000.0},
+        jev_answers={
+            "direction": {"choice": "Buy", "probabilities": {"Buy": 0.91}},
+            "regime": {"choice": "Trending Up"},
+            "toxic_flow": {"noul": 0.12},
+            "entry_quality": {"score": 3.0},
+            "risk_level": {"choice": "Low"},
+        },
+        gate_passed=False,
+        gate_reason="soak_observation_only",
+        rules_version="perp-v1",
+        llm_thesis='{"private":"must-not-render"}',
+        market="binance_usdm_perp",
+        feature_schema_version="2",
+    )
+
+    page = TestClient(create_app(database=database)).get("/")
+
+    assert page.status_code == 200
+    assert "Buy" in page.text
+    assert "91%" in page.text
+    assert "OBSERVED" in page.text
+    assert "must-not-render" not in page.text
 
 
 def test_provider_mutations_are_authenticated_idempotent_commands(tmp_path):

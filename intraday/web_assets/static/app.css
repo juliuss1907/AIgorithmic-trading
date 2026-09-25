@@ -101,6 +101,39 @@ code { color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.8
 .report-grid article { min-width: 0; padding: 1.25rem; background: var(--paper); }
 .report-grid strong { margin-top: 0.5rem; font: 500 1.25rem/1.2 Georgia, serif; }
 .report-grid p { margin: 0.75rem 0 0; color: var(--muted); }
+.operations-head { align-items: center; }
+.head-actions { display: flex; align-items: center; gap: 1.5rem; }
+.system-state { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.375rem 0.625rem; border: 1px solid var(--line); border-radius: 999px; font: 600 0.75rem/1 ui-monospace, monospace; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+.system-state > span { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--muted); }
+.state-soak_active > span, .state-paper_active > span { background: var(--signal); }
+.state-degraded { color: #ffcf70; }
+.state-degraded > span { background: #ffcf70; }
+.operations-strip { grid-template-columns: repeat(5, 1fr); }
+.soak-overview { padding: 3rem 0; border-bottom: 1px solid var(--line); }
+.progress-track { width: 100%; height: 0.5rem; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+.progress-track span { display: block; height: 100%; max-width: 100%; background: var(--signal); }
+.status-detail { margin: 1rem 0 0; color: #ffcf70; overflow-wrap: anywhere; }
+.metric-rows { margin: 1.5rem 0 0; border-top: 1px solid var(--line); }
+.metric-rows > div { display: flex; justify-content: space-between; gap: 1.5rem; padding: 0.75rem 0; border-bottom: 1px solid var(--line); }
+.metric-rows dt { color: var(--muted); }
+.metric-rows dd { margin: 0; text-align: right; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.market-lines { border-top: 1px solid var(--line); }
+.market-lines article { display: grid; grid-template-columns: minmax(12rem, 0.7fr) minmax(28rem, 1.3fr); gap: 2rem; padding: 1.25rem 0; border-bottom: 1px solid var(--line); }
+.market-lines article > div strong { display: block; margin-top: 0.375rem; font: 500 1.25rem/1.2 Georgia, serif; }
+.market-lines dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin: 0; }
+.market-lines dl div { min-width: 0; }
+.market-lines dt { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.market-lines dd { margin: 0.375rem 0 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.outcome { display: inline-block; padding: 0.125rem 0.5rem; border: 1px solid var(--line); border-radius: 999px; font-size: 0.75rem; }
+.outcome-observed { color: var(--signal); }
+.operations-columns { display: grid; grid-template-columns: 1.35fr 0.65fr; gap: 3rem; padding: 3rem 0; border-bottom: 1px solid var(--line); }
+.operations-panel { min-width: 0; }
+.thesis-lines { border-top: 1px solid var(--line); }
+.thesis-lines > div { padding: 1rem 0; border-bottom: 1px solid var(--line); }
+.thesis-lines strong { display: block; margin-top: 0.375rem; font: 500 1.25rem/1.2 Georgia, serif; }
+.thesis-lines p { margin: 0.5rem 0 0; color: var(--muted); }
+.provider-rows { margin-top: 0; }
+.compact-empty { padding-block: 1.5rem; }
 .portfolio-strip { grid-template-columns: repeat(4, 1fr); }
 .portfolio-layout { display: grid; grid-template-columns: 1.5fr 1fr; gap: 1px; margin-top: 3rem; background: var(--line); }
 .risk-panel { min-width: 0; padding: 1.5rem; background: var(--paper); }
@@ -223,11 +256,14 @@ footer p { margin-bottom: 0; }
   .strip article:nth-child(4) { border-top: 1px solid var(--line); }
   .strip article:nth-child(5) { border-left: 0; border-top: 1px solid var(--line); }
   .section-head { align-items: start; flex-direction: column; }
+  .head-actions { width: 100%; align-items: start; flex-direction: column; gap: 0.75rem; }
   .thesis { grid-template-columns: 1fr; }
   .thesis small { text-align: left; }
   .report-grid { grid-template-columns: 1fr; }
   .portfolio-strip { grid-template-columns: repeat(2, 1fr); }
   .portfolio-layout { grid-template-columns: 1fr; }
+  .operations-columns { grid-template-columns: 1fr; gap: 2rem; }
+  .market-lines article { grid-template-columns: 1fr; gap: 1rem; }
   .plan-intro,
   .plan-cost,
   .acceptance { grid-template-columns: 1fr; gap: 2rem; }
@@ -243,6 +279,10 @@ footer p { margin-bottom: 0; }
   .strip article + article { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
   .empty { padding-inline: 1rem; }
   .portfolio-strip { grid-template-columns: 1fr; }
+  .operations-strip { grid-template-columns: 1fr; }
+  .market-lines dl { grid-template-columns: 1fr; }
+  .metric-rows > div { align-items: start; flex-direction: column; gap: 0.25rem; }
+  .metric-rows dd { text-align: left; }
   .plan-intro { grid-template-columns: 1fr; padding: 3rem 0 2rem; }
   .plan-section { padding: 3rem 0; }
   .diagram-frame iframe { height: 36rem; }
