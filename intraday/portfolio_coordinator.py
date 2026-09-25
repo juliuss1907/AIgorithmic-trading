@@ -22,6 +22,8 @@ class ParentPortfolioState(BaseModel):
     perp_quantity: float = 0
     perp_entry_price: float | None = Field(default=None, gt=0)
     mark_price: float = Field(gt=0)
+    spot_price: float = Field(gt=0)
+    perp_mark_price: float = Field(gt=0)
     day_start_equity: float = Field(gt=0)
     high_water_mark: float = Field(gt=0)
     entries_paused: bool = True
@@ -37,31 +39,46 @@ class ParentPortfolioState(BaseModel):
             raise ValueError("updated_at must be timezone-aware")
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def seed_scope_prices_from_legacy_mark(cls, value):
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        legacy = payload.get("mark_price") or payload.get("perp_mark_price")
+        if legacy is not None:
+            payload.setdefault("spot_price", legacy)
+            payload.setdefault("perp_mark_price", legacy)
+            payload.setdefault("mark_price", payload["perp_mark_price"])
+        return payload
+
     @model_validator(mode="after")
     def positions_have_entry_prices(self):
         if (self.spot_quantity == 0) != (self.spot_entry_price is None):
             raise ValueError("spot entry price must match position state")
         if (self.perp_quantity == 0) != (self.perp_entry_price is None):
             raise ValueError("perp entry price must match position state")
+        if self.mark_price != self.perp_mark_price:
+            raise ValueError("legacy mark_price must match perp_mark_price")
         return self
 
     @property
     def spot_notional(self) -> float:
-        return self.spot_quantity * self.mark_price
+        return self.spot_quantity * self.spot_price
 
     @property
     def perp_notional(self) -> float:
-        return self.perp_quantity * self.mark_price
+        return self.perp_quantity * self.perp_mark_price
 
     @property
     def equity(self) -> float:
         spot_unrealized = (
-            self.spot_quantity * (self.mark_price - self.spot_entry_price)
+            self.spot_quantity * (self.spot_price - self.spot_entry_price)
             if self.spot_entry_price is not None
             else 0
         )
         perp_unrealized = (
-            self.perp_quantity * (self.mark_price - self.perp_entry_price)
+            self.perp_quantity * (self.perp_mark_price - self.perp_entry_price)
             if self.perp_entry_price is not None
             else 0
         )
@@ -268,9 +285,11 @@ def apply_operator_command(
         raise ValueError("unsupported parent portfolio command")
     realized = state.realized_pnl
     if state.spot_entry_price is not None:
-        realized += state.spot_quantity * (state.mark_price - state.spot_entry_price)
+        realized += state.spot_quantity * (state.spot_price - state.spot_entry_price)
     if state.perp_entry_price is not None:
-        realized += state.perp_quantity * (state.mark_price - state.perp_entry_price)
+        realized += state.perp_quantity * (
+            state.perp_mark_price - state.perp_entry_price
+        )
     return state.model_copy(
         update={
             "realized_pnl": realized,

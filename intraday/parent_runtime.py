@@ -29,10 +29,17 @@ def _rule_parts(rule, fallback_id: str):
 def _mark_state(
     state: ParentPortfolioState, snapshot: FeatureSnapshot, now: datetime
 ) -> ParentPortfolioState:
+    reference = float(
+        snapshot.features.get("reference_price")
+        or snapshot.features.get("mark_price")
+        or snapshot.features["price"]
+    )
     payload = state.model_dump()
     payload.update(
         {
-            "mark_price": float(snapshot.features["mark_price"]),
+            "mark_price": reference,
+            "spot_price": reference,
+            "perp_mark_price": reference,
             "updated_at": now,
         }
     )
@@ -207,7 +214,7 @@ def run_parent_paper_cycle(
             )
         if state.perp_quantity and state.perp_entry_price is not None:
             signed_return = (
-                (state.mark_price / state.perp_entry_price - 1)
+                (state.perp_mark_price / state.perp_entry_price - 1)
                 * (1 if state.perp_quantity > 0 else -1)
             )
             if signed_return <= -perp_parameters.stop_distance_pct:

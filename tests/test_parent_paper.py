@@ -53,6 +53,32 @@ def test_parent_paper_ledger_can_hold_spot_long_and_perp_short_separately():
     assert current.fees > 0
 
 
+def test_parent_paper_target_quantity_uses_the_price_for_each_scope():
+    current = state(
+        mark_price=100,
+        spot_price=50,
+        perp_mark_price=100,
+    )
+    coordinator = ParentPortfolioCoordinator()
+    spot_auth = coordinator.authorize_target(
+        current, scope=DecisionScope.SPOT_DAILY, target_notional=1_000
+    )
+    current, _ = apply_paper_target(
+        current, spot_auth, bid=49.9, ask=50.1, now=NOW
+    )
+    perp_auth = coordinator.authorize_target(
+        current, scope=DecisionScope.PERP_INTRADAY, target_notional=1_000
+    )
+    current, _ = apply_paper_target(
+        current, perp_auth, bid=99.9, ask=100.1, now=NOW
+    )
+
+    assert current.spot_quantity == pytest.approx(20)
+    assert current.perp_quantity == pytest.approx(10)
+    assert current.spot_price == pytest.approx(50)
+    assert current.perp_mark_price == pytest.approx(100)
+
+
 def test_parent_paper_deterministic_reduction_realizes_pnl():
     current = state(
         mark_price=110_000,

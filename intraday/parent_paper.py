@@ -62,7 +62,12 @@ def apply_paper_target(
     target = authorization.target_notional
     if current_quantity and target and (current_quantity > 0) != (target > 0):
         raise ValueError("paper ledger refuses a same-tick position flip")
-    target_quantity = target / state.mark_price
+    reference_price = (
+        state.spot_price
+        if scope == DecisionScope.SPOT_DAILY
+        else state.perp_mark_price
+    )
+    target_quantity = target / reference_price
     delta = target_quantity - current_quantity
     if abs(delta) < 1e-12:
         return state, None
@@ -95,16 +100,24 @@ def apply_paper_target(
     updates = {
         "realized_pnl": realized,
         "fees": state.fees + fee,
-        "mark_price": (bid + ask) / 2,
         "updated_at": now,
     }
     if scope == DecisionScope.SPOT_DAILY:
         updates.update(
-            {"spot_quantity": target_quantity, "spot_entry_price": entry_price}
+            {
+                "spot_quantity": target_quantity,
+                "spot_entry_price": entry_price,
+                "spot_price": (bid + ask) / 2,
+            }
         )
     else:
         updates.update(
-            {"perp_quantity": target_quantity, "perp_entry_price": entry_price}
+            {
+                "perp_quantity": target_quantity,
+                "perp_entry_price": entry_price,
+                "perp_mark_price": (bid + ask) / 2,
+                "mark_price": (bid + ask) / 2,
+            }
         )
     payload = state.model_dump()
     payload.update(updates)

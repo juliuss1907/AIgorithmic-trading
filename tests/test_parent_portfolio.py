@@ -55,6 +55,33 @@ def test_parent_budget_allows_maximum_spot_and_perp_sleeves_together():
     assert round(perp.projected_isolated_margin_pct, 6) == round(2_000 / 3 / 10_000, 6)
 
 
+def test_parent_valuation_uses_scope_specific_prices():
+    current = state(
+        mark_price=120_000,
+        spot_price=100_000,
+        perp_mark_price=120_000,
+        spot_quantity=0.02,
+        spot_entry_price=90_000,
+        perp_quantity=-0.01,
+        perp_entry_price=110_000,
+    )
+
+    assert current.spot_notional == 2_000
+    assert current.perp_notional == -1_200
+    assert current.equity == 10_100
+
+
+def test_legacy_parent_state_seeds_both_scope_prices_from_mark_price():
+    current = state()
+    payload = current.model_dump(exclude={"spot_price", "perp_mark_price"})
+
+    restored = ParentPortfolioState.model_validate(payload)
+
+    assert restored.spot_price == 100_000
+    assert restored.perp_mark_price == 100_000
+    assert restored.mark_price == restored.perp_mark_price
+
+
 def test_parent_budget_rejects_sleeve_and_gross_limit_breaches():
     coordinator = ParentPortfolioCoordinator()
 
