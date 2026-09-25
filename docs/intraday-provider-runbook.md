@@ -49,6 +49,8 @@ The Jev OpenRouter and TypeSafe choices supply their official endpoints and sugg
 models. Custom Jev, Anthropic-compatible, and OpenAI-compatible choices ask for the
 provider URL and model ID. A minimal paid preflight runs before anything is saved; a
 failed connection leaves the current active provider unchanged.
+The normal connection flow prints only `provider connected`, `API error`, or
+`Invalid url`; inspect redacted metadata later with `aigt provider list`.
 
 For automation, `--api-key-stdin` reads exactly one line. Do not put a key in a command
 argument, `.env`, shell history, issue, or log. The advanced `provider add`, `test`, and

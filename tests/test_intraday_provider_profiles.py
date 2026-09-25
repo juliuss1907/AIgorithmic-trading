@@ -316,23 +316,15 @@ def test_connect_jev_openrouter_tests_and_activates_generated_profile(
 
     main()
 
-    output = json.loads(capsys.readouterr().out)
-    assert output["profile_id"].startswith("jev-openrouter-")
-    assert output | {"profile_id": output["profile_id"]} == {
-        "profile_id": output["profile_id"],
-        "role": "jev",
-        "kind": "openrouter-decisions",
-        "status": "ok",
-        "latency_ms": 17,
-        "active": True,
-    }
-    assert "openrouter-private-key" not in str(output)
+    output = capsys.readouterr().out
+    assert output == "provider connected\n"
+    assert "openrouter-private-key" not in output
     assert prompts == [
         "Provider API key: ",
         "Model ID [typesafe/jev-1.13]: ",
     ]
     assignment = IntradayStore(database).provider_assignment(ProviderRole.JEV)
-    assert assignment["profile_id"] == output["profile_id"]
+    assert assignment["profile_id"].startswith("jev-openrouter-")
 
 
 def test_connect_jev_custom_prompts_for_systemone_endpoint(monkeypatch, capsys, tmp_path):
@@ -370,9 +362,7 @@ def test_connect_jev_custom_prompts_for_systemone_endpoint(monkeypatch, capsys, 
 
     main()
 
-    output = json.loads(capsys.readouterr().out)
-    assert output["kind"] == "systemone-compatible"
-    assert output["active"] is True
+    assert capsys.readouterr().out == "provider connected\n"
 
 
 def test_connect_jev_menu_defaults_and_selects_typesafe(monkeypatch, capsys, tmp_path):
@@ -412,8 +402,7 @@ def test_connect_jev_menu_defaults_and_selects_typesafe(monkeypatch, capsys, tmp
 
     main()
 
-    output = capsys.readouterr().out
-    assert '"kind": "typesafe-systemone"' in output
+    assert capsys.readouterr().out == "provider connected\n"
 
 
 def test_masked_api_key_uses_star_password_prompt(monkeypatch):
@@ -537,9 +526,7 @@ def test_connect_llm_selects_compatible_wire_protocol(
 
     main()
 
-    output = json.loads(capsys.readouterr().out)
-    assert output["kind"] == expected_kind.value
-    assert output["active"] is True
+    assert capsys.readouterr().out == "provider connected\n"
 
 
 def test_connect_failure_does_not_persist_or_replace_active_provider(
@@ -590,7 +577,7 @@ def test_connect_failure_does_not_persist_or_replace_active_provider(
 
     assert exit_info.value.code == 1
     output = capsys.readouterr().out
-    assert json.loads(output)["error_code"] == "auth_failed"
+    assert output == "API error\n"
     assert "rejected-private-key" not in output
     assert [item.profile_id for item in ProviderSecretStore(secrets_file).list_profiles()] == [
         current.profile_id
@@ -599,7 +586,7 @@ def test_connect_failure_does_not_persist_or_replace_active_provider(
 
 
 def test_connect_rejects_insecure_custom_url_before_preflight(
-    monkeypatch, tmp_path
+    monkeypatch, capsys, tmp_path
 ):
     monkeypatch.setattr(
         "builtins.input",
@@ -625,8 +612,11 @@ def test_connect_rejects_insecure_custom_url_before_preflight(
         ],
     )
 
-    with pytest.raises(SystemExit, match="HTTPS"):
+    with pytest.raises(SystemExit) as exit_info:
         main()
+
+    assert exit_info.value.code == 1
+    assert capsys.readouterr().out == "Invalid url\n"
 
 
 def test_jev_preflight_uses_decisions_wire_contract_without_leaking_key():

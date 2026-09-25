@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import secrets
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from prompt_toolkit import choice as toolkit_choice
 from prompt_toolkit import prompt as toolkit_prompt
@@ -25,6 +25,11 @@ def _masked_api_key(message: str) -> str:
     return toolkit_prompt(message, is_password=True)
 
 
+def _fail(message: str) -> None:
+    print(message)
+    raise SystemExit(1)
+
+
 def _read_api_key(arguments) -> str:
     try:
         value = (
@@ -36,8 +41,8 @@ def _read_api_key(arguments) -> str:
         raise SystemExit("connection cancelled") from error
     try:
         return validate_provider_api_key(value)
-    except ValueError as error:
-        raise SystemExit(str(error)) from error
+    except ValueError:
+        _fail("API error")
 
 
 def _text_input(message: str) -> str:
@@ -78,6 +83,21 @@ def _openai_base_url(value: str) -> str:
     return normalized[:-len(suffix)] if normalized.endswith(suffix) else normalized
 
 
+def _valid_provider_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        return bool(
+            parsed.scheme == "https"
+            and parsed.hostname
+            and not parsed.username
+            and not parsed.password
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except ValueError:
+        return False
+
+
 def connect_provider(arguments, *, database: Path, secrets_file: Path) -> None:
     role = ProviderRole(arguments.connect_role)
     option = arguments.provider_option or _choose_option(role)
@@ -95,6 +115,8 @@ def connect_provider(arguments, *, database: Path, secrets_file: Path) -> None:
     elif role == ProviderRole.JEV:
         kind = ProviderKind.SYSTEMONE_COMPATIBLE
         base_url = _text_input("Provider URL: ")
+        if not _valid_provider_url(base_url):
+            _fail("Invalid url")
         api_key = _read_api_key(arguments)
         model = _text_input("Model ID: ")
     else:
@@ -106,11 +128,13 @@ def connect_provider(arguments, *, database: Path, secrets_file: Path) -> None:
         base_url = _text_input("Provider URL: ")
         if kind == ProviderKind.OPENAI_COMPATIBLE:
             base_url = _openai_base_url(base_url)
+        if not _valid_provider_url(base_url):
+            _fail("Invalid url")
         api_key = _read_api_key(arguments)
         model = _text_input("Model ID: ")
 
     if not model:
-        raise SystemExit("model ID is required")
+        _fail("API error")
     now = datetime.now(timezone.utc)
     try:
         profile = ProviderProfile.create(
@@ -123,22 +147,12 @@ def connect_provider(arguments, *, database: Path, secrets_file: Path) -> None:
             created_at=now,
             updated_at=now,
         )
-    except ValueError as error:
-        raise SystemExit(str(error)) from error
+    except ValueError:
+        _fail("API error")
 
     result = ProviderPreflightClient().test(ProviderCredential(profile, api_key))
-    output = {
-        "profile_id": profile.profile_id,
-        "role": role.value,
-        "kind": kind.value,
-        "status": result.status,
-        "latency_ms": result.latency_ms,
-        "active": False,
-    }
     if result.status != "ok":
-        output["error_code"] = result.error_code
-        print(json.dumps(output, indent=2))
-        raise SystemExit(1)
+        _fail("API error")
 
     secret_store = ProviderSecretStore(secrets_file)
     store = IntradayStore(database)
@@ -151,5 +165,4 @@ def connect_provider(arguments, *, database: Path, secrets_file: Path) -> None:
         latency_ms=result.latency_ms,
     )
     store.activate_provider(role, profile.profile_id, actor="cli", now=now)
-    output["active"] = True
-    print(json.dumps(output, indent=2))
+    print("provider connected")

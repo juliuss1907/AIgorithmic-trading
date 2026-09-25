@@ -133,6 +133,8 @@ aigt provider list
 Trong menu provider, dùng `↑`/`↓` để di chuyển, `Enter` để chọn và `Ctrl+C` để hủy.
 Wizard thực hiện một request nhỏ có tính phí trước khi lưu, rồi activate khi preflight
 thành công. Kết nối lỗi không được lưu và không thay provider đang active.
+Terminal chỉ in `provider connected`, `API error` hoặc `Invalid url`; metadata kỹ thuật
+không được hiển thị trong luồng kết nối thông thường.
 Các lệnh `add/test/activate/deactivate` chi tiết vẫn được giữ cho automation. Assignment
 mới được worker đọc ở tick 5 giây kế tiếp.
 Jev lỗi/timeout/circuit-open luôn thành `Hold`; hard-risk exit vẫn chạy. LLM lỗi giữ
