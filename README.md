@@ -16,6 +16,12 @@ Promoted Donchian campaign trong `lab/` vẫn là control độc lập và khôn
 Hyperliquid được thu thập như evidence liên thị trường ở chế độ `shadow`: WebSocket cho
 L2 book, REST 30 giây cho funding/OI/mark/oracle. Mất dữ liệu DEX không chặn Binance.
 
+Giá tham chiếu được tách theo scope: Spot dùng midpoint của best bid/ask Binance Spot;
+Perp dùng Binance USD-M mark price. Indicator vẫn chỉ dùng nến đã đóng (Spot `1d`,
+Perp `1h`), vì vậy `reference_price` và `candle_close_price` là hai trường có chủ đích
+khác nhau. Jev, paper ledger, journal và LLM market context đều nhận đúng snapshot của
+từng scope; LLM vẫn chạy một cycle chung với hai context được gắn nhãn rõ ràng.
+
 Cài command global một lần từ repository:
 
 ```bash

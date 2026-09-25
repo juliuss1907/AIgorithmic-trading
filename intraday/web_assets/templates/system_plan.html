@@ -107,7 +107,7 @@
             <div>
               <p class="eyebrow">Spot daily</p>
               <h3>Donchian tìm setup, Jev quyết định nhận hay bỏ.</h3>
-              <p>Chỉ đánh giá khi nến ngày đóng và trạng thái Donchian thay đổi. Không leverage; exit và position sizing luôn deterministic.</p>
+              <p>Binance Spot midpoint là giá hiện tại; chỉ nến ngày đã đóng mới tạo indicator. Không leverage; exit và position sizing luôn deterministic.</p>
             </div>
           </article>
           <article>
@@ -115,7 +115,7 @@
             <div>
               <p class="eyebrow">Perp intraday</p>
               <h3>Jev đọc snapshot mới nhất mỗi 30 giây.</h3>
-              <p>Binance USD-M perpetual, isolated 3×. Notional co giãn theo volatility, stop distance, drawdown và hạn mức parent portfolio.</p>
+              <p>Binance USD-M mark là giá hiện tại; indicator chỉ dùng nến giờ đã đóng. Isolated 3×, notional co giãn theo volatility, stop distance, drawdown và hạn mức parent portfolio.</p>
             </div>
           </article>
         </div>
@@ -172,7 +172,7 @@
           </div>
         </div>
         <ol class="roadmap">
-          <li><span class="roadmap-number">01</span><div><strong>Tách scheduler và cache</strong><p>Risk loop 5 giây không gọi Jev; Spot chuyển sang event-driven.</p></div><span class="roadmap-state">Ưu tiên kế tiếp</span></li>
+          <li><span class="roadmap-number">01</span><div><strong>Tách scheduler và cache</strong><p>Risk loop 5 giây không gọi Jev; Spot chuyển sang event-driven và có market snapshot riêng.</p></div><span class="roadmap-state">Đã triển khai</span></li>
           <li><span class="roadmap-number">02</span><div><strong>Compact shadow</strong><p>Encoder versioned, paired experiment và shadow-only enforcement.</p></div><span class="roadmap-state">Sau scheduler</span></li>
           <li><span class="roadmap-number">03</span><div><strong>Outcome engine</strong><p>Forward return, MFE, MAE và migration append-only.</p></div><span class="roadmap-state">Evidence</span></li>
           <li><span class="roadmap-number">04</span><div><strong>Retrospective + rule proposal</strong><p>Daily disagreement report và bounded challenger lúc 09:00.</p></div><span class="roadmap-state">Cold path</span></li>
