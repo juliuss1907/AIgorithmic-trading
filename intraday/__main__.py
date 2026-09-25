@@ -83,7 +83,11 @@ from intraday.runtime import (
     run_rule_proposal_cycle,
 )
 from intraday.store import IntradayStore
-from intraday.spot_signal import BinanceSpotDailyClient, evaluate_donchian
+from intraday.spot_signal import (
+    BinanceSpotDailyClient,
+    MultiCadenceSpotCache,
+    evaluate_donchian,
+)
 from intraday.scheduler import claim_cadence
 from intraday.scoped_rule_lifecycle import (
     activate_scoped_rule,
@@ -559,9 +563,12 @@ def _portfolio_cli(arguments) -> None:
                 secret_store,
                 fallback=StubDecisionProvider(direction=Direction.HOLD),
             )
-            market = MultiCadenceMarketCache(BinanceUsdMClient())
-            spot_market = BinanceSpotDailyClient()
             config = IntradayConfig.from_environment(database=arguments.database)
+            market = MultiCadenceMarketCache(BinanceUsdMClient())
+            spot_market = MultiCadenceSpotCache(
+                BinanceSpotDailyClient(),
+                quote_interval_seconds=config.order_book_interval_seconds,
+            )
             interval = config.risk_interval_seconds
             background_started = False
             while True:
@@ -569,6 +576,7 @@ def _portfolio_cli(arguments) -> None:
                 process_pending_commands(store, now=now)
                 try:
                     snapshot = market.snapshot("BTCUSDT", now=now)
+                    spot_snapshot = spot_market.snapshot("BTCUSDT", now=now)
                 except StaleMarketData as error:
                     print(json.dumps({"status": "degraded", "error": str(error)}), flush=True)
                     if arguments.once:
@@ -578,6 +586,8 @@ def _portfolio_cli(arguments) -> None:
                 if store.load_parent_portfolio_state() is None:
                     initial = ParentPortfolioState(
                         mark_price=float(snapshot.features["mark_price"]),
+                        perp_mark_price=float(snapshot.features["mark_price"]),
+                        spot_price=float(spot_snapshot.features["reference_price"]),
                         day_start_equity=10_000,
                         high_water_mark=10_000,
                         entries_paused=True,
@@ -608,13 +618,14 @@ def _portfolio_cli(arguments) -> None:
                                 spot_rule.parameters.exit_window,
                                 spot_rule.parameters.atr_period,
                             ) + 2
-                            daily = spot_market.candles(
-                                limit=max(35, limit), now=now
+                            spot_snapshot = spot_market.snapshot(
+                                "BTCUSDT", now=now, candle_limit=max(35, limit)
                             )
+                            daily = spot_market.closed_candles()
                         result["spot_daily"] = run_spot_soak_observation(
                             store,
                             provider,
-                            snapshot,
+                            spot_snapshot,
                             now=now,
                             rule=spot_rule,
                             candles=daily,
@@ -642,6 +653,7 @@ def _portfolio_cli(arguments) -> None:
                         )
                 if slot is not None:
                     try:
+                        store.record_snapshot(spot_snapshot)
                         perp_result = run_soak_cycle(
                             store, provider, snapshot, now=now,
                             scopes=(DecisionScope.PERP_INTRADAY,),
@@ -697,9 +709,12 @@ def _portfolio_cli(arguments) -> None:
             secret_store,
             fallback=StubDecisionProvider(direction=Direction.HOLD),
         )
-        market = MultiCadenceMarketCache(BinanceUsdMClient())
-        spot_market = BinanceSpotDailyClient()
         config = IntradayConfig.from_environment(database=arguments.database)
+        market = MultiCadenceMarketCache(BinanceUsdMClient())
+        spot_market = MultiCadenceSpotCache(
+            BinanceSpotDailyClient(),
+            quote_interval_seconds=config.order_book_interval_seconds,
+        )
         interval = config.risk_interval_seconds
         if not arguments.once:
             if config.news_enabled:
@@ -716,6 +731,7 @@ def _portfolio_cli(arguments) -> None:
             now = datetime.now(timezone.utc)
             try:
                 snapshot = market.snapshot("BTCUSDT", now=now)
+                spot_snapshot = spot_market.snapshot("BTCUSDT", now=now)
             except StaleMarketData as error:
                 print(json.dumps({"status": "degraded", "error": str(error)}), flush=True)
                 if arguments.once:
@@ -731,7 +747,10 @@ def _portfolio_cli(arguments) -> None:
                     spot_rule.parameters.exit_window,
                     spot_rule.parameters.atr_period,
                 ) + 2
-                daily = spot_market.candles(limit=max(35, limit), now=now)
+                spot_snapshot = spot_market.snapshot(
+                    "BTCUSDT", now=now, candle_limit=max(35, limit)
+                )
+                daily = spot_market.closed_candles()
                 if daily:
                     closed_at = datetime.fromtimestamp(
                         int(daily[-1][6]) / 1000, tz=timezone.utc
@@ -747,6 +766,7 @@ def _portfolio_cli(arguments) -> None:
                 raise RuntimeError("no closed daily candle is available")
             risk_result = run_parent_risk_cycle(
                 store, snapshot, spot_observation,
+                spot_snapshot=spot_snapshot,
                 spot_rule=spot_rule, perp_rule=perp_rule, now=now,
             )
             slots = {}
@@ -780,7 +800,9 @@ def _portfolio_cli(arguments) -> None:
                     )
                     experiment_pairs[DecisionScope.SPOT_DAILY] = (
                         make_experiment_pair_id(
-                            DecisionScope.SPOT_DAILY, snapshot, cached_daily_close
+                            DecisionScope.SPOT_DAILY,
+                            spot_snapshot,
+                            cached_daily_close,
                         )
                     )
             result = risk_result
@@ -788,6 +810,7 @@ def _portfolio_cli(arguments) -> None:
                 try:
                     result = run_parent_paper_cycle(
                         store, provider, snapshot, spot_observation,
+                        spot_snapshot=spot_snapshot,
                         spot_rule=spot_rule, perp_rule=perp_rule,
                         decision_scopes=tuple(slots),
                         experiment_pair_ids=experiment_pairs,
@@ -808,9 +831,14 @@ def _portfolio_cli(arguments) -> None:
                 shadow_errors = []
                 for scope, pair_id in experiment_pairs.items():
                     rule = spot_rule if scope == DecisionScope.SPOT_DAILY else perp_rule
+                    scoped_snapshot = (
+                        spot_snapshot
+                        if scope == DecisionScope.SPOT_DAILY
+                        else snapshot
+                    )
                     try:
                         record_compact_shadow(
-                            store, provider, snapshot, scope=scope,
+                            store, provider, scoped_snapshot, scope=scope,
                             rule_id=rule.rule_id, experiment_pair_id=pair_id, now=now,
                         )
                     except Exception as error:

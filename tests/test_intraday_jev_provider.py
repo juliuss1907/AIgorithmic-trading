@@ -23,6 +23,7 @@ from intraday.providers import (
     JevDecisionProvider,
     ProviderDecisionError,
     StubDecisionProvider,
+    compact_state_tokens,
 )
 from intraday.store import IntradayStore
 
@@ -264,6 +265,35 @@ def test_compact_state_is_categorical_bounded_and_auditable(tmp_path):
     assert scoped.decision_mode == DecisionMode.SHADOW
     assert scoped.experiment_pair_id == "pair-1234567890123456"
     assert store.list_model_calls()[0].workflow == "perp_intraday_entry_compact"
+
+
+def test_compact_state_prefers_live_reference_over_legacy_candle_price():
+    market = FeatureSnapshot.create(
+        symbol="BTCUSDT",
+        market="binance_usdm_perp",
+        timeframe="1h",
+        feature_schema_version="2",
+        event_time=NOW,
+        built_at=NOW,
+        bid=104,
+        ask=106,
+        features={
+            "price": 90,
+            "candle_close_price": 90,
+            "reference_price": 105,
+            "bb_mid": 100,
+            "bb_upper": 104,
+            "bb_lower": 96,
+            "macd": 2,
+            "macd_signal": 1,
+        },
+        freshness={"book": True, "candles": True},
+    )
+
+    tokens = compact_state_tokens(market, DecisionScope.PERP_INTRADAY)
+
+    assert "trend:up" in tokens
+    assert "band:above" in tokens
 
 
 def test_jev_provider_rejects_invalid_answer_without_returning_partial_decision(tmp_path):

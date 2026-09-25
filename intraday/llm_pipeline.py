@@ -438,6 +438,22 @@ class LLMAnalysisPipeline:
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 
+    @staticmethod
+    def _market_evidence(snapshot: FeatureSnapshot) -> dict:
+        payload = snapshot.model_dump(mode="json")
+        features = dict(payload["features"])
+        legacy_price = features.pop("price", None)
+        payload["features"] = features
+        payload["current_reference_price"] = (
+            features.get("reference_price")
+            or features.get("mark_price")
+            or legacy_price
+        )
+        payload["last_closed_candle_price"] = (
+            features.get("candle_close_price") or legacy_price
+        )
+        return payload
+
     def _analyst(
         self,
         analyst: str,
@@ -663,11 +679,23 @@ class LLMAnalysisPipeline:
         self,
         snapshot: FeatureSnapshot,
         *,
+        spot_snapshot: FeatureSnapshot | None = None,
         now: datetime,
         generate_scopes: set[DecisionScope] | None = None,
     ) -> ScopedAnalysisCycleResult:
         generate_scopes = generate_scopes or set()
-        snapshot_payload = snapshot.model_dump(mode="json")
+        if spot_snapshot is None:
+            if snapshot.feature_schema_version == "2":
+                raise ValueError("feature schema v2 requires a Binance Spot snapshot")
+            spot_snapshot = snapshot
+        if snapshot.feature_schema_version == "2" and snapshot.market != "binance_usdm_perp":
+            raise ValueError("perp analysis snapshot must come from Binance USD-M")
+        if spot_snapshot.feature_schema_version == "2" and spot_snapshot.market != "binance_spot":
+            raise ValueError("spot analysis snapshot must come from Binance Spot")
+        snapshot_payload = {
+            DecisionScope.PERP_INTRADAY.value: self._market_evidence(snapshot),
+            DecisionScope.SPOT_DAILY.value: self._market_evidence(spot_snapshot),
+        }
         news_payload = {
             "events": [
                 event.model_dump(mode="json")

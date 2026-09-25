@@ -55,7 +55,7 @@ def compact_state_tokens(
                 return float(values[key])
         return None
 
-    price = value("price", "mark_price")
+    price = value("reference_price", "mark_price", "price")
     mid = value("bb_mid")
     macd = value("macd")
     signal = value("macd_signal")

@@ -72,6 +72,37 @@ def snapshot():
     )
 
 
+def v2_snapshot(scope):
+    is_spot = scope == DecisionScope.SPOT_DAILY
+    price = 99_000 if is_spot else 100_000
+    features = {
+        "price": price - 100,
+        "candle_close_price": price - 100,
+        "reference_price": price,
+        "rsi14": 55,
+        "macd": 12.5,
+    }
+    if not is_spot:
+        features.update({
+            "mark_price": price,
+            "funding_rate": 0.0001,
+            "open_interest": 1_000_000,
+            "long_short_ratio": 1.1,
+        })
+    return FeatureSnapshot.create(
+        symbol="BTCUSDT",
+        market="binance_spot" if is_spot else "binance_usdm_perp",
+        timeframe="1d" if is_spot else "1h",
+        feature_schema_version="2",
+        event_time=NOW,
+        built_at=NOW,
+        bid=price - 10,
+        ask=price + 10,
+        features=features,
+        freshness={"book": True, "candles": True},
+    )
+
+
 def assessment(stance="bullish"):
     return AnalysisAssessment(
         summary="Momentum is constructive but confirmation remains necessary.",
@@ -503,6 +534,49 @@ def test_shared_analysis_produces_two_horizons_and_independent_scoped_rules(tmp_
     assert store.has_open_scoped_rule_candidate(DecisionScope.PERP_INTRADAY) is True
 
 
+def test_scoped_market_analysis_receives_separate_spot_and_perp_evidence(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    market_payloads = []
+
+    class FakeClient:
+        model_ref = "llm-main@fingerprint"
+
+        def complete(self, *, workflow, input_payload, **kwargs):
+            if workflow == "market_analyst":
+                market_payloads.append(input_payload)
+            if workflow in {"market_analyst", "news_analyst", "sentiment_analyst"}:
+                return assessment("neutral")
+            if workflow == "research_manager":
+                return MarketThesisBundleAssessment(
+                    intraday=HorizonThesis(
+                        scope=DecisionScope.PERP_INTRADAY,
+                        summary="Perp evidence is neutral while price discovery continues.",
+                        stance="neutral", confidence=0.6,
+                        key_levels={"support": 98_000, "resistance": 102_000},
+                        risk_factors=("Funding reversal",), horizon_minutes=240,
+                    ),
+                    daily_swing=HorizonThesis(
+                        scope=DecisionScope.SPOT_DAILY,
+                        summary="Spot daily evidence is neutral near established levels.",
+                        stance="neutral", confidence=0.6,
+                        key_levels={"support": 95_000, "resistance": 110_000},
+                        risk_factors=("Macro reversal",), horizon_minutes=2_880,
+                    ),
+                )
+            raise AssertionError(workflow)
+
+    LLMAnalysisPipeline(FakeClient(), store).run_scoped(
+        v2_snapshot(DecisionScope.PERP_INTRADAY),
+        spot_snapshot=v2_snapshot(DecisionScope.SPOT_DAILY),
+        now=NOW,
+    )
+
+    assert len(market_payloads) == 1
+    assert set(market_payloads[0]) == {"perp_intraday", "spot_daily"}
+    assert market_payloads[0]["perp_intraday"]["market"] == "binance_usdm_perp"
+    assert market_payloads[0]["spot_daily"]["market"] == "binance_spot"
+
+
 def test_news_analyst_retries_one_structural_failure_without_repeating_peers(
     tmp_path,
 ):
@@ -700,6 +774,12 @@ def test_analysis_cycle_skips_safely_without_active_llm_or_snapshot(tmp_path):
     assert run_analysis_cycle(store, secrets, now=NOW) == {
         "status": "skipped",
         "reason": "no_market_snapshot",
+    }
+
+    store.record_snapshot(v2_snapshot(DecisionScope.PERP_INTRADAY))
+    assert run_analysis_cycle(store, secrets, now=NOW) == {
+        "status": "skipped",
+        "reason": "no_spot_market_snapshot",
     }
 
 

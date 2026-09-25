@@ -245,11 +245,27 @@ def run_analysis_cycle(
     snapshot = store.latest_snapshot()
     if snapshot is None:
         return {"status": "skipped", "reason": "no_market_snapshot"}
+    spot_snapshot = store.latest_snapshot(market="binance_spot")
+    if spot_snapshot is None:
+        if snapshot.feature_schema_version == "2":
+            return {"status": "skipped", "reason": "no_spot_market_snapshot"}
+        spot_snapshot = snapshot
     evidence = {
         "symbol": snapshot.symbol,
-        "features": snapshot.features,
-        "freshness": snapshot.freshness,
-        "quality_flags": snapshot.quality_flags,
+        "markets": {
+            DecisionScope.PERP_INTRADAY.value: {
+                "snapshot_id": snapshot.snapshot_id,
+                "features": snapshot.features,
+                "freshness": snapshot.freshness,
+                "quality_flags": snapshot.quality_flags,
+            },
+            DecisionScope.SPOT_DAILY.value: {
+                "snapshot_id": spot_snapshot.snapshot_id,
+                "features": spot_snapshot.features,
+                "freshness": spot_snapshot.freshness,
+                "quality_flags": spot_snapshot.quality_flags,
+            },
+        },
         "news_event_ids": [
             item.event_id for item in store.list_news_events(limit=50)
         ],
@@ -267,6 +283,7 @@ def run_analysis_cycle(
     try:
         result = LLMAnalysisPipeline(client, store).run_scoped(
             snapshot,
+            spot_snapshot=spot_snapshot,
             now=now,
             generate_scopes=set(),
         )

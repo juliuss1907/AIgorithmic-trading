@@ -195,6 +195,9 @@ class MultiCadenceSpotCache:
         self._updated: dict[str, datetime] = {}
         self._candle_day = None
 
+    def closed_candles(self) -> list[list]:
+        return list(self._values.get("candles", []))
+
     def snapshot(
         self,
         symbol: str = "BTCUSDT",
