@@ -25,6 +25,7 @@ from intraday.contracts import (
 )
 from intraday.llm_pipeline import (
     LLMAnalysisPipeline,
+    StructuredLLMError,
     StructuredLLMClient,
     should_generate_rule,
 )
@@ -121,12 +122,142 @@ def test_structured_llm_client_uses_strict_json_schema_and_audits_call(tmp_path)
     response_schema = body["response_format"]["json_schema"]["schema"]
     assert set(response_schema["required"]) == set(response_schema["properties"])
     assert response_schema["additionalProperties"] is False
+    assert response_schema["properties"]["key_findings"]["items"] == {
+        "maxLength": 300,
+        "minLength": 1,
+        "type": "string",
+    }
+    assert response_schema["properties"]["risk_factors"]["items"] == {
+        "maxLength": 300,
+        "minLength": 1,
+        "type": "string",
+    }
     assert body["tools"] == []
     call = store.list_model_calls()[0]
     assert call.workflow == "market_analyst"
     assert call.status == "success"
     assert call.cost_usd == 0.002
     assert "private-llm-key" not in call.model_dump_json()
+
+
+def test_structured_llm_client_classifies_invalid_json_and_keeps_safe_metadata(
+    tmp_path,
+):
+    response = {
+        "id": "generation-invalid-json",
+        "model": "example/structured-model-202609",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"content": "{not-json", "refusal": None},
+            }
+        ],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 5, "cost": 0.001},
+    }
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    current = llm_profile()
+    store.sync_provider_profile(current)
+    client = StructuredLLMClient(
+        ProviderCredential(current, "private-llm-key"),
+        store=store,
+        transport=lambda **request: HttpResponse(
+            200, {}, json.dumps(response).encode()
+        ),
+    )
+
+    with pytest.raises(StructuredLLMError) as captured:
+        client.complete(
+            workflow="news_analyst",
+            response_model=AnalysisAssessment,
+            system_prompt="Return structured news analysis.",
+            input_payload={"events": []},
+            now=NOW,
+        )
+
+    assert captured.value.code == "invalid_json"
+    call = store.list_model_calls()[0]
+    assert call.error_code == "invalid_json"
+    assert call.attempt == 1
+    assert call.finish_reason == "stop"
+    assert call.input_tokens == 100
+    assert call.output_tokens == 5
+    assert call.cost_usd == 0.001
+    assert call.provider_request_id == "generation-invalid-json"
+    assert call.response_hash is not None
+    assert "not-json" not in call.model_dump_json()
+    assert "private-llm-key" not in call.model_dump_json()
+
+
+def test_structured_llm_client_classifies_truncated_response(tmp_path):
+    response = {
+        "id": "generation-truncated",
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {"content": '{"summary":"partial"}', "refusal": None},
+            }
+        ],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 4096},
+    }
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    current = llm_profile()
+    store.sync_provider_profile(current)
+    client = StructuredLLMClient(
+        ProviderCredential(current, "private-llm-key"),
+        store=store,
+        transport=lambda **request: HttpResponse(
+            200, {}, json.dumps(response).encode()
+        ),
+    )
+
+    with pytest.raises(StructuredLLMError) as captured:
+        client.complete(
+            workflow="news_analyst",
+            response_model=AnalysisAssessment,
+            system_prompt="Return structured news analysis.",
+            input_payload={"events": []},
+            now=NOW,
+        )
+
+    assert captured.value.code == "truncated_response"
+    call = store.list_model_calls()[0]
+    assert call.finish_reason == "length"
+    assert call.error_code == "truncated_response"
+
+
+def test_structured_llm_client_classifies_model_refusal(tmp_path):
+    response = {
+        "id": "generation-refusal",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"content": None, "refusal": "Unable to comply."},
+            }
+        ],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 10},
+    }
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    current = llm_profile()
+    store.sync_provider_profile(current)
+    client = StructuredLLMClient(
+        ProviderCredential(current, "private-llm-key"),
+        store=store,
+        transport=lambda **request: HttpResponse(
+            200, {}, json.dumps(response).encode()
+        ),
+    )
+
+    with pytest.raises(StructuredLLMError) as captured:
+        client.complete(
+            workflow="news_analyst",
+            response_model=AnalysisAssessment,
+            system_prompt="Return structured news analysis.",
+            input_payload={"events": []},
+            now=NOW,
+        )
+
+    assert captured.value.code == "model_refusal"
+    assert store.list_model_calls()[0].error_code == "model_refusal"
 
 
 @pytest.mark.parametrize(

@@ -6,10 +6,17 @@ import hashlib
 import json
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 
 def _aware(value: datetime) -> datetime:
@@ -551,6 +558,8 @@ class ModelCallRecord(StrictContract):
     request_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     response_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     error_code: str | None = Field(default=None, max_length=80)
+    attempt: int = Field(default=1, ge=1, le=10)
+    finish_reason: str | None = Field(default=None, max_length=80)
 
     _call_started_is_aware = field_validator("started_at")(_aware)
     _call_completed_is_aware = field_validator("completed_at")(_aware)
@@ -566,19 +575,18 @@ class ModelCallRecord(StrictContract):
         return self
 
 
+AssessmentItem = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
+]
+
+
 class AnalysisAssessment(StrictContract):
     summary: str = Field(min_length=20, max_length=2000)
     stance: Literal["bullish", "bearish", "neutral"]
     confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
-    key_findings: tuple[str, ...] = Field(min_length=1, max_length=8)
-    risk_factors: tuple[str, ...] = Field(min_length=1, max_length=8)
-
-    @field_validator("key_findings", "risk_factors")
-    @classmethod
-    def assessment_items_are_bounded(cls, values):
-        if any(not value.strip() or len(value) > 300 for value in values):
-            raise ValueError("assessment items must be nonempty and at most 300 characters")
-        return values
+    key_findings: tuple[AssessmentItem, ...] = Field(min_length=1, max_length=8)
+    risk_factors: tuple[AssessmentItem, ...] = Field(min_length=1, max_length=8)
 
 
 class AnalystReport(StrictContract):

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from intraday.contracts import (
     AnalysisAssessment,
@@ -158,6 +158,8 @@ class StructuredLLMClient:
         response: HttpResponse | None = None,
         response_payload: dict | None = None,
         error_code: str | None = None,
+        attempt: int = 1,
+        finish_reason: str | None = None,
     ) -> None:
         usage = response_payload.get("usage", {}) if response_payload else {}
         if not isinstance(usage, dict):
@@ -193,7 +195,7 @@ class StructuredLLMClient:
             request_id = request_id[:200]
         completed_at = now + timedelta(milliseconds=latency_ms)
         call_id = hashlib.sha256(
-            f"{workflow}:{now.isoformat()}:{request_hash}:{status}:{error_code}".encode()
+            f"{workflow}:{now.isoformat()}:{request_hash}:{status}:{error_code}:{attempt}".encode()
         ).hexdigest()[:32]
         self.store.record_model_call(
             ModelCallRecord(
@@ -216,6 +218,8 @@ class StructuredLLMClient:
                     hashlib.sha256(response.body).hexdigest() if response else None
                 ),
                 error_code=error_code,
+                attempt=attempt,
+                finish_reason=finish_reason,
             )
         )
 
@@ -227,7 +231,10 @@ class StructuredLLMClient:
         system_prompt: str,
         input_payload: dict,
         now: datetime,
+        attempt: int = 1,
     ) -> T:
+        if attempt < 1:
+            raise ValueError("LLM attempt must be positive")
         input_text = json.dumps(input_payload, sort_keys=True, separators=(",", ":"))
         schema = self._strict_schema(response_model)
         if self.credential.profile.kind in {
@@ -281,6 +288,8 @@ class StructuredLLMClient:
         request_hash = hashlib.sha256(body).hexdigest()
         started_clock = self._clock()
         response = None
+        response_payload = None
+        finish_reason = None
         try:
             response = self._transport(
                 url=request_url,
@@ -291,36 +300,74 @@ class StructuredLLMClient:
             if not 200 <= response.status_code < 300:
                 raise StructuredLLMError(self._error_code(response.status_code))
             if len(response.body) > 2_000_000:
-                raise StructuredLLMError("invalid_response")
-            response_payload = json.loads(response.body)
+                raise StructuredLLMError("response_too_large")
+            try:
+                envelope = json.loads(response.body)
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise StructuredLLMError("invalid_envelope") from error
+            if not isinstance(envelope, dict):
+                raise StructuredLLMError("invalid_envelope")
+            response_payload = envelope
             if self.credential.profile.kind in {
                 ProviderKind.ANTHROPIC_MESSAGES,
                 ProviderKind.ANTHROPIC_COMPATIBLE,
             }:
+                finish_reason = response_payload.get("stop_reason")
+                if finish_reason in {"length", "max_tokens"}:
+                    raise StructuredLLMError("truncated_response")
+                if finish_reason not in {None, "stop", "end_turn"}:
+                    raise StructuredLLMError("incomplete_response")
+                items = response_payload.get("content")
+                if not isinstance(items, list):
+                    raise StructuredLLMError("invalid_envelope")
                 content = next(
-                    item["text"]
-                    for item in response_payload["content"]
-                    if item.get("type") == "text"
+                    (
+                        item.get("text")
+                        for item in items
+                        if isinstance(item, dict) and item.get("type") == "text"
+                    ),
+                    None,
                 )
             else:
-                content = response_payload["choices"][0]["message"]["content"]
-            decoded = json.loads(content) if isinstance(content, str) else content
-            result = response_model.model_validate(decoded)
+                choices = response_payload.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    raise StructuredLLMError("invalid_envelope")
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    raise StructuredLLMError("invalid_envelope")
+                finish_reason = choice.get("finish_reason")
+                message = choice.get("message")
+                if not isinstance(message, dict):
+                    raise StructuredLLMError("invalid_envelope")
+                refusal = message.get("refusal")
+                if isinstance(refusal, str) and refusal.strip():
+                    raise StructuredLLMError("model_refusal")
+                if finish_reason in {"length", "max_tokens"}:
+                    raise StructuredLLMError("truncated_response")
+                if finish_reason not in {None, "stop"}:
+                    raise StructuredLLMError("incomplete_response")
+                content = message.get("content")
+            if content is None or (isinstance(content, str) and not content.strip()):
+                raise StructuredLLMError("missing_content")
+            if isinstance(content, str):
+                try:
+                    decoded = json.loads(content)
+                except json.JSONDecodeError as error:
+                    raise StructuredLLMError("invalid_json") from error
+            elif isinstance(content, (dict, list)):
+                decoded = content
+            else:
+                raise StructuredLLMError("invalid_envelope")
+            try:
+                result = response_model.model_validate(decoded)
+            except ValidationError as error:
+                raise StructuredLLMError("schema_validation") from error
         except StructuredLLMError as error:
             code = error.code
         except (TimeoutError, socket.timeout):
             code = "timeout"
         except (urllib.error.URLError, OSError):
             code = "network_error"
-        except (
-            KeyError,
-            IndexError,
-            StopIteration,
-            TypeError,
-            ValueError,
-            json.JSONDecodeError,
-        ):
-            code = "invalid_response"
         else:
             latency = max(0, round((self._clock() - started_clock) * 1000))
             self._record(
@@ -331,6 +378,8 @@ class StructuredLLMClient:
                 status="success",
                 response=response,
                 response_payload=response_payload,
+                attempt=attempt,
+                finish_reason=finish_reason,
             )
             return result
         latency = max(0, round((self._clock() - started_clock) * 1000))
@@ -341,7 +390,10 @@ class StructuredLLMClient:
             request_hash=request_hash,
             status="error",
             response=response,
+            response_payload=response_payload,
             error_code=code,
+            attempt=attempt,
+            finish_reason=finish_reason,
         )
         raise StructuredLLMError(code)
 
