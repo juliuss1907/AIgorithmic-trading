@@ -4,11 +4,13 @@ from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 
 from intraday.contracts import (
+    DecisionMode,
     DecisionScope,
     ModelCallRecord,
     ProviderKind,
     ProviderProfile,
     ProviderRole,
+    StateVariant,
 )
 from intraday.store import IntradayStore
 from intraday.web import create_app
@@ -88,10 +90,11 @@ def _record_model_call(
     profile: ProviderProfile,
     workflow: str,
     now: datetime,
+    suffix: str = "",
 ) -> None:
     store.record_model_call(
         ModelCallRecord(
-            call_id=f"call-{profile.role.value}",
+            call_id=f"call-{profile.role.value}{suffix}",
             workflow=workflow,
             role=profile.role,
             profile_id=profile.profile_id,
@@ -224,3 +227,63 @@ def test_dashboard_marks_stale_perp_heartbeat_as_degraded(tmp_path):
 
     assert payload["status"]["code"] == "DEGRADED"
     assert "perp_heartbeat_stale" in payload["status"]["reasons"]
+
+
+def test_provider_health_uses_latest_call_per_role_not_only_recent_call_window(tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime.now(timezone.utc)
+    jev = _activate_provider(store, role=ProviderRole.JEV, now=now)
+    llm = _activate_provider(store, role=ProviderRole.LLM, now=now)
+    _record_model_call(
+        store,
+        profile=llm,
+        workflow="research_manager",
+        now=now - timedelta(minutes=30),
+    )
+    for index in range(25):
+        _record_model_call(
+            store,
+            profile=jev,
+            workflow="perp_intraday_entry",
+            now=now - timedelta(seconds=index),
+            suffix=f"-{index}",
+        )
+    _record_signal(store, now=now - timedelta(hours=1))
+    store.record_portfolio_soak_tick(
+        scope=DecisionScope.PERP_INTRADAY,
+        status="success",
+        created_at=now,
+    )
+
+    payload = TestClient(create_app(database=database)).get("/api/dashboard").json()
+
+    assert payload["providers"]["llm"]["latest_call"]["status"] == "success"
+    assert "llm_call_missing" not in payload["status"]["reasons"]
+
+
+def test_compact_shadow_signal_does_not_start_the_numeric_primary_soak(tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime.now(timezone.utc)
+    store.record_journal_signal(
+        decision_id="compact-shadow-only",
+        timestamp=now,
+        symbol="BTCUSDT",
+        scope=DecisionScope.PERP_INTRADAY,
+        state_snapshot='{"variant":"compact"}',
+        raw_signals={"price": 100_000.0},
+        jev_answers={"direction": {"choice": "Hold"}},
+        gate_passed=False,
+        gate_reason="shadow_observation_only",
+        rules_version="perp-v1",
+        llm_thesis=None,
+        feature_schema_version="2",
+        state_variant=StateVariant.COMPACT_V1,
+        decision_mode=DecisionMode.PRIMARY,
+    )
+
+    payload = TestClient(create_app(database=database)).get("/api/dashboard").json()
+
+    assert payload["status"]["code"] == "WAITING"
+    assert payload["soak"]["started_at"] is None

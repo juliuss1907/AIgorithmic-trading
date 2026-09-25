@@ -1594,7 +1594,8 @@ class IntradayStore:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT timestamp FROM signals WHERE feature_schema_version=? "
-                "AND decision_mode='primary' ORDER BY julianday(timestamp), id LIMIT 1",
+                "AND decision_mode='primary' AND state_variant='numeric_v1' "
+                "ORDER BY julianday(timestamp), id LIMIT 1",
                 (feature_schema_version,),
             ).fetchone()
         return None if row is None else datetime.fromisoformat(row["timestamp"])
@@ -3017,6 +3018,15 @@ class IntradayStore:
                 "ORDER BY started_at DESC, id DESC LIMIT ?", (limit,)
             ).fetchall()
         return [ModelCallRecord.model_validate_json(row["payload_json"]) for row in rows]
+
+    def latest_model_call(self, role: ProviderRole) -> ModelCallRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM model_calls WHERE role=? "
+                "ORDER BY started_at DESC, id DESC LIMIT 1",
+                (role.value,),
+            ).fetchone()
+        return None if row is None else ModelCallRecord.model_validate_json(row["payload_json"])
 
     def latest_successful_model_call(self, workflow: str) -> ModelCallRecord | None:
         with self._connect() as connection:

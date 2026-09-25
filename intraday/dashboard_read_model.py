@@ -139,16 +139,13 @@ def _market_snapshot(store, *, market: str) -> dict | None:
     }
 
 
-def _provider_projection(store, calls: list) -> dict:
+def _provider_projection(store) -> dict:
     profiles = {item["profile_id"]: item for item in store.list_provider_profiles()}
-    latest_by_role = {}
-    for call in calls:
-        latest_by_role.setdefault(call.role.value, call)
     result = {}
     for role in ProviderRole:
         assignment = store.provider_assignment(role)
         profile = profiles.get(assignment["profile_id"]) if assignment else None
-        call = latest_by_role.get(role.value)
+        call = store.latest_model_call(role)
         result[role.value] = {
             "active": assignment is not None,
             "profile_id": assignment["profile_id"] if assignment else None,
@@ -183,11 +180,8 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
     latest_tick: dict[str, dict | None] = {
         scope.value: None for scope in DecisionScope
     }
-    healthy_counts = {scope.value: 0 for scope in DecisionScope}
     for tick in ticks:
         latest_tick[tick["scope"]] = tick
-        if tick["status"] in {"success", "skipped_no_setup"}:
-            healthy_counts[tick["scope"]] += 1
     scopes = {}
     for scope in DecisionScope:
         name = scope.value
@@ -214,7 +208,7 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
     progress = min(100.0, elapsed / SOAK_DURATION * 100) if started_at else 0.0
 
     calls = store.list_model_calls(limit=20)
-    providers = _provider_projection(store, calls)
+    providers = _provider_projection(store)
     reasons = []
     if started_at is not None:
         for role in ProviderRole:
@@ -227,7 +221,11 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
                 reasons.append(f"{role.value}_call_missing")
                 continue
             completed = datetime.fromisoformat(call["completed_at"])
-            maximum_age = timedelta(seconds=90) if role == ProviderRole.JEV else timedelta(minutes=75)
+            maximum_age = (
+                timedelta(seconds=90)
+                if role == ProviderRole.JEV
+                else timedelta(minutes=75)
+            )
             if call["status"] != "success":
                 reasons.append(f"{role.value}_call_error")
             elif now - completed > maximum_age:
