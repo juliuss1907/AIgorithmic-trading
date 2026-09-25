@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
+from intraday.contracts import FeatureSnapshot
 from intraday.market import (
     BinanceUsdMClient,
     MultiCadenceMarketCache,
@@ -74,6 +75,16 @@ def test_snapshot_builder_produces_18_plus_features_and_quality_metadata():
     assert len(snapshot.features) >= 18
     assert snapshot.bid == 40589
     assert snapshot.ask == 40590
+    assert snapshot.market == "binance_usdm_perp"
+    assert snapshot.timeframe == "1h"
+    assert snapshot.feature_schema_version == "2"
+    assert snapshot.features["price"] == 40590
+    assert snapshot.features["candle_close_price"] == 40590
+    assert snapshot.features["reference_price"] == pytest.approx(40589.5)
+    assert snapshot.features["reference_to_close_bps"] == pytest.approx(
+        (40589.5 / 40590 - 1) * 10_000
+    )
+    assert snapshot.features["reference_mid_dislocation_bps"] == pytest.approx(0)
     assert snapshot.features["order_book_imbalance"] == pytest.approx(0.5)
     assert snapshot.features["basis_bps"] == pytest.approx((40589.5 / 40580 - 1) * 10_000)
     assert snapshot.freshness == {
@@ -141,6 +152,24 @@ def test_snapshot_checksum_rejects_tampered_persisted_payload():
 
     with pytest.raises(ValidationError, match="checksum"):
         type(original).model_validate(payload)
+
+
+def test_v1_snapshot_checksum_remains_backward_compatible():
+    now = datetime(2026, 9, 21, 2, 0, tzinfo=timezone.utc)
+    snapshot = FeatureSnapshot.create(
+        symbol="BTCUSDT",
+        event_time=now,
+        built_at=now,
+        bid=100,
+        ask=101,
+        features={"price": 100.5},
+        freshness={"candles": True},
+    )
+
+    restored = FeatureSnapshot.model_validate_json(snapshot.model_dump_json())
+
+    assert restored.feature_schema_version == "1"
+    assert restored.market == "binance_usdm_perp"
 
 
 def test_market_cache_fetches_each_component_at_its_own_cadence():

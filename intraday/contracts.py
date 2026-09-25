@@ -98,6 +98,9 @@ class StrictContract(BaseModel):
 class FeatureSnapshot(StrictContract):
     snapshot_id: str = Field(min_length=16, max_length=64)
     symbol: Literal["BTCUSDT"] = "BTCUSDT"
+    market: Literal["binance_usdm_perp", "binance_spot"] = "binance_usdm_perp"
+    timeframe: Literal["1h", "1d"] = "1h"
+    feature_schema_version: Literal["1", "2"] = "1"
     event_time: datetime
     built_at: datetime
     bid: float = Field(gt=0, allow_inf_nan=False)
@@ -123,6 +126,9 @@ class FeatureSnapshot(StrictContract):
                 raise ValueError("features must contain named numeric values")
         expected = self._checksum_for(
             symbol=self.symbol,
+            market=self.market,
+            timeframe=self.timeframe,
+            feature_schema_version=self.feature_schema_version,
             event_time=self.event_time,
             built_at=self.built_at,
             bid=self.bid,
@@ -137,7 +143,8 @@ class FeatureSnapshot(StrictContract):
 
     @staticmethod
     def _checksum_for(
-        *, symbol, event_time, built_at, bid, ask, features, freshness, quality_flags
+        *, symbol, market, timeframe, feature_schema_version, event_time, built_at,
+        bid, ask, features, freshness, quality_flags
     ) -> str:
         payload = {
             "symbol": symbol,
@@ -152,6 +159,12 @@ class FeatureSnapshot(StrictContract):
             "freshness": {name: bool(value) for name, value in freshness.items()},
             "quality_flags": tuple(quality_flags),
         }
+        if feature_schema_version == "2":
+            payload.update({
+                "market": market,
+                "timeframe": timeframe,
+                "feature_schema_version": feature_schema_version,
+            })
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 
@@ -160,6 +173,9 @@ class FeatureSnapshot(StrictContract):
         cls,
         *,
         symbol: str,
+        market: str = "binance_usdm_perp",
+        timeframe: str = "1h",
+        feature_schema_version: str = "1",
         event_time: datetime,
         built_at: datetime,
         bid: float,
@@ -170,6 +186,9 @@ class FeatureSnapshot(StrictContract):
     ) -> "FeatureSnapshot":
         checksum = cls._checksum_for(
             symbol=symbol,
+            market=market,
+            timeframe=timeframe,
+            feature_schema_version=feature_schema_version,
             event_time=event_time,
             built_at=built_at,
             bid=bid,
@@ -182,6 +201,9 @@ class FeatureSnapshot(StrictContract):
             snapshot_id=checksum[:24],
             checksum=checksum,
             symbol=symbol,
+            market=market,
+            timeframe=timeframe,
+            feature_schema_version=feature_schema_version,
             event_time=event_time,
             built_at=built_at,
             bid=bid,

@@ -1,5 +1,9 @@
+from datetime import datetime, timezone
+
+import pytest
+
 from intraday.contracts import SpotRuleParameters
-from intraday.spot_signal import evaluate_donchian
+from intraday.spot_signal import build_spot_feature_snapshot, evaluate_donchian
 
 
 def rows(closes):
@@ -46,3 +50,30 @@ def test_donchian_exit_is_independent_from_ai_decision():
     assert signal.entry is False
     assert signal.exit is True
     assert signal.close < signal.exit_channel
+
+
+def test_spot_snapshot_uses_book_midpoint_and_closed_daily_candle():
+    candles = rows([100 + index for index in range(40)])
+    now = datetime(2026, 9, 25, tzinfo=timezone.utc)
+
+    snapshot = build_spot_feature_snapshot(
+        symbol="BTCUSDT",
+        candles=candles,
+        book={
+            "bids": [["140.0", "2"], ["139.9", "1"]],
+            "asks": [["140.2", "1"], ["140.3", "2"]],
+        },
+        event_time=now,
+        built_at=now,
+        sentiment_score=0.1,
+    )
+
+    assert snapshot.market == "binance_spot"
+    assert snapshot.timeframe == "1d"
+    assert snapshot.feature_schema_version == "2"
+    assert snapshot.features["price"] == 139
+    assert snapshot.features["candle_close_price"] == 139
+    assert snapshot.features["reference_price"] == pytest.approx(140.1)
+    assert snapshot.bid == 140
+    assert snapshot.ask == 140.2
+    assert snapshot.features["volume_1d"] == 10

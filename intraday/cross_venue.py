@@ -239,6 +239,9 @@ def enrich_with_cross_venue(
         })
     return FeatureSnapshot.create(
         symbol=snapshot.symbol,
+        market=snapshot.market,
+        timeframe=snapshot.timeframe,
+        feature_schema_version=snapshot.feature_schema_version,
         event_time=snapshot.event_time,
         built_at=snapshot.built_at,
         bid=snapshot.bid,

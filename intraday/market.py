@@ -105,9 +105,21 @@ def build_feature_snapshot(
     total_quantity = bid_quantity + ask_quantity
     mark_price = float(premium["markPrice"])
     index_price = float(premium["indexPrice"])
+    candle_close = float(indicators["price"])
+    midpoint = (bid + ask) / 2
+    candle_closed_at = datetime.fromtimestamp(
+        int(candles[-1][6]) / 1000, tz=timezone.utc
+    )
 
     features: dict[str, float | None] = {
         **indicators,
+        "reference_price": mark_price,
+        "candle_close_price": candle_close,
+        "reference_to_close_bps": (mark_price / candle_close - 1) * 10_000,
+        "reference_mid_dislocation_bps": (mark_price / midpoint - 1) * 10_000,
+        "closed_candle_age_seconds": max(
+            0.0, (event_time - candle_closed_at).total_seconds()
+        ),
         "mark_price": mark_price,
         "index_price": index_price,
         "basis_bps": (mark_price / index_price - 1) * 10_000,
@@ -137,6 +149,9 @@ def build_feature_snapshot(
         raise ValueError("features must be finite")
     return FeatureSnapshot.create(
         symbol=symbol,
+        market="binance_usdm_perp",
+        timeframe="1h",
+        feature_schema_version="2",
         event_time=event_time,
         built_at=built_at,
         bid=bid,

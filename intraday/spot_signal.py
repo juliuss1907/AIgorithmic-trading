@@ -10,10 +10,12 @@ from typing import Callable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from intraday.contracts import SpotRuleParameters
+from intraday.contracts import FeatureSnapshot, SpotRuleParameters
+from intraday.market import compute_indicators
 
 
 SPOT_PUBLIC_BASE_URL = "https://api.binance.com"
+SPOT_ALLOWED_PATHS = {"/api/v3/klines", "/api/v3/depth"}
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,68 @@ def evaluate_donchian(
     )
 
 
+def build_spot_feature_snapshot(
+    *,
+    symbol: str,
+    candles: list[list],
+    book: dict,
+    event_time: datetime,
+    built_at: datetime,
+    sentiment_score: float | None,
+) -> FeatureSnapshot:
+    """Build scope-correct spot evidence from closed daily candles and live quotes."""
+    indicators = compute_indicators(candles)
+    volume_1d = indicators.pop("volume_1h")
+    bids = [(float(price), float(quantity)) for price, quantity, *_ in book["bids"][:20]]
+    asks = [(float(price), float(quantity)) for price, quantity, *_ in book["asks"][:20]]
+    if not bids or not asks:
+        raise ValueError("spot order book must contain both bids and asks")
+    bid, ask = bids[0][0], asks[0][0]
+    midpoint = (bid + ask) / 2
+    bid_quantity = sum(quantity for _, quantity in bids)
+    ask_quantity = sum(quantity for _, quantity in asks)
+    total_quantity = bid_quantity + ask_quantity
+    candle_close = float(indicators["price"])
+    candle_closed_at = datetime.fromtimestamp(
+        int(candles[-1][6]) / 1000, tz=timezone.utc
+    )
+    features = {
+        **indicators,
+        "volume_1d": volume_1d,
+        "reference_price": midpoint,
+        "candle_close_price": candle_close,
+        "reference_to_close_bps": (midpoint / candle_close - 1) * 10_000,
+        "reference_mid_dislocation_bps": 0.0,
+        "closed_candle_age_seconds": max(
+            0.0, (event_time - candle_closed_at).total_seconds()
+        ),
+        "order_book_imbalance": (
+            (bid_quantity - ask_quantity) / total_quantity if total_quantity else 0.0
+        ),
+        "spread_bps": (ask - bid) / midpoint * 10_000,
+        "sentiment_score": sentiment_score,
+    }
+    freshness = {
+        "candles": True,
+        "order_book": True,
+        "sentiment": sentiment_score is not None,
+    }
+    flags = tuple(f"{name}_missing" for name, fresh in freshness.items() if not fresh)
+    return FeatureSnapshot.create(
+        symbol=symbol,
+        market="binance_spot",
+        timeframe="1d",
+        feature_schema_version="2",
+        event_time=event_time,
+        built_at=built_at,
+        bid=bid,
+        ask=ask,
+        features=features,
+        freshness=freshness,
+        quality_flags=flags,
+    )
+
+
 class BinanceSpotDailyClient:
     """Read-only public BTCUSDT daily candles; there is no order endpoint."""
 
@@ -78,7 +142,7 @@ class BinanceSpotDailyClient:
         self.timeout_seconds = timeout_seconds
 
     def _http_get(self, path: str, params: dict):
-        if path != "/api/v3/klines":
+        if path not in SPOT_ALLOWED_PATHS:
             raise ValueError("endpoint is not allowlisted")
         request = Request(
             f"{SPOT_PUBLIC_BASE_URL}{path}?{urlencode(params)}",
@@ -105,3 +169,12 @@ class BinanceSpotDailyClient:
         )
         cutoff = int(now.timestamp() * 1000)
         return [row for row in rows if int(row[6]) <= cutoff]
+
+    def order_book(self, *, symbol: str = "BTCUSDT", limit: int = 20) -> dict:
+        if symbol != "BTCUSDT":
+            raise ValueError("v1 only permits BTCUSDT")
+        if limit not in {5, 10, 20, 50, 100, 500, 1000}:
+            raise ValueError("unsupported depth limit")
+        return self._fetch_json(
+            "/api/v3/depth", {"symbol": symbol, "limit": limit}
+        )
