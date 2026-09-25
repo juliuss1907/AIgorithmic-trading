@@ -15,6 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from intraday.contracts import DecisionScope, ProviderRole
 from intraday.decision_evaluation import EVALUATION_HORIZONS
+from intraday.dashboard_read_model import (
+    build_dashboard_snapshot,
+    list_public_signals,
+)
 from intraday.operator_service import build_operator_snapshot
 from intraday.portfolio_view import latest_parent_market_view
 from intraday.store import IntradayStore
@@ -264,6 +268,17 @@ def create_app(
                 if store.latest_cross_venue_evaluation() else None
             ),
         }
+
+    @app.get("/api/dashboard")
+    def dashboard_snapshot():
+        return build_dashboard_snapshot(store, now=datetime.now(timezone.utc))
+
+    @app.get("/api/signals")
+    def journal_signals(
+        limit: int = Query(default=20, ge=1, le=100),
+        scope: DecisionScope | None = None,
+    ):
+        return list_public_signals(store, limit=limit, scope=scope)
 
     @app.get("/api/portfolio")
     def parent_portfolio():

@@ -1561,6 +1561,59 @@ class IntradayStore:
                 raise ValueError("decision_id was reused with different journal data")
             return int(row["id"])
 
+    def list_journal_signals(
+        self,
+        *,
+        limit: int = 100,
+        scope: DecisionScope | None = None,
+    ) -> list[dict]:
+        """Return recent journal rows for trusted in-process projections."""
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        query = (
+            "SELECT id, timestamp, symbol, scope, market, jev_answers, "
+            "gate_passed, gate_reason, rules_version, feature_schema_version, "
+            "state_variant, decision_mode FROM signals"
+        )
+        parameters: list[str | int] = []
+        if scope is not None:
+            query += " WHERE scope=?"
+            parameters.append(scope.value)
+        query += " ORDER BY julianday(timestamp) DESC, id DESC LIMIT ?"
+        parameters.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(parameters)).fetchall()
+        return [dict(row) for row in rows]
+
+    def first_model_backed_signal_at(
+        self,
+        *,
+        feature_schema_version: str = "2",
+    ) -> datetime | None:
+        """Anchor a soak campaign to its first primary model-backed decision."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT timestamp FROM signals WHERE feature_schema_version=? "
+                "AND decision_mode='primary' ORDER BY julianday(timestamp), id LIMIT 1",
+                (feature_schema_version,),
+            ).fetchone()
+        return None if row is None else datetime.fromisoformat(row["timestamp"])
+
+    def dashboard_counts(self) -> dict[str, int]:
+        """Small aggregate used by the monitoring read model."""
+        with self._connect() as connection:
+            return {
+                "signals": connection.execute(
+                    "SELECT COUNT(*) FROM signals"
+                ).fetchone()[0],
+                "fills": connection.execute(
+                    "SELECT COUNT(*) FROM parent_paper_fills"
+                ).fetchone()[0],
+                "trades": connection.execute(
+                    "SELECT COUNT(*) FROM trades"
+                ).fetchone()[0],
+            }
+
     def record_completed_trade(
         self,
         *,
