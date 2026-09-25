@@ -65,6 +65,7 @@ from intraday.portfolio_coordinator import (
     apply_operator_command,
 )
 from intraday.portfolio_soak import (
+    CURRENT_SOAK_EVIDENCE_VERSION,
     evaluate_portfolio_soak,
     run_soak_cycle,
     run_spot_soak_observation,
@@ -426,6 +427,12 @@ def _doctor(config: IntradayConfig) -> dict:
         "execution_enabled": False,
         "symbol": config.symbol,
         "market": "Binance USD-M perpetual",
+        "markets": {
+            DecisionScope.PERP_INTRADAY.value: "Binance USD-M perpetual",
+            DecisionScope.SPOT_DAILY.value: "Binance Spot",
+        },
+        "feature_schema_version": "2",
+        "soak_evidence_version": CURRENT_SOAK_EVIDENCE_VERSION,
         "margin_mode": "isolated",
         "leverage": 3,
         "news_enabled": config.news_enabled,
@@ -438,6 +445,7 @@ def _doctor(config: IntradayConfig) -> dict:
         "cadences_seconds": {
             "risk": config.risk_interval_seconds,
             "order_book": config.order_book_interval_seconds,
+            "spot_quote": config.order_book_interval_seconds,
             "perp_numeric": config.perp_decision_interval_seconds,
             "derivatives": config.derivatives_interval_seconds,
             "compact_shadow": config.compact_shadow_interval_seconds,

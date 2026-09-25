@@ -412,9 +412,16 @@ def test_doctor_reports_safe_defaults(monkeypatch, capsys, tmp_path):
     assert result["cross_venue_mode"] == "shadow"
     assert result["hyperliquid_enabled"] is True
     assert result["schema_version"] == 18
+    assert result["feature_schema_version"] == "2"
+    assert result["soak_evidence_version"] == "scope-price-v2"
+    assert result["markets"] == {
+        "perp_intraday": "Binance USD-M perpetual",
+        "spot_daily": "Binance Spot",
+    }
     assert result["cadences_seconds"] == {
         "risk": 5.0,
         "order_book": 15.0,
+        "spot_quote": 15.0,
         "perp_numeric": 30.0,
         "derivatives": 60.0,
         "compact_shadow": 900.0,

@@ -34,12 +34,12 @@
         <article>
           <h2>Spot daily</h2>
           <strong>{{ "%.0f"|format(portfolio.spot_notional) }} USDT</strong>
-          <small>60% sleeve · 30% parent cap</small>
+          <small>Spot reference {{ "%.2f"|format(portfolio.spot_price) }} · 30% parent cap</small>
         </article>
         <article>
           <h2>Perp intraday</h2>
           <strong>{{ "%+.0f"|format(portfolio.perp_notional) }} USDT</strong>
-          <small>40% sleeve · isolated 3×</small>
+          <small>Perp mark {{ "%.2f"|format(portfolio.perp_mark_price) }} · isolated 3×</small>
         </article>
         <article>
           <h2>Entry state</h2>
@@ -77,6 +77,7 @@
           </div>
           {% if soak %}
           <p class="status-line"><strong>{{ soak.status|upper }}</strong> · {{ "%.1f"|format(soak.duration_hours) }} hours</p>
+          <p class="muted">Evidence {{ soak.evidence_version }}</p>
           <p class="muted">{{ soak.reason_codes|join(", ") if soak.reason_codes else "All promotion checks passed." }}</p>
           <code>{{ soak.evaluation_id }}</code>
           {% else %}
