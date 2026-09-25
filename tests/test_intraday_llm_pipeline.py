@@ -132,12 +132,68 @@ def test_structured_llm_client_uses_strict_json_schema_and_audits_call(tmp_path)
         "minLength": 1,
         "type": "string",
     }
+    assert body["max_tokens"] == 4096
+    assert "provider" not in body
     assert body["tools"] == []
     call = store.list_model_calls()[0]
     assert call.workflow == "market_analyst"
     assert call.status == "success"
     assert call.cost_usd == 0.002
     assert "private-llm-key" not in call.model_dump_json()
+
+
+def test_structured_llm_client_requires_openrouter_structured_output_support(
+    tmp_path,
+):
+    requests = []
+
+    def transport(**request):
+        requests.append(request)
+        response = {
+            "id": "openrouter-generation-1",
+            "model": "openai/gpt-6-luna",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": assessment().model_dump_json(),
+                        "refusal": None,
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 120, "completion_tokens": 40},
+        }
+        return HttpResponse(200, {}, json.dumps(response).encode())
+
+    current = ProviderProfile.create(
+        profile_id="llm-openrouter",
+        role=ProviderRole.LLM,
+        kind=ProviderKind.OPENAI_COMPATIBLE,
+        base_url="https://openrouter.ai/api/v1",
+        model="openai/gpt-6-luna",
+        credential_version="credential-v1",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    store.sync_provider_profile(current)
+    client = StructuredLLMClient(
+        ProviderCredential(current, "private-llm-key"),
+        store=store,
+        transport=transport,
+    )
+
+    client.complete(
+        workflow="market_analyst",
+        response_model=AnalysisAssessment,
+        system_prompt="Analyze only the supplied market facts.",
+        input_payload={"price": 100_000},
+        now=NOW,
+    )
+
+    body = json.loads(requests[0]["body"])
+    assert body["provider"] == {"require_parameters": True}
+    assert body["max_tokens"] == 4096
 
 
 def test_structured_llm_client_classifies_invalid_json_and_keeps_safe_metadata(
@@ -444,6 +500,125 @@ def test_shared_analysis_produces_two_horizons_and_independent_scoped_rules(tmp_
     )
     assert store.has_open_scoped_rule_candidate(DecisionScope.SPOT_DAILY) is True
     assert store.has_open_scoped_rule_candidate(DecisionScope.PERP_INTRADAY) is True
+
+
+def test_news_analyst_retries_one_structural_failure_without_repeating_peers(
+    tmp_path,
+):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    calls = []
+
+    class RecoveringClient:
+        model_ref = "llm-main@fingerprint"
+
+        def complete(self, *, workflow, attempt=1, system_prompt, **kwargs):
+            calls.append((workflow, attempt, system_prompt))
+            if workflow == "news_analyst" and attempt == 1:
+                raise StructuredLLMError("invalid_json")
+            if workflow in {"market_analyst", "news_analyst", "sentiment_analyst"}:
+                return assessment("neutral" if workflow == "news_analyst" else "bullish")
+            if workflow == "research_manager":
+                return MarketThesisBundleAssessment(
+                    intraday=HorizonThesis(
+                        scope=DecisionScope.PERP_INTRADAY,
+                        summary="Intraday evidence remains constructive with bounded risk.",
+                        stance="bullish",
+                        confidence=0.7,
+                        key_levels={"support": 98_000, "resistance": 102_000},
+                        risk_factors=("Funding reversal",),
+                        horizon_minutes=240,
+                    ),
+                    daily_swing=HorizonThesis(
+                        scope=DecisionScope.SPOT_DAILY,
+                        summary="Daily evidence remains constructive above major support.",
+                        stance="bullish",
+                        confidence=0.65,
+                        key_levels={"support": 95_000, "resistance": 110_000},
+                        risk_factors=("Macro reversal",),
+                        horizon_minutes=2_880,
+                    ),
+                )
+            raise AssertionError(workflow)
+
+    result = LLMAnalysisPipeline(RecoveringClient(), store).run_scoped(
+        snapshot(), now=NOW
+    )
+
+    assert result.bundle.thesis_id == store.latest_market_thesis_bundle().thesis_id
+    assert [(workflow, attempt) for workflow, attempt, _ in calls].count(
+        ("news_analyst", 1)
+    ) == 1
+    assert [(workflow, attempt) for workflow, attempt, _ in calls].count(
+        ("news_analyst", 2)
+    ) == 1
+    assert [workflow for workflow, _, _ in calls].count("market_analyst") == 1
+    assert [workflow for workflow, _, _ in calls].count("sentiment_analyst") == 1
+    assert [workflow for workflow, _, _ in calls].count("research_manager") == 1
+    retry_prompt = next(
+        prompt
+        for workflow, attempt, prompt in calls
+        if workflow == "news_analyst" and attempt == 2
+    )
+    assert "recovery attempt" in retry_prompt.lower()
+
+
+def test_news_analyst_does_not_retry_model_refusal(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    calls = []
+
+    class RefusingClient:
+        model_ref = "llm-main@fingerprint"
+
+        def complete(self, *, workflow, attempt=1, **kwargs):
+            calls.append((workflow, attempt))
+            if workflow == "news_analyst":
+                raise StructuredLLMError("model_refusal")
+            return assessment()
+
+    with pytest.raises(StructuredLLMError) as captured:
+        LLMAnalysisPipeline(RefusingClient(), store).run_scoped(
+            snapshot(), now=NOW
+        )
+
+    assert captured.value.code == "model_refusal"
+    assert captured.value.workflow == "news_analyst"
+    assert captured.value.attempts == 1
+    assert calls.count(("news_analyst", 1)) == 1
+
+
+def test_analysis_cycle_reports_exhausted_news_retry(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    store.record_snapshot(snapshot())
+    secrets = ProviderSecretStore(tmp_path / "providers.toml")
+    current = llm_profile()
+    store.sync_provider_profile(current)
+    store.record_provider_test(
+        current.profile_id, status="ok", tested_at=NOW, latency_ms=1
+    )
+    store.activate_provider(ProviderRole.LLM, current.profile_id, actor="test", now=NOW)
+    secrets.upsert(current, "private-key")
+
+    class InvalidNewsClient:
+        model_ref = "llm-main@fingerprint"
+
+        def complete(self, *, workflow, **kwargs):
+            if workflow == "news_analyst":
+                raise StructuredLLMError("schema_validation")
+            return assessment()
+
+    result = run_analysis_cycle(
+        store,
+        secrets,
+        now=NOW,
+        client_factory=lambda credential: InvalidNewsClient(),
+    )
+
+    assert result == {
+        "status": "degraded",
+        "error_code": "schema_validation",
+        "workflow": "news_analyst",
+        "attempts": 2,
+    }
 
 
 def test_pipeline_keeps_champion_when_generated_parameters_are_unchanged(tmp_path):

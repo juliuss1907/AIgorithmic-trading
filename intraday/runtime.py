@@ -234,7 +234,12 @@ def run_analysis_cycle(
             store, secret_store, client_factory=client_factory
         )
     except StructuredLLMError as error:
-        return {"status": "degraded", "error_code": error.code}
+        degraded = {"status": "degraded", "error_code": error.code}
+        if error.workflow is not None:
+            degraded.update(
+                {"workflow": error.workflow, "attempts": error.attempts}
+            )
+        return degraded
     if client is None:
         return {"status": "skipped", "reason": "no_active_llm"}
     snapshot = store.latest_snapshot()
@@ -266,7 +271,12 @@ def run_analysis_cycle(
             generate_scopes=set(),
         )
     except StructuredLLMError as error:
-        return {"status": "degraded", "error_code": error.code}
+        degraded = {"status": "degraded", "error_code": error.code}
+        if error.workflow is not None:
+            degraded.update(
+                {"workflow": error.workflow, "attempts": error.attempts}
+            )
+        return degraded
     utc_now = now.astimezone(timezone.utc)
     day_start = utc_now.replace(hour=0, minute=0, second=0, microsecond=0)
     daily_cost = store.model_cost_since(day_start)
