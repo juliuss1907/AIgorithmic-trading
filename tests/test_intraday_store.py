@@ -97,6 +97,42 @@ def test_runtime_state_round_trips_as_json(tmp_path):
     assert store.load_runtime_state() == state
 
 
+def test_snapshots_are_partitioned_by_market_without_mixing_replay_data(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    perp = FeatureSnapshot.create(
+        symbol="BTCUSDT",
+        market="binance_usdm_perp",
+        timeframe="1h",
+        feature_schema_version="2",
+        event_time=NOW,
+        built_at=NOW,
+        bid=99_990,
+        ask=100_010,
+        features={"price": 99_000, "reference_price": 100_000},
+        freshness={"book": True},
+    )
+    spot = FeatureSnapshot.create(
+        symbol="BTCUSDT",
+        market="binance_spot",
+        timeframe="1d",
+        feature_schema_version="2",
+        event_time=NOW,
+        built_at=NOW,
+        bid=98_990,
+        ask=99_010,
+        features={"price": 98_000, "reference_price": 99_000},
+        freshness={"book": True},
+    )
+
+    store.record_snapshot(perp)
+    store.record_snapshot(spot)
+
+    assert store.latest_snapshot().snapshot_id == perp.snapshot_id
+    assert store.latest_snapshot(market="binance_spot").snapshot_id == spot.snapshot_id
+    assert store.list_snapshots() == [perp]
+    assert store.list_snapshots(market="binance_spot") == [spot]
+
+
 def test_news_events_round_trip_without_duplicates(tmp_path):
     store = IntradayStore(tmp_path / "intraday.sqlite")
     result = NewsIntelligence().ingest(
@@ -143,7 +179,7 @@ def test_operational_health_reports_latest_scheduler_run_and_schema(tmp_path):
         finished_at=later,
     )
 
-    assert store.schema_version() == 17
+    assert store.schema_version() == 18
     assert store.latest_scheduler_runs() == [
         {
             "job_name": "perp_numeric",

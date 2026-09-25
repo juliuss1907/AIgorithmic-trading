@@ -65,10 +65,13 @@ class IntradayStore:
                 CREATE TABLE IF NOT EXISTS snapshots (
                     id TEXT PRIMARY KEY,
                     event_time TEXT NOT NULL,
-                    payload_json TEXT NOT NULL
+                    payload_json TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'binance_usdm_perp'
                 );
                 CREATE INDEX IF NOT EXISTS idx_snapshots_event_time
                     ON snapshots(event_time, id);
+                CREATE INDEX IF NOT EXISTS idx_snapshots_market_time
+                    ON snapshots(market, event_time, id);
                 CREATE TABLE IF NOT EXISTS scheduler_runs (
                     job_name TEXT NOT NULL,
                     scheduled_for TEXT NOT NULL,
@@ -535,8 +538,20 @@ class IntradayStore:
                 "CREATE INDEX IF NOT EXISTS idx_signals_experiment_pair "
                 "ON signals(experiment_pair_id, scope, state_variant)"
             )
+            snapshot_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(snapshots)")
+            }
+            if "market" not in snapshot_columns:
+                connection.execute(
+                    "ALTER TABLE snapshots ADD COLUMN market TEXT NOT NULL "
+                    "DEFAULT 'binance_usdm_perp'"
+                )
             connection.execute(
-                "UPDATE schema_meta SET value='17' WHERE key='schema_version'"
+                "CREATE INDEX IF NOT EXISTS idx_snapshots_market_time "
+                "ON snapshots(market, event_time, id)"
+            )
+            connection.execute(
+                "UPDATE schema_meta SET value='18' WHERE key='schema_version'"
             )
 
     def load_scoped_rule(self, rule_id: str) -> ScopedRuleCandidate | None:
@@ -1067,8 +1082,14 @@ class IntradayStore:
             if existing:
                 return dict(existing)
             connection.execute(
-                "INSERT OR IGNORE INTO snapshots VALUES (?, ?, ?)",
-                (snapshot.snapshot_id, snapshot.event_time.isoformat(), _json(snapshot)),
+                "INSERT OR IGNORE INTO snapshots "
+                "(id, event_time, payload_json, market) VALUES (?, ?, ?, ?)",
+                (
+                    snapshot.snapshot_id,
+                    snapshot.event_time.isoformat(),
+                    _json(snapshot),
+                    snapshot.market,
+                ),
             )
             connection.execute(
                 "INSERT INTO decisions VALUES (?, ?, ?, ?, ?, ?)",
@@ -1126,8 +1147,14 @@ class IntradayStore:
     def record_snapshot(self, snapshot: FeatureSnapshot) -> None:
         with self._connect() as connection:
             connection.execute(
-                "INSERT OR IGNORE INTO snapshots VALUES (?, ?, ?)",
-                (snapshot.snapshot_id, snapshot.event_time.isoformat(), _json(snapshot)),
+                "INSERT OR IGNORE INTO snapshots "
+                "(id, event_time, payload_json, market) VALUES (?, ?, ?, ?)",
+                (
+                    snapshot.snapshot_id,
+                    snapshot.event_time.isoformat(),
+                    _json(snapshot),
+                    snapshot.market,
+                ),
             )
 
     def get_tick(self, tick_id: str):
@@ -1682,37 +1709,53 @@ class IntradayStore:
             "scopes": scopes,
         }
 
-    def list_snapshots(self, limit: int = 100_000) -> list[FeatureSnapshot]:
+    def list_snapshots(
+        self,
+        limit: int = 100_000,
+        *,
+        market: str = "binance_usdm_perp",
+    ) -> list[FeatureSnapshot]:
         if not 1 <= limit <= 2_000_000:
             raise ValueError("limit must be between 1 and 2000000")
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM snapshots "
-                "ORDER BY event_time DESC, id DESC LIMIT ?", (limit,)
+                "WHERE market=? ORDER BY event_time DESC, id DESC LIMIT ?",
+                (market, limit),
             ).fetchall()
         return [
             FeatureSnapshot.model_validate_json(row["payload_json"])
             for row in reversed(rows)
         ]
 
-    def latest_snapshot(self) -> FeatureSnapshot | None:
+    def latest_snapshot(
+        self, *, market: str = "binance_usdm_perp"
+    ) -> FeatureSnapshot | None:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT payload_json FROM snapshots "
-                "ORDER BY event_time DESC, id DESC LIMIT 1"
+                "WHERE market=? ORDER BY event_time DESC, id DESC LIMIT 1",
+                (market,),
             ).fetchone()
         return None if row is None else FeatureSnapshot.model_validate_json(row["payload_json"])
 
-    def snapshot_history_bounds(self) -> dict:
+    def snapshot_history_bounds(
+        self, *, market: str = "binance_usdm_perp"
+    ) -> dict:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT COUNT(*) AS snapshots, MIN(event_time) AS first_event_time, "
-                "MAX(event_time) AS last_event_time FROM snapshots"
+                "MAX(event_time) AS last_event_time FROM snapshots WHERE market=?",
+                (market,),
             ).fetchone()
         return dict(row)
 
     def list_snapshots_since(
-        self, since: datetime, *, limit: int = 2_000_000
+        self,
+        since: datetime,
+        *,
+        limit: int = 2_000_000,
+        market: str = "binance_usdm_perp",
     ) -> list[FeatureSnapshot]:
         if since.tzinfo is None or since.utcoffset() is None:
             raise ValueError("snapshot boundary must be timezone-aware")
@@ -1721,9 +1764,9 @@ class IntradayStore:
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM snapshots "
-                "WHERE julianday(event_time) >= julianday(?) "
+                "WHERE market=? AND julianday(event_time) >= julianday(?) "
                 "ORDER BY event_time DESC, id DESC LIMIT ?",
-                (since.isoformat(), limit),
+                (market, since.isoformat(), limit),
             ).fetchall()
         return [
             FeatureSnapshot.model_validate_json(row["payload_json"])

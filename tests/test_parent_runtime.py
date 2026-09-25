@@ -42,6 +42,29 @@ def snapshot(price=100_000):
     )
 
 
+def scoped_snapshot(scope, price):
+    is_spot = scope == DecisionScope.SPOT_DAILY
+    features = {
+        "price": price - 100,
+        "candle_close_price": price - 100,
+        "reference_price": price,
+    }
+    if not is_spot:
+        features["mark_price"] = price
+    return FeatureSnapshot.create(
+        symbol="BTCUSDT",
+        market="binance_spot" if is_spot else "binance_usdm_perp",
+        timeframe="1d" if is_spot else "1h",
+        feature_schema_version="2",
+        event_time=NOW,
+        built_at=NOW,
+        bid=price - 10,
+        ask=price + 10,
+        features=features,
+        freshness={"candles": True, "order_book": True},
+    )
+
+
 def observation(*, entry=True, exit=False):
     return DonchianObservation(
         close=100_000,
@@ -152,6 +175,42 @@ def test_parent_cycle_opens_attributed_spot_and_perp_paper_positions(tmp_path):
             "SELECT COUNT(*) FROM open_trade_context"
         ).fetchone()[0] == 2
         assert connection.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
+
+
+def test_parent_cycle_routes_scope_specific_snapshots_to_provider_and_ledger(tmp_path):
+    class RecordingProvider(Provider):
+        def __init__(self):
+            super().__init__()
+            self.markets = {}
+
+        def decide_scoped(self, market, tick_id, scope, now):
+            self.markets[scope] = market.market
+            return super().decide_scoped(market, tick_id, scope, now)
+
+    provider = RecordingProvider()
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    store.save_parent_portfolio_state(
+        active_state(), event_kind="activated", actor="test"
+    )
+
+    run_parent_paper_cycle(
+        store,
+        provider,
+        scoped_snapshot(DecisionScope.PERP_INTRADAY, 100_000),
+        observation(),
+        spot_snapshot=scoped_snapshot(DecisionScope.SPOT_DAILY, 90_000),
+        spot_rule=SpotRuleParameters(),
+        perp_rule=PerpRuleParameters(),
+        now=NOW,
+    )
+
+    state = store.load_parent_portfolio_state()
+    assert provider.markets == {
+        DecisionScope.SPOT_DAILY: "binance_spot",
+        DecisionScope.PERP_INTRADAY: "binance_usdm_perp",
+    }
+    assert state.spot_price == 90_000
+    assert state.perp_mark_price == 100_000
 
 
 def test_parent_cycle_closes_both_scopes_into_immutable_completed_trades(tmp_path):

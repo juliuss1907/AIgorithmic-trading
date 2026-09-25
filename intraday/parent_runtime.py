@@ -27,19 +27,26 @@ def _rule_parts(rule, fallback_id: str):
 
 
 def _mark_state(
-    state: ParentPortfolioState, snapshot: FeatureSnapshot, now: datetime
+    state: ParentPortfolioState,
+    perp_snapshot: FeatureSnapshot,
+    spot_snapshot: FeatureSnapshot,
+    now: datetime,
 ) -> ParentPortfolioState:
-    reference = float(
-        snapshot.features.get("reference_price")
-        or snapshot.features.get("mark_price")
-        or snapshot.features["price"]
+    perp_reference = float(
+        perp_snapshot.features.get("reference_price")
+        or perp_snapshot.features.get("mark_price")
+        or perp_snapshot.features["price"]
+    )
+    spot_reference = float(
+        spot_snapshot.features.get("reference_price")
+        or spot_snapshot.features["price"]
     )
     payload = state.model_dump()
     payload.update(
         {
-            "mark_price": reference,
-            "spot_price": reference,
-            "perp_mark_price": reference,
+            "mark_price": perp_reference,
+            "spot_price": spot_reference,
+            "perp_mark_price": perp_reference,
             "updated_at": now,
         }
     )
@@ -96,6 +103,7 @@ def run_parent_paper_cycle(
     snapshot: FeatureSnapshot,
     spot_observation: DonchianObservation,
     *,
+    spot_snapshot: FeatureSnapshot | None = None,
     spot_rule: SpotRuleParameters | ScopedRuleCandidate,
     perp_rule: PerpRuleParameters | ScopedRuleCandidate,
     experiment_pair_ids: dict[DecisionScope, str] | None = None,
@@ -106,12 +114,26 @@ def run_parent_paper_cycle(
     record_snapshot: bool = True,
     now: datetime,
 ) -> dict:
+    if spot_snapshot is None:
+        if snapshot.feature_schema_version == "2":
+            raise ValueError("feature schema v2 requires a Binance Spot snapshot")
+        spot_snapshot = snapshot
+    if snapshot.feature_schema_version == "2" and snapshot.market != "binance_usdm_perp":
+        raise ValueError("perp runtime snapshot must come from Binance USD-M")
+    if spot_snapshot.feature_schema_version == "2" and spot_snapshot.market != "binance_spot":
+        raise ValueError("spot runtime snapshot must come from Binance Spot")
+    scope_snapshots = {
+        DecisionScope.SPOT_DAILY: spot_snapshot,
+        DecisionScope.PERP_INTRADAY: snapshot,
+    }
     if record_snapshot:
         store.record_snapshot(snapshot)
+        if spot_snapshot.snapshot_id != snapshot.snapshot_id:
+            store.record_snapshot(spot_snapshot)
     state = store.load_parent_portfolio_state()
     if state is None:
         raise ValueError("parent paper portfolio is not initialized")
-    state = _mark_state(state, snapshot, now)
+    state = _mark_state(state, snapshot, spot_snapshot, now)
     gate = ScopedEntryGate()
     spot_parameters, spot_rule_id = _rule_parts(spot_rule, "spot_rule_parameters")
     perp_parameters, perp_rule_id = _rule_parts(perp_rule, "perp_rule_parameters")
@@ -120,12 +142,13 @@ def run_parent_paper_cycle(
     experiment_pair_ids = experiment_pair_ids or {}
 
     def decide(scope: DecisionScope):
-        tick_id = f"{snapshot.symbol}:{scope.value}:{int(now.timestamp() * 1000)}"
+        market = scope_snapshots[scope]
+        tick_id = f"{market.symbol}:{scope.value}:{int(now.timestamp() * 1000)}"
         pair_id = experiment_pair_ids.get(scope)
         if pair_id is None:
-            return provider.decide_scoped(snapshot, tick_id, scope, now)
+            return provider.decide_scoped(market, tick_id, scope, now)
         return provider.decide_scoped(
-            snapshot,
+            market,
             tick_id,
             scope,
             now,
@@ -162,12 +185,9 @@ def run_parent_paper_cycle(
         close_reason=None,
     ):
         nonlocal state
+        market = scope_snapshots[authorization.scope]
         state, fill = apply_paper_target(
-            state,
-            authorization,
-            bid=snapshot.bid,
-            ask=snapshot.ask,
-            now=now,
+            state, authorization, bid=market.bid, ask=market.ask, now=now,
         )
         if fill is not None:
             stop_loss = None
@@ -245,7 +265,7 @@ def run_parent_paper_cycle(
                 )
                 signal_id = record_scoped_signal(
                     store,
-                    snapshot,
+                    spot_snapshot,
                     scoped,
                     gate_passed=authorization.allowed,
                     gate_reason=(
@@ -328,6 +348,7 @@ def run_parent_risk_cycle(
     snapshot: FeatureSnapshot,
     spot_observation: DonchianObservation,
     *,
+    spot_snapshot: FeatureSnapshot | None = None,
     spot_rule: SpotRuleParameters | ScopedRuleCandidate,
     perp_rule: PerpRuleParameters | ScopedRuleCandidate,
     now: datetime,
@@ -338,6 +359,7 @@ def run_parent_risk_cycle(
         None,
         snapshot,
         spot_observation,
+        spot_snapshot=spot_snapshot,
         spot_rule=spot_rule,
         perp_rule=perp_rule,
         decision_scopes=(),
