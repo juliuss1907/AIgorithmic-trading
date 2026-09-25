@@ -211,6 +211,23 @@ def test_secret_store_can_initialize_a_precreated_empty_mount_file(tmp_path):
     assert ProviderSecretStore(path).get("jev-openrouter").api_key == "private-key"
 
 
+def test_root_secret_store_write_preserves_precreated_mount_owner(monkeypatch, tmp_path):
+    path = tmp_path / "providers.toml"
+    path.touch(mode=0o600)
+    owner = (path.stat().st_uid, path.stat().st_gid)
+    ownership_updates = []
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        os,
+        "fchown",
+        lambda descriptor, uid, gid: ownership_updates.append((uid, gid)),
+    )
+
+    ProviderSecretStore(path).upsert(profile(), "private-key")
+
+    assert ownership_updates == [owner]
+
+
 def test_secret_store_rejects_group_readable_files_and_symlinks(tmp_path):
     path = tmp_path / "providers.toml"
     secret_store = ProviderSecretStore(path)

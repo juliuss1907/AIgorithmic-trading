@@ -108,10 +108,16 @@ class ProviderSecretStore:
         parent = self.path.parent
         parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._validate_existing_file()
+        existing_owner = None
+        if self.path.exists():
+            details = self.path.stat()
+            existing_owner = (details.st_uid, details.st_gid)
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{self.path.name}.", dir=parent
         )
         try:
+            if os.geteuid() == 0 and existing_owner is not None:
+                os.fchown(descriptor, *existing_owner)
             os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 handle.write(self._serialize(credentials))
