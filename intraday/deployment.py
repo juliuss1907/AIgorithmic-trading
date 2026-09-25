@@ -296,9 +296,21 @@ def bootstrap(
     steps = (
         ("Compose validation", compose_command(deployment, "config", "--quiet")),
         (
+            "AIGT image build",
+            compose_command(
+                deployment,
+                "--profile",
+                "admin",
+                "build",
+                "worker",
+                "web",
+                "admin",
+            ),
+        ),
+        (
             "AIGT startup",
             compose_command(
-                deployment, "up", "--build", "-d", "--wait", "worker", "web"
+                deployment, "up", "-d", "--wait", "worker", "web"
             ),
         ),
         ("AIGT doctor", admin_command(deployment, ["doctor"])),

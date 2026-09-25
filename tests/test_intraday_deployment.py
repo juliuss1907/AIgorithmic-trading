@@ -158,7 +158,24 @@ def test_bootstrap_creates_safe_files_starts_core_and_registers_globally(
         (compose_command(deployment, "config", "--quiet"), root),
         (
             compose_command(
-                deployment, "up", "--build", "-d", "--wait", "worker", "web"
+                deployment,
+                "--profile",
+                "admin",
+                "build",
+                "worker",
+                "web",
+                "admin",
+            ),
+            root,
+        ),
+        (
+            compose_command(
+                deployment,
+                "up",
+                "-d",
+                "--wait",
+                "worker",
+                "web",
             ),
             root,
         ),
