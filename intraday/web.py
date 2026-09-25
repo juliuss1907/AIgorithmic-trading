@@ -186,7 +186,13 @@ def create_app(
             role.value: store.provider_assignment(role) for role in ProviderRole
         }
         analyst_reports = store.latest_analyst_reports()
+        bundle = store.latest_market_thesis_bundle()
         thesis = store.latest_market_thesis()
+        if thesis is None and bundle is not None:
+            thesis = {
+                **bundle.intraday.model_dump(mode="python"),
+                "generated_at": bundle.generated_at,
+            }
         now = datetime.now(timezone.utc)
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         return templates.TemplateResponse(
@@ -298,7 +304,7 @@ def create_app(
     @app.get("/api/analysts")
     def analysts():
         reports = store.latest_analyst_reports()
-        thesis = store.latest_market_thesis()
+        thesis = store.latest_market_thesis_bundle() or store.latest_market_thesis()
         now = datetime.now(timezone.utc)
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         return {

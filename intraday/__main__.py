@@ -1019,7 +1019,9 @@ def main() -> None:
     explicit_native_paths = any(
         item in raw_arguments for item in ("--database", "--secrets-file")
     )
-    if arguments.command in {"doctor", "status", "provider", "connect"} and not explicit_native_paths:
+    if arguments.command in {
+        "analysis", "doctor", "status", "provider", "connect"
+    } and not explicit_native_paths:
         deployment = deployment_cli.load_deployment()
         if deployment is not None:
             code = deployment_cli.execute(

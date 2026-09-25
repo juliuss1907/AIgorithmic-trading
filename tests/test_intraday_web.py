@@ -3,7 +3,16 @@ from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
-from intraday.contracts import ProviderKind, ProviderProfile, ProviderRole
+from intraday.contracts import (
+    AnalysisAssessment,
+    AnalystReport,
+    DecisionScope,
+    HorizonThesis,
+    MarketThesisBundle,
+    ProviderKind,
+    ProviderProfile,
+    ProviderRole,
+)
 from intraday.store import IntradayStore
 from intraday.portfolio_coordinator import ParentPortfolioState
 from intraday.web import create_app
@@ -99,6 +108,66 @@ def test_provider_and_analyst_read_apis_are_redacted(tmp_path):
     assert "api_key" not in providers.text
     assert "secret" not in providers.text.lower()
     assert analysts.json() == {"reports": {}, "thesis": None, "daily_cost_usd": 0.0}
+
+
+def test_analyst_api_and_dashboard_show_latest_scoped_thesis_bundle(tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime(2026, 9, 22, 13, 0, tzinfo=timezone.utc)
+    reports = tuple(
+        AnalystReport(
+            report_id=f"{analyst}-report",
+            analyst=analyst,
+            assessment=AnalysisAssessment(
+                summary=f"{analyst.title()} evidence supports a cautious market posture.",
+                stance="neutral",
+                confidence=0.6,
+                key_findings=("Evidence remains mixed",),
+                risk_factors=("Unexpected headline",),
+            ),
+            generated_at=now,
+            model_ref="llm-main@fingerprint",
+            prompt_version="analysis-v2",
+            input_hash=(str(index) * 64),
+        )
+        for index, analyst in enumerate(("market", "news", "sentiment"), start=1)
+    )
+    bundle = MarketThesisBundle(
+        thesis_id="bundle-1",
+        intraday=HorizonThesis(
+            scope=DecisionScope.PERP_INTRADAY,
+            summary="Intraday evidence supports a cautious neutral posture.",
+            stance="neutral",
+            confidence=0.64,
+            key_levels={"support": 98_000, "resistance": 102_000},
+            risk_factors=("Funding reversal",),
+            horizon_minutes=240,
+        ),
+        daily_swing=HorizonThesis(
+            scope=DecisionScope.SPOT_DAILY,
+            summary="Daily evidence supports patience above established support.",
+            stance="neutral",
+            confidence=0.61,
+            key_levels={"support": 95_000, "resistance": 110_000},
+            risk_factors=("Macro reversal",),
+            horizon_minutes=2_880,
+        ),
+        source_report_ids=tuple(report.report_id for report in reports),
+        generated_at=now,
+        model_ref="llm-main@fingerprint",
+        prompt_version="analysis-v2",
+    )
+    store.record_scoped_analysis(reports, bundle)
+    client = TestClient(create_app(database=database))
+
+    analysts = client.get("/api/analysts")
+    dashboard = client.get("/")
+
+    assert analysts.status_code == 200
+    assert analysts.json()["thesis"]["thesis_id"] == "bundle-1"
+    assert analysts.json()["thesis"]["intraday"]["horizon_minutes"] == 240
+    assert dashboard.status_code == 200
+    assert "Intraday evidence supports a cautious neutral posture." in dashboard.text
 
 
 def test_provider_mutations_are_authenticated_idempotent_commands(tmp_path):
