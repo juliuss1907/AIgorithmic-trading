@@ -12,6 +12,7 @@
 - [x] Phase 7a: Operator API, token scopes, action approval, audit và alert cursor.
 - [x] Phase 7b: Hermes `trading-ops` distribution, read tool, slash commands và cron scripts.
 - [x] Phase 8: global `aigt` deployment registry, Docker routing và safe setup.
+- [x] Phase 9: unified dashboard đọc journal/soak hiện tại, API signal đã redact và legacy route.
 
 ## Sau khi build
 

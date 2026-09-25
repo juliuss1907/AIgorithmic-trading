@@ -81,7 +81,10 @@ aigt journal export
 thành hai mẫu riêng vì state chứa `decision_scope`; export v1 không tự deduplicate.
 Thư mục `training_data/` là derived artifact và không được commit.
 
-Mở `http://127.0.0.1:8081/portfolio`. Mặc định dữ liệu nằm tại
+Mở `http://127.0.0.1:8081/` để xem trạng thái worker, tiến độ soak 72 giờ,
+heartbeat Spot/Perp, model calls và các Jev signal gần nhất. Trang
+`http://127.0.0.1:8081/portfolio` giữ phần chi tiết portfolio/rule/evaluation;
+dashboard intraday legacy nằm tại `/legacy-intraday`. Mặc định dữ liệu nằm tại
 `${XDG_STATE_HOME:-~/.local/state}/aigorithmic-trading/intraday.sqlite3`; không dùng
 chung paper account với `lab/`. Để copy paper database cũ mà không xóa nguồn:
 

@@ -1,6 +1,6 @@
 # Kế hoạch multi-cadence AI paper trading
 
-Ngày cập nhật: 2026-09-23. Trạng thái: **đang triển khai, paper-only**.
+Ngày cập nhật: 2026-09-25. Trạng thái: **đang chạy decision-only soak trên VPS**.
 
 ## Mục tiêu
 
@@ -30,6 +30,8 @@ thay đổi hard-risk hoặc tự kích hoạt rule.
 7. Bổ sung dashboard vận hành, doctor và chạy paper soak.
 8. Thêm Operator API và Hermes `trading-ops` distribution; rollout VPS tách riêng sau khi
    repo và Hermes đã được cài trên máy đích.
+9. Hợp nhất dashboard `/` với read-model của portfolio worker; giữ `/portfolio` cho chi tiết
+   và chuyển intraday legacy sang `/legacy-intraday`.
 
 ## Điều kiện hoàn thành
 

@@ -108,7 +108,10 @@ aigt status
 
 ## 5. Review learning evidence and rule candidates
 
-Open `http://127.0.0.1:8081/portfolio` to inspect:
+Open `http://127.0.0.1:8081/` for the unified operations view: current worker
+status, model-backed 72-hour soak progress, Spot/Perp heartbeats, safe Jev signal
+summaries, provider health, market references, and the latest thesis. Open
+`http://127.0.0.1:8081/portfolio` for the detailed portfolio view and inspect:
 
 - latest durable scheduler status and errors;
 - numeric-primary versus compact-shadow pairs and the current eligibility result;
