@@ -581,7 +581,6 @@ def _portfolio_cli(arguments) -> None:
             background_started = False
             while True:
                 now = datetime.now(timezone.utc)
-                process_pending_commands(store, now=now)
                 try:
                     snapshot = market.snapshot("BTCUSDT", now=now)
                     spot_snapshot = spot_market.snapshot("BTCUSDT", now=now)
@@ -606,6 +605,12 @@ def _portfolio_cli(arguments) -> None:
                     store.save_parent_portfolio_state(
                         initial, event_kind="initialized", actor="soak_worker"
                     )
+                process_pending_commands(
+                    store,
+                    now=now,
+                    snapshot=snapshot,
+                    spot_snapshot=spot_snapshot,
+                )
                 slot = claim_cadence(
                     store, "portfolio_soak_perp", now,
                     config.perp_decision_interval_seconds,
@@ -746,7 +751,12 @@ def _portfolio_cli(arguments) -> None:
                     return
                 time.sleep(max(1, interval))
                 continue
-            process_pending_commands(store, now=now, snapshot=snapshot)
+            process_pending_commands(
+                store,
+                now=now,
+                snapshot=snapshot,
+                spot_snapshot=spot_snapshot,
+            )
             spot_event = False
             utc_day = now.astimezone(timezone.utc).date()
             if last_spot_check_day != utc_day:

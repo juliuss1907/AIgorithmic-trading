@@ -65,11 +65,28 @@ def flatten_parent_paper_positions(
     now: datetime,
     bid: float | None = None,
     ask: float | None = None,
+    spot_bid: float | None = None,
+    spot_ask: float | None = None,
+    perp_bid: float | None = None,
+    perp_ask: float | None = None,
     actor: str,
 ) -> ParentPortfolioState:
     """Flatten both paper sleeves through fills so open trades remain auditable."""
-    bid = state.mark_price if bid is None else bid
-    ask = state.mark_price if ask is None else ask
+    def quote(value: float | None, legacy: float | None, fallback: float) -> float:
+        if value is not None:
+            return value
+        if legacy is not None:
+            return legacy
+        return fallback
+
+    spot_quotes = (
+        quote(spot_bid, bid, state.spot_price),
+        quote(spot_ask, ask, state.spot_price),
+    )
+    perp_quotes = (
+        quote(perp_bid, bid, state.perp_mark_price),
+        quote(perp_ask, ask, state.perp_mark_price),
+    )
     gate = ScopedEntryGate()
     current = state
     for scope, quantity in (
@@ -79,8 +96,15 @@ def flatten_parent_paper_positions(
         if not quantity:
             continue
         authorization = gate.deterministic_exit(current, scope, "manual")
+        scope_bid, scope_ask = (
+            spot_quotes if scope == DecisionScope.SPOT_DAILY else perp_quotes
+        )
         current, fill = apply_paper_target(
-            current, authorization, bid=bid, ask=ask, now=now
+            current,
+            authorization,
+            bid=scope_bid,
+            ask=scope_ask,
+            now=now,
         )
         if fill is not None:
             store.record_parent_paper_fill(fill, close_reason="manual")

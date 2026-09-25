@@ -185,7 +185,7 @@ def test_existing_v1_database_is_migrated_additively(tmp_path):
         "operator_action_requests", "operator_action_events",
         "operator_alerts",
     } <= provider_tables
-    assert version == "17"
+    assert version == "18"
 
 
 def test_secret_store_writes_mode_0600_and_never_exposes_key_in_repr(tmp_path):

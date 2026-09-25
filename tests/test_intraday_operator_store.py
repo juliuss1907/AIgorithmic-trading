@@ -151,7 +151,7 @@ def test_expired_cancelled_and_replayed_operator_actions_never_queue_twice(tmp_p
 def test_operator_action_schema_migration_is_additive(tmp_path):
     store = IntradayStore(tmp_path / "intraday.sqlite")
 
-    assert store.schema_version() == 17
+    assert store.schema_version() == 18
     assert store.list_operator_action_events() == []
 
 

@@ -2,6 +2,8 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from intraday.contracts import (
     DecisionScope,
     DecisionMode,
@@ -313,6 +315,42 @@ def test_manual_flatten_closes_open_journal_trades(tmp_path):
             row[0] for row in connection.execute("SELECT close_reason FROM trades")
         }
     assert reasons == {"manual"}
+
+
+def test_manual_flatten_uses_scope_specific_spot_and_perp_quotes(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    store.save_parent_portfolio_state(
+        active_state(
+            mark_price=110_000,
+            spot_price=90_000,
+            perp_mark_price=110_000,
+            spot_quantity=0.1,
+            spot_entry_price=90_000,
+            perp_quantity=-0.1,
+            perp_entry_price=110_000,
+        ),
+        event_kind="seed",
+        actor="test",
+    )
+
+    flatten_parent_paper_positions(
+        store,
+        store.load_parent_portfolio_state(),
+        now=NOW + timedelta(minutes=5),
+        spot_bid=89_990,
+        spot_ask=90_010,
+        perp_bid=109_990,
+        perp_ask=110_010,
+        actor="test",
+    )
+
+    fills = {fill.scope: fill for fill in store.list_parent_paper_fills()}
+    assert fills[DecisionScope.SPOT_DAILY].side == "sell"
+    assert fills[DecisionScope.SPOT_DAILY].price == pytest.approx(89_990 * 0.9995)
+    assert fills[DecisionScope.PERP_INTRADAY].side == "buy"
+    assert fills[DecisionScope.PERP_INTRADAY].price == pytest.approx(
+        110_010 * 1.0005
+    )
 
 
 def test_deterministic_spot_exit_runs_even_when_provider_is_down(tmp_path):

@@ -32,6 +32,7 @@ def process_pending_commands(
     now: datetime,
     engine: IntradayEngine | None = None,
     snapshot: FeatureSnapshot | None = None,
+    spot_snapshot: FeatureSnapshot | None = None,
     secret_store: ProviderSecretStore | None = None,
     preflight_client: ProviderPreflightClient | None = None,
 ) -> None:
@@ -94,8 +95,14 @@ def process_pending_commands(
                         store,
                         parent,
                         now=now,
-                        bid=snapshot.bid if snapshot is not None else None,
-                        ask=snapshot.ask if snapshot is not None else None,
+                        spot_bid=(
+                            spot_snapshot.bid if spot_snapshot is not None else None
+                        ),
+                        spot_ask=(
+                            spot_snapshot.ask if spot_snapshot is not None else None
+                        ),
+                        perp_bid=snapshot.bid if snapshot is not None else None,
+                        perp_ask=snapshot.ask if snapshot is not None else None,
                         actor=command["actor"],
                     )
                 else:
