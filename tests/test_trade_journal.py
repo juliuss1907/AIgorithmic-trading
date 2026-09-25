@@ -62,7 +62,7 @@ def trade(store, signal_id, *, trade_key="trade-1", pnl_pct=1.25,
     )
 
 
-def test_schema_v17_preserves_required_symbol_scope_and_paper_mode(tmp_path):
+def test_schema_v18_preserves_market_feature_version_and_paper_mode(tmp_path):
     database = tmp_path / "intraday.sqlite"
     store = IntradayStore(database)
     signal_id = signal(store)
@@ -80,9 +80,11 @@ def test_schema_v17_preserves_required_symbol_scope_and_paper_mode(tmp_path):
             "SELECT * FROM trades WHERE id=?", (trade_id,)
         ).fetchone()
 
-    assert version == "17"
+    assert version == "18"
     assert recorded_signal["symbol"] == "BTCUSDT"
     assert recorded_signal["scope"] == "perp_intraday"
+    assert recorded_signal["market"] == "binance_usdm_perp"
+    assert recorded_signal["feature_schema_version"] == "1"
     assert recorded_signal["state_variant"] == "numeric_v1"
     assert recorded_signal["decision_mode"] == "primary"
     assert recorded_signal["experiment_pair_id"] is None
@@ -118,6 +120,37 @@ def test_shadow_signal_metadata_is_persisted_without_a_trade(tmp_path):
     assert row["decision_mode"] == "shadow"
     assert row["experiment_pair_id"] == "pair-1234567890123456"
     assert trades == 0
+
+
+def test_spot_v2_signal_records_scope_correct_market_provenance(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+
+    signal_id = store.record_journal_signal(
+        decision_id="spot-v2-decision",
+        timestamp=NOW,
+        symbol="BTCUSDT",
+        scope=DecisionScope.SPOT_DAILY,
+        market="binance_spot",
+        feature_schema_version="2",
+        state_snapshot='{"decision_scope":"spot_daily"}',
+        raw_signals={"reference_price": 99_000.0},
+        jev_answers={"direction": {"choice": "Hold"}},
+        gate_passed=False,
+        gate_reason="hold",
+        rules_version="spot-rule-v1",
+        llm_thesis=None,
+    )
+
+    with sqlite3.connect(store.database) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT market, feature_schema_version FROM signals WHERE id=?",
+            (signal_id,),
+        ).fetchone()
+    assert dict(row) == {
+        "market": "binance_spot",
+        "feature_schema_version": "2",
+    }
 
 
 def test_signal_and_trade_rows_are_idempotent_and_immutable(tmp_path):

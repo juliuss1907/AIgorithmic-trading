@@ -15,6 +15,7 @@ from intraday.contracts import (
 )
 from intraday.portfolio_coordinator import ParentPortfolioState
 from intraday.portfolio_soak import (
+    CURRENT_SOAK_EVIDENCE_VERSION,
     evaluate_portfolio_soak,
     run_soak_cycle,
     run_spot_soak_observation,
@@ -33,6 +34,7 @@ def records():
                 "scope": DecisionScope.PERP_INTRADAY.value,
                 "status": "success",
                 "hard_risk_violation": False,
+                "evidence_version": CURRENT_SOAK_EVIDENCE_VERSION,
                 "created_at": (START + timedelta(minutes=44 * index)).isoformat(),
             }
         )
@@ -42,6 +44,7 @@ def records():
                 "scope": DecisionScope.SPOT_DAILY.value,
                 "status": "skipped_no_setup",
                 "hard_risk_violation": False,
+                "evidence_version": CURRENT_SOAK_EVIDENCE_VERSION,
                 "created_at": (START + timedelta(hours=24 * index)).isoformat(),
             }
         )
@@ -75,6 +78,29 @@ def test_soak_requires_72_hours_both_scopes_and_95_percent_availability():
     assert "minimum_72_hours" in short.reason_codes
     assert failed.status == "reject"
     assert "perp_intraday_availability_below_95pct" in failed.reason_codes
+
+
+def test_soak_evaluation_restarts_at_first_tick_of_current_evidence_version():
+    legacy = [
+        {
+            **item,
+            "evidence_version": "market-v1",
+            "created_at": (
+                datetime.fromisoformat(item["created_at"]) - timedelta(days=7)
+            ).isoformat(),
+        }
+        for item in records()
+    ]
+    current = records()[:20]
+
+    evaluation = evaluate_portfolio_soak(
+        [*legacy, *current], evaluated_at=START + timedelta(hours=10)
+    )
+
+    assert evaluation.evidence_version == CURRENT_SOAK_EVIDENCE_VERSION
+    assert evaluation.started_at == START
+    assert evaluation.status == "deferred"
+    assert "minimum_72_hours" in evaluation.reason_codes
 
 
 def test_soak_cycle_exercises_both_scoped_jev_workflows_without_trading(tmp_path):
@@ -149,6 +175,7 @@ def test_spot_soak_records_no_setup_without_calling_jev(tmp_path):
             "scope": "spot_daily",
             "status": "skipped_no_setup",
             "hard_risk_violation": 0,
+            "evidence_version": CURRENT_SOAK_EVIDENCE_VERSION,
             "created_at": START.isoformat(),
         }
     ]

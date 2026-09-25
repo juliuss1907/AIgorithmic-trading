@@ -14,10 +14,15 @@ from intraday.journal import record_scoped_signal
 from intraday.spot_signal import evaluate_donchian
 
 
+CURRENT_SOAK_EVIDENCE_VERSION = "scope-price-v2"
+LEGACY_SOAK_EVIDENCE_VERSION = "market-v1"
+
+
 class PortfolioSoakEvaluation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     evaluation_id: str = Field(min_length=16, max_length=64)
+    evidence_version: str = Field(min_length=1, max_length=80)
     status: Literal["deferred", "reject", "pass"]
     started_at: datetime | None
     evaluated_at: datetime
@@ -116,11 +121,22 @@ def run_spot_soak_observation(
 
 
 def evaluate_portfolio_soak(
-    records: list[dict], *, evaluated_at: datetime
+    records: list[dict],
+    *,
+    evaluated_at: datetime,
+    evidence_version: str = CURRENT_SOAK_EVIDENCE_VERSION,
 ) -> PortfolioSoakEvaluation:
     if evaluated_at.tzinfo is None or evaluated_at.utcoffset() is None:
         raise ValueError("evaluation time must be timezone-aware")
-    ordered = sorted(records, key=lambda item: item["created_at"])
+    ordered = sorted(
+        (
+            item
+            for item in records
+            if item.get("evidence_version", LEGACY_SOAK_EVIDENCE_VERSION)
+            == evidence_version
+        ),
+        key=lambda item: item["created_at"],
+    )
     started_at = (
         datetime.fromisoformat(ordered[0]["created_at"]) if ordered else None
     )
@@ -182,12 +198,13 @@ def evaluate_portfolio_soak(
         reasons = ()
     identity = hashlib.sha256(
         (
-            f"portfolio-soak:{started_at}:{evaluated_at.isoformat()}:"
+            f"portfolio-soak:{evidence_version}:{started_at}:{evaluated_at.isoformat()}:"
             f"{counts}:{healthy}:{violations}:{status}"
         ).encode()
     ).hexdigest()[:32]
     return PortfolioSoakEvaluation(
         evaluation_id=identity,
+        evidence_version=evidence_version,
         status=status,
         started_at=started_at,
         evaluated_at=evaluated_at,

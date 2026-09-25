@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import datetime, timezone
 
 from intraday.contracts import (
@@ -131,6 +132,65 @@ def test_snapshots_are_partitioned_by_market_without_mixing_replay_data(tmp_path
     assert store.latest_snapshot(market="binance_spot").snapshot_id == spot.snapshot_id
     assert store.list_snapshots() == [perp]
     assert store.list_snapshots(market="binance_spot") == [spot]
+
+
+def test_schema_v17_snapshot_and_soak_rows_upgrade_without_data_loss(tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    legacy_snapshot = FeatureSnapshot.create(
+        symbol="BTCUSDT",
+        event_time=NOW,
+        built_at=NOW,
+        bid=99_990,
+        ask=100_010,
+        features={"price": 100_000},
+        freshness={"book": True},
+    )
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE snapshots (
+                id TEXT PRIMARY KEY,
+                event_time TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+            CREATE TABLE portfolio_soak_ticks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope TEXT NOT NULL,
+                status TEXT NOT NULL,
+                hard_risk_violation INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO schema_meta VALUES ('schema_version', '17');
+            """
+        )
+        connection.execute(
+            "INSERT INTO snapshots VALUES (?, ?, ?)",
+            (
+                legacy_snapshot.snapshot_id,
+                NOW.isoformat(),
+                legacy_snapshot.model_dump_json(),
+            ),
+        )
+        connection.execute(
+            "INSERT INTO portfolio_soak_ticks "
+            "(scope, status, hard_risk_violation, created_at) VALUES (?, ?, ?, ?)",
+            ("perp_intraday", "success", 0, NOW.isoformat()),
+        )
+
+    store = IntradayStore(database)
+
+    assert store.schema_version() == 18
+    assert store.latest_snapshot().snapshot_id == legacy_snapshot.snapshot_id
+    assert store.list_portfolio_soak_ticks(evidence_version="market-v1") == [
+        {
+            "scope": "perp_intraday",
+            "status": "success",
+            "hard_risk_violation": 0,
+            "evidence_version": "market-v1",
+            "created_at": NOW.isoformat(),
+        }
+    ]
 
 
 def test_news_events_round_trip_without_duplicates(tmp_path):

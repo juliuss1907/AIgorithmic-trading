@@ -70,8 +70,6 @@ class IntradayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_snapshots_event_time
                     ON snapshots(event_time, id);
-                CREATE INDEX IF NOT EXISTS idx_snapshots_market_time
-                    ON snapshots(market, event_time, id);
                 CREATE TABLE IF NOT EXISTS scheduler_runs (
                     job_name TEXT NOT NULL,
                     scheduled_for TEXT NOT NULL,
@@ -268,6 +266,7 @@ class IntradayStore:
                         'success', 'skipped_no_setup', 'provider_error', 'gate_error'
                     )),
                     hard_risk_violation INTEGER NOT NULL DEFAULT 0,
+                    evidence_version TEXT NOT NULL DEFAULT 'market-v1',
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_portfolio_soak_ticks_time
@@ -290,6 +289,10 @@ class IntradayStore:
                     timestamp TEXT NOT NULL,
                     symbol TEXT NOT NULL,
                     scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    market TEXT NOT NULL DEFAULT 'binance_usdm_perp'
+                        CHECK (market IN ('binance_usdm_perp', 'binance_spot')),
+                    feature_schema_version TEXT NOT NULL DEFAULT '1'
+                        CHECK (feature_schema_version IN ('1', '2')),
                     state_snapshot TEXT NOT NULL,
                     raw_signals TEXT NOT NULL,
                     jev_answers TEXT NOT NULL,
@@ -531,6 +534,8 @@ class IntradayStore:
                 "state_variant": "TEXT NOT NULL DEFAULT 'numeric_v1'",
                 "decision_mode": "TEXT NOT NULL DEFAULT 'primary'",
                 "experiment_pair_id": "TEXT",
+                "market": "TEXT NOT NULL DEFAULT 'binance_usdm_perp'",
+                "feature_schema_version": "TEXT NOT NULL DEFAULT '1'",
             }.items():
                 if name not in signal_columns:
                     connection.execute(f"ALTER TABLE signals ADD COLUMN {name} {definition}")
@@ -549,6 +554,19 @@ class IntradayStore:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_snapshots_market_time "
                 "ON snapshots(market, event_time, id)"
+            )
+            soak_columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(portfolio_soak_ticks)")
+            }
+            if "evidence_version" not in soak_columns:
+                connection.execute(
+                    "ALTER TABLE portfolio_soak_ticks ADD COLUMN evidence_version "
+                    "TEXT NOT NULL DEFAULT 'market-v1'"
+                )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_portfolio_soak_evidence_time "
+                "ON portfolio_soak_ticks(evidence_version, created_at, scope)"
             )
             connection.execute(
                 "UPDATE schema_meta SET value='18' WHERE key='schema_version'"
@@ -1271,6 +1289,7 @@ class IntradayStore:
         status: str,
         created_at: datetime,
         hard_risk_violation: bool = False,
+        evidence_version: str = "scope-price-v2",
     ) -> None:
         if status not in {
             "success", "skipped_no_setup", "provider_error", "gate_error"
@@ -1279,20 +1298,26 @@ class IntradayStore:
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO portfolio_soak_ticks "
-                "(scope, status, hard_risk_violation, created_at) VALUES (?, ?, ?, ?)",
+                "(scope, status, hard_risk_violation, evidence_version, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (
                     scope.value,
                     status,
                     int(hard_risk_violation),
+                    evidence_version,
                     created_at.isoformat(),
                 ),
             )
 
-    def list_portfolio_soak_ticks(self) -> list[dict]:
+    def list_portfolio_soak_ticks(
+        self, *, evidence_version: str = "scope-price-v2"
+    ) -> list[dict]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT scope, status, hard_risk_violation, created_at "
-                "FROM portfolio_soak_ticks ORDER BY created_at, id"
+                "SELECT scope, status, hard_risk_violation, evidence_version, "
+                "created_at FROM portfolio_soak_ticks WHERE evidence_version=? "
+                "ORDER BY created_at, id",
+                (evidence_version,),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -1465,6 +1490,8 @@ class IntradayStore:
         gate_reason: str | None,
         rules_version: str,
         llm_thesis: str | None,
+        market: str = "binance_usdm_perp",
+        feature_schema_version: str = "1",
         state_variant: StateVariant = StateVariant.NUMERIC_V1,
         decision_mode: DecisionMode = DecisionMode.PRIMARY,
         experiment_pair_id: str | None = None,
@@ -1473,6 +1500,10 @@ class IntradayStore:
             raise ValueError("signal timestamp must be timezone-aware")
         if not decision_id or not symbol or not state_snapshot or not rules_version:
             raise ValueError("signal identity and snapshots must be nonempty")
+        if market not in {"binance_usdm_perp", "binance_spot"}:
+            raise ValueError("signal market is invalid")
+        if feature_schema_version not in {"1", "2"}:
+            raise ValueError("signal feature schema version is invalid")
         if not raw_signals or any(
             isinstance(value, bool)
             or (
@@ -1503,6 +1534,8 @@ class IntradayStore:
             gate_reason,
             rules_version,
             llm_thesis,
+            market,
+            feature_schema_version,
             state_variant.value,
             decision_mode.value,
             experiment_pair_id,
@@ -1512,14 +1545,15 @@ class IntradayStore:
                 "INSERT OR IGNORE INTO signals "
                 "(decision_id, timestamp, symbol, scope, state_snapshot, raw_signals, "
                 "jev_answers, gate_passed, gate_reason, rules_version, llm_thesis, "
-                "state_variant, decision_mode, experiment_pair_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "market, feature_schema_version, state_variant, decision_mode, "
+                "experiment_pair_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 values,
             )
             row = connection.execute(
                 "SELECT id, timestamp, symbol, scope, state_snapshot, raw_signals, "
                 "jev_answers, gate_passed, gate_reason, rules_version, llm_thesis, "
-                "state_variant, decision_mode, experiment_pair_id "
+                "market, feature_schema_version, state_variant, decision_mode, "
+                "experiment_pair_id "
                 "FROM signals WHERE decision_id=?",
                 (decision_id,),
             ).fetchone()
