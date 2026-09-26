@@ -139,6 +139,38 @@ def test_global_backup_create_routes_only_to_admin_container(
     ]
 
 
+def test_soak_report_cli_prints_and_optionally_writes_identical_read_only_json(
+    monkeypatch, capsys, tmp_path
+):
+    database = tmp_path / "intraday.sqlite3"
+    store = IntradayStore(database)
+    output = tmp_path / "reports" / "readiness.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "aigt",
+            "portfolio",
+            "soak",
+            "report",
+            "--database",
+            str(database),
+            "--output",
+            str(output),
+        ],
+    )
+
+    main()
+
+    stdout = capsys.readouterr().out
+    report = json.loads(stdout)
+    assert output.read_text(encoding="utf-8") == stdout
+    assert report["status"]["code"] == "WAITING"
+    assert report["recommended_action"] == "wait"
+    assert report["database"]["integrity"] == "ok"
+    assert store.latest_portfolio_soak_evaluation() is None
+
+
 def test_provider_setup_command_has_been_removed(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["aigt", "provider", "setup"])
 

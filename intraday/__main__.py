@@ -40,6 +40,7 @@ from intraday.cross_venue_evaluation import (
     CrossVenueEvaluationEvidence,
     evaluate_cross_venue_promotion,
 )
+from intraday.dashboard_read_model import build_dashboard_snapshot
 from intraday.decision_experiments import (
     make_experiment_pair_id,
     record_compact_shadow,
@@ -98,6 +99,12 @@ from intraday.scoped_rule_lifecycle import (
     evaluate_scoped_replay,
     evaluate_scoped_soak,
     start_scoped_rule_soak,
+)
+from intraday.soak_report import (
+    build_soak_readiness_report,
+    collect_database_metrics,
+    serialize_report,
+    write_report,
 )
 
 
@@ -203,6 +210,11 @@ def _parser() -> argparse.ArgumentParser:
     soak_evaluate = soak_commands.add_parser("evaluate")
     soak_evaluate.add_argument("--database", default=None)
     soak_evaluate.add_argument("--at", default=None)
+    soak_report = soak_commands.add_parser("report")
+    soak_report.add_argument("--database", default=None)
+    soak_report.add_argument("--output", default=None)
+    soak_report.add_argument("--owner-uid", type=int, default=None, help=argparse.SUPPRESS)
+    soak_report.add_argument("--owner-gid", type=int, default=None, help=argparse.SUPPRESS)
     soak_run = soak_commands.add_parser("run")
     soak_run.add_argument("--database", default=None)
     soak_run.add_argument("--secrets-file", default=None)
@@ -574,6 +586,31 @@ def _portfolio_cli(arguments) -> None:
         print(json.dumps(result, indent=2))
         return
     if command == "soak":
+        if arguments.soak_command == "report":
+            try:
+                snapshot = build_dashboard_snapshot(
+                    store, now=datetime.now(timezone.utc)
+                )
+                report = build_soak_readiness_report(
+                    snapshot, collect_database_metrics(store.database)
+                )
+                if arguments.output is not None:
+                    write_report(
+                        report,
+                        arguments.output,
+                        owner_uid=arguments.owner_uid,
+                        owner_gid=arguments.owner_gid,
+                    )
+            except (
+                FileExistsError,
+                FileNotFoundError,
+                PermissionError,
+                ValueError,
+                sqlite3.DatabaseError,
+            ) as error:
+                raise SystemExit(str(error)) from error
+            sys.stdout.write(serialize_report(report))
+            return
         if arguments.soak_command == "run":
             secret_store = ProviderSecretStore(
                 arguments.secrets_file or _default_secrets_file()
