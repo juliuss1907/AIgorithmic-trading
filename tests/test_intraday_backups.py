@@ -17,6 +17,10 @@ def _source_database(path: Path) -> sqlite3.Connection:
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("CREATE TABLE journal (id INTEGER PRIMARY KEY, payload TEXT)")
     connection.execute("INSERT INTO journal (payload) VALUES ('before-backup')")
+    connection.execute(
+        "CREATE TRIGGER journal_append_only BEFORE UPDATE ON journal "
+        "BEGIN SELECT RAISE(ABORT, 'append-only'); END"
+    )
     connection.commit()
     return connection
 
@@ -53,6 +57,9 @@ def test_create_backup_copies_live_wal_database_and_writes_private_manifest(tmp_
         assert copied.execute("SELECT payload FROM journal").fetchall() == [
             ("before-backup",)
         ]
+    with sqlite3.connect(backup) as copied:
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            copied.execute("UPDATE journal SET payload='changed'")
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert payload == {
         "artifact_version": 1,
@@ -85,6 +92,43 @@ def test_verify_backup_detects_tampering_without_modifying_artifact(tmp_path):
     backup.write_bytes(backup.read_bytes() + b"tampered")
     with pytest.raises(ValueError, match="backup size does not match manifest"):
         verify_backup(backup)
+
+
+def test_verify_backup_rejects_same_size_checksum_change_and_invalid_manifest(tmp_path):
+    source = tmp_path / "intraday.sqlite3"
+    _source_database(source).close()
+    created = create_backup(source, tmp_path / "backups", now=NOW)
+    backup = Path(created["backup"])
+    original = backup.read_bytes()
+    backup.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+
+    with pytest.raises(ValueError, match="checksum does not match manifest"):
+        verify_backup(backup)
+
+    backup.write_bytes(original)
+    Path(created["manifest"]).write_text("not-json", encoding="utf-8")
+    with pytest.raises(ValueError, match="backup manifest is invalid"):
+        verify_backup(backup)
+
+
+def test_create_backup_never_overwrites_and_cleans_temporary_files_on_error(tmp_path):
+    source = tmp_path / "intraday.sqlite3"
+    _source_database(source).close()
+    output_dir = tmp_path / "backups"
+    first = create_backup(source, output_dir, now=NOW)
+    original = Path(first["backup"]).read_bytes()
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        create_backup(source, output_dir, now=NOW)
+
+    assert Path(first["backup"]).read_bytes() == original
+    assert not list(output_dir.glob(".*.tmp"))
+
+    broken = tmp_path / "broken.sqlite3"
+    broken.write_bytes(b"not a sqlite database")
+    with pytest.raises(ValueError, match="database backup failed"):
+        create_backup(broken, output_dir, now=NOW.replace(microsecond=1))
+    assert not list(output_dir.glob(".*.tmp"))
 
 
 def test_backup_refuses_symlink_source_and_verify_refuses_symlink_artifact(tmp_path):
