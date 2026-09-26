@@ -81,6 +81,19 @@ aigt journal export
 thành hai mẫu riêng vì state chứa `decision_scope`; export v1 không tự deduplicate.
 Thư mục `training_data/` là derived artifact và không được commit.
 
+Tạo một SQLite backup nhất quán mà không dừng worker, rồi verify artifact cùng manifest:
+
+```bash
+aigt backup create
+aigt backup verify ~/.local/state/aigorithmic-trading/backups/intraday-TIMESTAMP.sqlite3
+```
+
+Mặc định backup nằm ngoài Docker volume tại
+`${XDG_STATE_HOME:-~/.local/state}/aigorithmic-trading/backups`, có quyền private và manifest
+SHA-256 đi kèm. Hãy copy cả file `.sqlite3` và `.manifest.json` sang máy/storage khác;
+MVP này chưa tự lên lịch, retention hoặc restore. Dùng `--output-dir` để chọn nơi lưu khác,
+hoặc `--database` khi backup một database native ngoài deployment Docker đã đăng ký.
+
 Mở `http://127.0.0.1:8081/` để xem trạng thái worker, tiến độ soak 72 giờ,
 heartbeat Spot/Perp, model calls và các Jev signal gần nhất. Trang
 `http://127.0.0.1:8081/portfolio` giữ phần chi tiết portfolio/rule/evaluation;

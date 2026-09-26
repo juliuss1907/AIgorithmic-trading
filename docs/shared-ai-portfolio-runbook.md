@@ -170,7 +170,30 @@ thresholds is skipped. Values are percentage points, not decimal return ratios. 
 evaluations from one market tick remain separate examples because their serialized state
 contains a different `decision_scope`.
 
-## 7. Ubuntu VPS with Docker Compose
+## 7. Back up and verify SQLite state
+
+Create a consistent online SQLite copy without stopping or restarting the worker:
+
+```bash
+aigt backup create
+```
+
+The global command uses a one-off `admin --no-deps` container, reads the live named volume with
+SQLite's online backup API, and writes the artifact outside that volume under
+`${XDG_STATE_HOME:-~/.local/state}/aigorithmic-trading/backups`. It publishes a mode-0600
+`.sqlite3` file only after `PRAGMA integrity_check` succeeds, plus a mode-0600 JSON manifest with
+the byte count and SHA-256 checksum. Verify the exact path returned by `create`:
+
+```bash
+aigt backup verify /absolute/path/to/intraday-TIMESTAMP.sqlite3
+```
+
+Copy both the database and its sibling `.manifest.json` to separate storage. This MVP does not
+schedule backups, prune old artifacts, restore state, encrypt files, or upload off-host. Provider
+secrets are deliberately excluded. Use `--output-dir` for another host directory and
+`--database` only for a native database that is not inside the registered Docker deployment.
+
+## 8. Ubuntu VPS with Docker Compose
 
 Install the global CLI from the clone, then let it register and manage the Docker deployment:
 
@@ -195,10 +218,10 @@ docker compose --env-file .env.intraday -f deploy/intraday/compose.yaml \
   up -d --no-deps --force-recreate worker
 ```
 
-Back up the named volume before upgrades. The build contains no live-order adapter and accepts
-no Binance trading credentials.
+Run and verify `aigt backup create` before upgrades. The build contains no live-order adapter and
+accepts no Binance trading credentials.
 
-## 8. Evidence windows are operational work, not build completion
+## 9. Evidence windows are operational work, not build completion
 
 Passing the automated tests proves contracts and deterministic behavior; it does not create a
 track record. Before considering any broader deployment, keep the worker and dashboard running,
