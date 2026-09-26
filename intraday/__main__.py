@@ -214,8 +214,12 @@ def _parser() -> argparse.ArgumentParser:
     soak_report = soak_commands.add_parser("report")
     soak_report.add_argument("--database", default=None)
     soak_report.add_argument("--output", default=None)
-    soak_report.add_argument("--owner-uid", type=int, default=None, help=argparse.SUPPRESS)
-    soak_report.add_argument("--owner-gid", type=int, default=None, help=argparse.SUPPRESS)
+    soak_report.add_argument(
+        "--owner-uid", type=int, default=None, help=argparse.SUPPRESS
+    )
+    soak_report.add_argument(
+        "--owner-gid", type=int, default=None, help=argparse.SUPPRESS
+    )
     soak_run = soak_commands.add_parser("run")
     soak_run.add_argument("--database", default=None)
     soak_run.add_argument("--secrets-file", default=None)
@@ -512,8 +516,15 @@ def _parent_portfolio_payload(state) -> dict:
 
 
 def _portfolio_cli(arguments) -> None:
-    store = IntradayStore(resolve_database_path(arguments.database))
     command = arguments.portfolio_command
+    database = resolve_database_path(arguments.database)
+    if (
+        command == "soak"
+        and arguments.soak_command == "report"
+        and not database.is_file()
+    ):
+        raise SystemExit(f"database does not exist: {database}")
+    store = IntradayStore(database)
     if command == "experiment":
         if arguments.experiment_command == "status":
             result = {}

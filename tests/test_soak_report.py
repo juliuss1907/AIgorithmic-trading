@@ -49,6 +49,7 @@ def snapshot(*, status="SOAK_ACTIVE", preview="deferred", persisted=None):
                 "latest_at": NOW.isoformat(),
                 "heartbeat_age_seconds": 0.0,
                 "healthy": True,
+                "private_scope": "must-not-leak",
             },
             "perp_intraday": {
                 "samples": 4000,
@@ -91,6 +92,7 @@ def database_metrics(*, integrity="ok"):
         "wal_size_bytes": 128,
         "disk_free_bytes": 1_000_000,
         "disk_total_bytes": 2_000_000,
+        "database_path": "must-not-leak",
     }
 
 

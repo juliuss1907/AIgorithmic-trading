@@ -171,6 +171,29 @@ def test_soak_report_cli_prints_and_optionally_writes_identical_read_only_json(
     assert store.latest_portfolio_soak_evaluation() is None
 
 
+def test_soak_report_refuses_missing_database_without_creating_it(
+    monkeypatch, tmp_path
+):
+    database = tmp_path / "missing.sqlite3"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "aigt",
+            "portfolio",
+            "soak",
+            "report",
+            "--database",
+            str(database),
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="database does not exist"):
+        main()
+
+    assert not database.exists()
+
+
 @pytest.mark.parametrize("with_output", [False, True])
 def test_global_soak_report_routes_to_isolated_admin_container(
     monkeypatch, tmp_path, with_output

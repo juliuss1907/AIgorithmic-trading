@@ -69,6 +69,23 @@ def _providers(payload: dict[str, Any]) -> dict[str, dict]:
     return projected
 
 
+def _scopes(payload: dict[str, Any]) -> dict[str, dict]:
+    return {
+        scope: _fields(
+            details,
+            (
+                "samples",
+                "availability",
+                "latest_status",
+                "latest_at",
+                "heartbeat_age_seconds",
+                "healthy",
+            ),
+        )
+        for scope, details in payload.items()
+    }
+
+
 def _recommended_action(snapshot: dict, database: dict) -> str:
     status = snapshot["status"]["code"]
     soak = snapshot["soak"]
@@ -123,7 +140,7 @@ def build_soak_readiness_report(snapshot: dict, database: dict) -> dict:
             "preview_evaluation": _evaluation(soak["preview"]),
             "persisted_evaluation": _evaluation(soak.get("persisted_evaluation")),
         },
-        "scopes": snapshot["scopes"],
+        "scopes": _scopes(snapshot["scopes"]),
         "providers": _providers(snapshot["providers"]),
         "scheduler": scheduler,
         "model_cost": {"daily_usd": snapshot["daily_model_cost_usd"]},
@@ -135,7 +152,16 @@ def build_soak_readiness_report(snapshot: dict, database: dict) -> dict:
             "fill_count": counts["fills"],
             "trade_count": counts["trades"],
         },
-        "database": dict(database),
+        "database": _fields(
+            database,
+            (
+                "integrity",
+                "size_bytes",
+                "wal_size_bytes",
+                "disk_free_bytes",
+                "disk_total_bytes",
+            ),
+        ),
         "recommended_action": _recommended_action(snapshot, database),
     }
 
