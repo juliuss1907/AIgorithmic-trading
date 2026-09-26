@@ -14,6 +14,7 @@
 - [x] Phase 8: global `aigt` deployment registry, Docker routing và safe setup.
 - [x] Phase 9: unified dashboard đọc journal/soak hiện tại, API signal đã redact và legacy route.
 - [x] Phase 10: soak readiness report read-only, JSON artifact và global Docker routing.
+- [x] Phase 11: `aigt positions` cho open Spot/Perp paper positions và unrealized P&L.
 
 ## Sau khi build
 

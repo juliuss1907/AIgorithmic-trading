@@ -34,6 +34,8 @@ thay đổi hard-risk hoặc tự kích hoạt rule.
    và chuyển intraday legacy sang `/legacy-intraday`.
 10. Thêm soak readiness report read-only cho CLI native/global Docker, JSON stdout và optional
     private artifact; không persist evaluation hoặc tự thực thi recommended action.
+11. Thêm `aigt positions` read-only để xem toàn bộ Spot/Perp paper position đang mở bằng
+    latest scoped market marks, có global Docker routing nhưng không khởi động dependencies.
 
 ## Điều kiện hoàn thành
 

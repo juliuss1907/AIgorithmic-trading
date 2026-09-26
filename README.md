@@ -49,8 +49,14 @@ Kiểm tra cấu hình và trạng thái:
 ```bash
 aigt doctor
 aigt status
+aigt positions
 aigt cross-venue-status
 ```
+
+`aigt positions` đọc parent portfolio hiện tại và trả JSON chỉ gồm các Spot/Perp
+paper position đang mở, cùng entry price, latest mark, mark timestamp, notional và
+unrealized P&L. Lệnh tự route tới deployment Docker đã đăng ký, không tạo fill và
+không thay đổi portfolio state.
 
 Luồng cũ `aigt run` vẫn được giữ để replay intraday tương thích. Luồng portfolio mới bắt
 đầu bằng decision-only soak, chưa tạo fill:

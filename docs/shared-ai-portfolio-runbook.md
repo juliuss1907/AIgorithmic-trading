@@ -114,11 +114,17 @@ LLM/Jev response. The ledger refuses a same-tick perp flip.
 Operator controls:
 
 ```bash
+aigt positions
 aigt portfolio pause
 aigt portfolio resume
 aigt portfolio flatten
 aigt status
 ```
+
+`aigt positions` là read-only và chỉ liệt kê sleeve đang mở. `quantity` dương là
+long, quantity âm là short; `mark_event_time` cho biết timestamp của market snapshot
+được dùng để tính `notional_usd` và `unrealized_pnl_usd`. Kết quả rỗng được biểu diễn
+bằng `count: 0` và `positions: []`.
 
 ## 5. Review learning evidence and rule candidates
 
