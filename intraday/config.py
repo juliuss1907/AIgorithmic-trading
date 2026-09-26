@@ -16,6 +16,12 @@ def default_database_path() -> Path:
     return state_home / APP_DIRECTORY / "intraday.sqlite3"
 
 
+def default_backup_directory() -> Path:
+    root = os.getenv("XDG_STATE_HOME")
+    state_home = Path(root).expanduser() if root else Path.home() / ".local" / "state"
+    return state_home / APP_DIRECTORY / "backups"
+
+
 def default_provider_secrets_path() -> Path:
     root = os.getenv("XDG_CONFIG_HOME")
     config_home = Path(root).expanduser() if root else Path.home() / ".config"

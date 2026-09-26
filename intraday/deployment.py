@@ -139,6 +139,41 @@ def admin_command(deployment: Deployment, arguments: list[str]) -> list[str]:
     )
 
 
+def backup_command(
+    deployment: Deployment,
+    output_dir: Path,
+    *,
+    owner_uid: int,
+    owner_gid: int,
+) -> list[str]:
+    output = Path(output_dir).expanduser()
+    if not output.is_absolute():
+        raise ValueError("backup output directory must be absolute")
+    if ":" in str(output):
+        raise ValueError("backup output directory must not contain ':'")
+    return compose_command(
+        deployment,
+        "--profile",
+        "admin",
+        "run",
+        "--rm",
+        "--no-deps",
+        "--volume",
+        f"{output}:{output}",
+        "admin",
+        "backup",
+        "create",
+        "--database",
+        "/app/state/intraday/intraday.sqlite3",
+        "--output-dir",
+        str(output),
+        "--owner-uid",
+        str(owner_uid),
+        "--owner-gid",
+        str(owner_gid),
+    )
+
+
 def service_command(
     deployment: Deployment,
     action: str,

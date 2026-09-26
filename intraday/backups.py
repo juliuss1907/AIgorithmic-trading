@@ -30,11 +30,13 @@ def _require_regular_file(path: Path, *, label: str) -> None:
         raise PermissionError(f"{label} must be a regular file: {path}")
 
 
-def _prepare_output_directory(path: Path) -> None:
+def prepare_backup_directory(path: str | Path) -> Path:
+    path = _absolute(path)
     if path.exists() and (path.is_symlink() or not path.is_dir()):
         raise PermissionError(f"backup output must be a regular directory: {path}")
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.chmod(0o700)
+    return path
 
 
 def _integrity(connection: sqlite3.Connection) -> str:
@@ -81,13 +83,19 @@ def create_backup(
     output_dir: str | Path,
     *,
     now: datetime | None = None,
+    owner_uid: int | None = None,
+    owner_gid: int | None = None,
 ) -> dict[str, object]:
     """Create and verify a consistent online copy of a live SQLite database."""
 
+    if owner_uid is not None and owner_uid < 0:
+        raise ValueError("backup owner uid must not be negative")
+    if owner_gid is not None and owner_gid < 0:
+        raise ValueError("backup owner gid must not be negative")
     source_path = _absolute(source)
     output_path = _absolute(output_dir)
     _require_regular_file(source_path, label="source database")
-    _prepare_output_directory(output_path)
+    prepare_backup_directory(output_path)
     filename_time, created_at = _utc_timestamp(now or datetime.now(timezone.utc))
     backup_path = output_path / f"intraday-{filename_time}.sqlite3"
     manifest_path = backup_path.with_suffix(".manifest.json")
@@ -112,6 +120,12 @@ def create_backup(
             raise ValueError(f"backup integrity check failed: {integrity}")
 
         backup_temporary.chmod(0o600)
+        if owner_uid is not None or owner_gid is not None:
+            os.chown(
+                backup_temporary,
+                owner_uid if owner_uid is not None else -1,
+                owner_gid if owner_gid is not None else -1,
+            )
         _fsync(backup_temporary)
         size = backup_temporary.stat().st_size
         checksum = _sha256(backup_temporary)
@@ -133,6 +147,12 @@ def create_backup(
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
+        if owner_uid is not None or owner_gid is not None:
+            os.chown(
+                manifest_temporary,
+                owner_uid if owner_uid is not None else -1,
+                owner_gid if owner_gid is not None else -1,
+            )
 
         _publish_without_overwrite(backup_temporary, backup_path)
         backup_published = True

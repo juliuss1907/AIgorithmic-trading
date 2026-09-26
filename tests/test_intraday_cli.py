@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import stat
 import sys
@@ -59,6 +60,83 @@ def test_bare_aigt_prints_help_and_exits_successfully(monkeypatch, capsys):
     assert "restart" in output
     assert "logs" in output
     assert "setup" in output
+    assert "backup" in output
+
+
+def test_backup_create_and_verify_cli_with_explicit_database(
+    monkeypatch, capsys, tmp_path
+):
+    source = tmp_path / "intraday.sqlite3"
+    with sqlite3.connect(source) as connection:
+        connection.execute("CREATE TABLE marker (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO marker VALUES ('paper-state')")
+    output_dir = tmp_path / "backups"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "aigt",
+            "backup",
+            "create",
+            "--database",
+            str(source),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    main()
+
+    created = json.loads(capsys.readouterr().out)
+    monkeypatch.setattr(
+        sys, "argv", ["aigt", "backup", "verify", created["backup"]]
+    )
+    main()
+    verified = json.loads(capsys.readouterr().out)
+    assert created["status"] == "created"
+    assert verified == {**created, "status": "ok"}
+
+
+def test_global_backup_create_routes_only_to_admin_container(
+    monkeypatch, tmp_path
+):
+    from intraday import deployment as deployment_module
+
+    root = tmp_path / "checkout"
+    (root / "deploy" / "intraday").mkdir(parents=True)
+    (root / "deploy" / "intraday" / "compose.yaml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
+    (root / ".env.intraday").write_text("INTRADAY_MODE=paper\n", encoding="utf-8")
+    registered = deployment_module.Deployment.for_project(root)
+    output_dir = tmp_path / "host-backups"
+    calls = []
+    monkeypatch.setattr(deployment_module, "load_deployment", lambda: registered)
+    monkeypatch.setattr(
+        deployment_module,
+        "execute",
+        lambda command, *, cwd: calls.append((command, cwd)) or 0,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["aigt", "backup", "create", "--output-dir", str(output_dir)],
+    )
+
+    main()
+
+    assert stat.S_IMODE(output_dir.stat().st_mode) == 0o700
+    assert calls == [
+        (
+            deployment_module.backup_command(
+                registered,
+                output_dir,
+                owner_uid=os.getuid(),
+                owner_gid=os.getgid(),
+            ),
+            root,
+        )
+    ]
 
 
 def test_provider_setup_command_has_been_removed(monkeypatch, capsys):

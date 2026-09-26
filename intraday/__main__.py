@@ -17,8 +17,10 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from intraday.backups import create_backup, prepare_backup_directory, verify_backup
 from intraday.config import (
     IntradayConfig,
+    default_backup_directory,
     default_provider_secrets_path,
     resolve_database_path,
 )
@@ -138,6 +140,15 @@ def _parser() -> argparse.ArgumentParser:
     migrate_state = commands.add_parser("migrate-state")
     migrate_state.add_argument("--from", dest="source", required=True)
     migrate_state.add_argument("--database", default=None)
+    backup = commands.add_parser("backup")
+    backup_commands = backup.add_subparsers(dest="backup_command", required=True)
+    backup_create = backup_commands.add_parser("create")
+    backup_create.add_argument("--output-dir", default=None)
+    backup_create.add_argument("--database", default=None)
+    backup_create.add_argument("--owner-uid", type=int, default=None, help=argparse.SUPPRESS)
+    backup_create.add_argument("--owner-gid", type=int, default=None, help=argparse.SUPPRESS)
+    backup_verify = backup_commands.add_parser("verify")
+    backup_verify.add_argument("backup_path")
     provider = commands.add_parser("provider")
     provider_commands = provider.add_subparsers(dest="provider_command", required=True)
     for name in ("add", "list", "show", "remove", "test"):
@@ -1062,6 +1073,26 @@ def main() -> None:
         print(json.dumps(result, indent=2))
         return
     raw_arguments = sys.argv[1:]
+    if (
+        arguments.command == "backup"
+        and arguments.backup_command == "create"
+        and arguments.database is None
+    ):
+        deployment = deployment_cli.load_deployment()
+        if deployment is not None:
+            output_dir = prepare_backup_directory(
+                arguments.output_dir or default_backup_directory()
+            )
+            command = deployment_cli.backup_command(
+                deployment,
+                output_dir,
+                owner_uid=os.getuid(),
+                owner_gid=os.getgid(),
+            )
+            code = deployment_cli.execute(command, cwd=deployment.project_root)
+            if code:
+                raise SystemExit(code)
+            return
     if arguments.command in {"start", "stop", "restart", "logs"}:
         deployment = deployment_cli.load_deployment()
         if deployment is None:
@@ -1093,6 +1124,21 @@ def main() -> None:
             return
     if arguments.command == "migrate-state":
         print(json.dumps(_migrate_state(arguments.source, arguments.database), indent=2))
+        return
+    if arguments.command == "backup":
+        try:
+            if arguments.backup_command == "create":
+                result = create_backup(
+                    resolve_database_path(arguments.database),
+                    arguments.output_dir or default_backup_directory(),
+                    owner_uid=arguments.owner_uid,
+                    owner_gid=arguments.owner_gid,
+                )
+            else:
+                result = verify_backup(arguments.backup_path)
+        except (FileNotFoundError, FileExistsError, PermissionError, ValueError) as error:
+            raise SystemExit(str(error)) from error
+        print(json.dumps(result, indent=2))
         return
     if arguments.command == "provider":
         _provider_cli(arguments)

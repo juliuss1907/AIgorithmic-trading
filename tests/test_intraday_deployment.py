@@ -5,8 +5,9 @@ import pytest
 
 from intraday.deployment import (
     Deployment,
-    bootstrap,
     admin_command,
+    backup_command,
+    bootstrap,
     compose_command,
     load_deployment,
     save_deployment,
@@ -102,6 +103,35 @@ def test_admin_command_preserves_aigt_arguments(tmp_path):
         "admin",
         "provider",
         "setup",
+    ]
+
+
+def test_backup_command_mounts_host_output_without_starting_dependencies(tmp_path):
+    deployment = Deployment.for_project(project(tmp_path))
+    output_dir = tmp_path / "private-backups"
+
+    assert backup_command(
+        deployment, output_dir, owner_uid=1234, owner_gid=5678
+    ) == [
+        *compose_command(deployment),
+        "--profile",
+        "admin",
+        "run",
+        "--rm",
+        "--no-deps",
+        "--volume",
+        f"{output_dir}:{output_dir}",
+        "admin",
+        "backup",
+        "create",
+        "--database",
+        "/app/state/intraday/intraday.sqlite3",
+        "--output-dir",
+        str(output_dir),
+        "--owner-uid",
+        "1234",
+        "--owner-gid",
+        "5678",
     ]
 
 
