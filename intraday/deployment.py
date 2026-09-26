@@ -218,6 +218,21 @@ def soak_report_command(
     return compose_command(deployment, *arguments, *report_arguments)
 
 
+def positions_command(deployment: Deployment) -> list[str]:
+    return compose_command(
+        deployment,
+        "--profile",
+        "admin",
+        "run",
+        "--rm",
+        "--no-deps",
+        "admin",
+        "positions",
+        "--database",
+        "/app/state/intraday/intraday.sqlite3",
+    )
+
+
 def service_command(
     deployment: Deployment,
     action: str,

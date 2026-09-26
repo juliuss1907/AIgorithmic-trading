@@ -61,6 +61,7 @@ def test_bare_aigt_prints_help_and_exits_successfully(monkeypatch, capsys):
     assert "logs" in output
     assert "setup" in output
     assert "backup" in output
+    assert "positions" in output
 
 
 def test_backup_create_and_verify_cli_with_explicit_database(
@@ -192,6 +193,63 @@ def test_soak_report_refuses_missing_database_without_creating_it(
         main()
 
     assert not database.exists()
+
+
+def test_positions_cli_returns_empty_list_from_explicit_database(
+    monkeypatch, capsys, tmp_path
+):
+    database = tmp_path / "intraday.sqlite3"
+    IntradayStore(database)
+    monkeypatch.setattr(
+        sys, "argv", ["aigt", "positions", "--database", str(database)]
+    )
+
+    main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["portfolio_initialized"] is False
+    assert payload["count"] == 0
+    assert payload["positions"] == []
+
+
+def test_positions_cli_refuses_missing_database_without_creating_it(
+    monkeypatch, tmp_path
+):
+    database = tmp_path / "missing.sqlite3"
+    monkeypatch.setattr(
+        sys, "argv", ["aigt", "positions", "--database", str(database)]
+    )
+
+    with pytest.raises(SystemExit, match="database does not exist"):
+        main()
+
+    assert not database.exists()
+
+
+def test_global_positions_routes_to_isolated_admin_container(monkeypatch, tmp_path):
+    from intraday import deployment as deployment_module
+
+    root = tmp_path / "checkout"
+    (root / "deploy" / "intraday").mkdir(parents=True)
+    (root / "deploy" / "intraday" / "compose.yaml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
+    (root / ".env.intraday").write_text(
+        "INTRADAY_MODE=paper\n", encoding="utf-8"
+    )
+    registered = deployment_module.Deployment.for_project(root)
+    calls = []
+    monkeypatch.setattr(deployment_module, "load_deployment", lambda: registered)
+    monkeypatch.setattr(
+        deployment_module,
+        "execute",
+        lambda command, *, cwd: calls.append((command, cwd)) or 0,
+    )
+    monkeypatch.setattr(sys, "argv", ["aigt", "positions"])
+
+    main()
+
+    assert calls == [(deployment_module.positions_command(registered), root)]
 
 
 @pytest.mark.parametrize("with_output", [False, True])

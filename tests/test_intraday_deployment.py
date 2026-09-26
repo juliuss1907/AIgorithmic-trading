@@ -10,6 +10,7 @@ from intraday.deployment import (
     bootstrap,
     compose_command,
     load_deployment,
+    positions_command,
     save_deployment,
     service_command,
     soak_report_command,
@@ -150,6 +151,23 @@ def test_soak_report_command_runs_isolated_admin_without_output_mount(tmp_path):
         "portfolio",
         "soak",
         "report",
+        "--database",
+        "/app/state/intraday/intraday.sqlite3",
+    ]
+
+
+def test_positions_command_runs_isolated_read_only_admin(tmp_path):
+    deployment = Deployment.for_project(project(tmp_path))
+
+    assert positions_command(deployment) == [
+        *compose_command(deployment),
+        "--profile",
+        "admin",
+        "run",
+        "--rm",
+        "--no-deps",
+        "admin",
+        "positions",
         "--database",
         "/app/state/intraday/intraday.sqlite3",
     ]

@@ -68,6 +68,7 @@ from intraday.portfolio_coordinator import (
     apply_operator_command,
 )
 from intraday.portfolio_view import latest_parent_market_view
+from intraday.positions import build_positions_snapshot
 from intraday.portfolio_soak import (
     CURRENT_SOAK_EVIDENCE_VERSION,
     evaluate_portfolio_soak,
@@ -137,6 +138,8 @@ def _parser() -> argparse.ArgumentParser:
     commands.choices["cross-venue-evaluate"].add_argument("--evidence", required=True)
     serve = commands.add_parser("serve")
     serve.add_argument("--database", default=None)
+    positions = commands.add_parser("positions")
+    positions.add_argument("--database", default=None)
     setup = commands.add_parser("setup")
     setup.add_argument("--project-root", type=Path, default=Path.cwd())
     setup.add_argument("--with-hermes", action="store_true")
@@ -1168,6 +1171,16 @@ def main() -> None:
             if code:
                 raise SystemExit(code)
             return
+    if arguments.command == "positions" and arguments.database is None:
+        deployment = deployment_cli.load_deployment()
+        if deployment is not None:
+            code = deployment_cli.execute(
+                deployment_cli.positions_command(deployment),
+                cwd=deployment.project_root,
+            )
+            if code:
+                raise SystemExit(code)
+            return
     if arguments.command in {"start", "stop", "restart", "logs"}:
         deployment = deployment_cli.load_deployment()
         if deployment is None:
@@ -1214,6 +1227,18 @@ def main() -> None:
         except (FileNotFoundError, FileExistsError, PermissionError, ValueError) as error:
             raise SystemExit(str(error)) from error
         print(json.dumps(result, indent=2))
+        return
+    if arguments.command == "positions":
+        database = resolve_database_path(arguments.database)
+        if not database.is_file():
+            raise SystemExit(f"database does not exist: {database}")
+        store = IntradayStore(database)
+        print(
+            json.dumps(
+                build_positions_snapshot(store, now=datetime.now(timezone.utc)),
+                indent=2,
+            )
+        )
         return
     if arguments.command == "provider":
         _provider_cli(arguments)
