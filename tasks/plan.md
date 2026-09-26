@@ -32,6 +32,8 @@ thay đổi hard-risk hoặc tự kích hoạt rule.
    repo và Hermes đã được cài trên máy đích.
 9. Hợp nhất dashboard `/` với read-model của portfolio worker; giữ `/portfolio` cho chi tiết
    và chuyển intraday legacy sang `/legacy-intraday`.
+10. Thêm soak readiness report read-only cho CLI native/global Docker, JSON stdout và optional
+    private artifact; không persist evaluation hoặc tự thực thi recommended action.
 
 ## Điều kiện hoàn thành
 

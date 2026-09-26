@@ -57,8 +57,15 @@ Luồng cũ `aigt run` vẫn được giữ để replay intraday tương thích
 
 ```bash
 aigt portfolio soak run
+aigt portfolio soak report
 aigt portfolio soak evaluate
 ```
+
+`soak report` luôn in JSON operational readiness ra stdout và không lưu evaluation.
+Thêm `--output ./soak-readiness.json` để đồng thời tạo một file private, atomic;
+lệnh từ chối ghi đè file có sẵn. Trường `recommended_action` chỉ là hướng dẫn
+(`wait`, `investigate`, `run_evaluation`, `request_paper_activation` hoặc `none`),
+không tự chạy evaluation hay activation.
 
 Sau 72 giờ và evaluation pass, activation phải dùng đúng ID rồi mới chạy paper worker:
 

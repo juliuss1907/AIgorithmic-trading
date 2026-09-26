@@ -72,6 +72,20 @@ aigt serve
 # open http://127.0.0.1:8081/portfolio
 ```
 
+Có thể lấy một snapshot readiness read-only bất kỳ lúc nào mà không ghi evaluation:
+
+```bash
+aigt portfolio soak report
+aigt portfolio soak report --output ./soak-readiness.json
+```
+
+Report gồm tiến độ/thời điểm soak, sample và availability theo scope, heartbeat,
+hard-risk violations, provider/scheduler health, model cost, safety state, fill/trade
+counts, SQLite integrity/dung lượng và evaluation đã persist gần nhất. File output có
+quyền `0600`, được publish atomic và không ghi đè. `recommended_action` chỉ mô tả bước
+tiếp theo; lệnh này không thực thi action và trả exit code 0 cho report `deferred`,
+`reject` hoặc degraded nếu việc tạo report vẫn thành công.
+
 After at least 72 hours:
 
 ```bash
@@ -80,7 +94,7 @@ aigt portfolio soak evaluate
 
 The result passes only with recent evidence from both scopes, at least 100 perp samples,
 at least three spot samples, at least 95% availability per scope, and zero recorded hard-risk
-violations. A pass still does not activate fills.
+violations. Chỉ `soak evaluate` mới persist evaluation; một pass vẫn không activate fills.
 
 ## 4. Manually activate paper fills
 
