@@ -103,6 +103,7 @@ from intraday.scoped_rule_lifecycle import (
 from intraday.soak_report import (
     build_soak_readiness_report,
     collect_database_metrics,
+    prepare_report_output,
     serialize_report,
     write_report,
 )
@@ -1126,6 +1127,32 @@ def main() -> None:
                 owner_uid=os.getuid(),
                 owner_gid=os.getgid(),
             )
+            code = deployment_cli.execute(command, cwd=deployment.project_root)
+            if code:
+                raise SystemExit(code)
+            return
+    if (
+        arguments.command == "portfolio"
+        and arguments.portfolio_command == "soak"
+        and arguments.soak_command == "report"
+        and arguments.database is None
+    ):
+        deployment = deployment_cli.load_deployment()
+        if deployment is not None:
+            try:
+                output = (
+                    prepare_report_output(arguments.output)
+                    if arguments.output is not None
+                    else None
+                )
+                command = deployment_cli.soak_report_command(
+                    deployment,
+                    output=output,
+                    owner_uid=os.getuid() if output is not None else None,
+                    owner_gid=os.getgid() if output is not None else None,
+                )
+            except (FileExistsError, PermissionError, ValueError) as error:
+                raise SystemExit(str(error)) from error
             code = deployment_cli.execute(command, cwd=deployment.project_root)
             if code:
                 raise SystemExit(code)

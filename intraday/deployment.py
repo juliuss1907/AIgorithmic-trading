@@ -174,6 +174,50 @@ def backup_command(
     )
 
 
+def soak_report_command(
+    deployment: Deployment,
+    *,
+    output: Path | None = None,
+    owner_uid: int | None = None,
+    owner_gid: int | None = None,
+) -> list[str]:
+    arguments = [
+        "--profile",
+        "admin",
+        "run",
+        "--rm",
+        "--no-deps",
+    ]
+    report_arguments = [
+        "admin",
+        "portfolio",
+        "soak",
+        "report",
+        "--database",
+        "/app/state/intraday/intraday.sqlite3",
+    ]
+    if output is not None:
+        destination = Path(output).expanduser()
+        if not destination.is_absolute():
+            raise ValueError("soak report output must be absolute")
+        if ":" in str(destination):
+            raise ValueError("soak report output must not contain ':'")
+        if owner_uid is None or owner_gid is None:
+            raise ValueError("soak report output owner is required")
+        arguments.extend(("--volume", f"{destination.parent}:{destination.parent}"))
+        report_arguments.extend(
+            (
+                "--output",
+                str(destination),
+                "--owner-uid",
+                str(owner_uid),
+                "--owner-gid",
+                str(owner_gid),
+            )
+        )
+    return compose_command(deployment, *arguments, *report_arguments)
+
+
 def service_command(
     deployment: Deployment,
     action: str,

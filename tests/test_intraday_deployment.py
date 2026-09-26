@@ -12,6 +12,7 @@ from intraday.deployment import (
     load_deployment,
     save_deployment,
     service_command,
+    soak_report_command,
 )
 
 
@@ -128,6 +129,55 @@ def test_backup_command_mounts_host_output_without_starting_dependencies(tmp_pat
         "/app/state/intraday/intraday.sqlite3",
         "--output-dir",
         str(output_dir),
+        "--owner-uid",
+        "1234",
+        "--owner-gid",
+        "5678",
+    ]
+
+
+def test_soak_report_command_runs_isolated_admin_without_output_mount(tmp_path):
+    deployment = Deployment.for_project(project(tmp_path))
+
+    assert soak_report_command(deployment) == [
+        *compose_command(deployment),
+        "--profile",
+        "admin",
+        "run",
+        "--rm",
+        "--no-deps",
+        "admin",
+        "portfolio",
+        "soak",
+        "report",
+        "--database",
+        "/app/state/intraday/intraday.sqlite3",
+    ]
+
+
+def test_soak_report_command_mounts_only_output_parent_and_restores_owner(tmp_path):
+    deployment = Deployment.for_project(project(tmp_path))
+    output = tmp_path / "reports" / "readiness.json"
+
+    assert soak_report_command(
+        deployment, output=output, owner_uid=1234, owner_gid=5678
+    ) == [
+        *compose_command(deployment),
+        "--profile",
+        "admin",
+        "run",
+        "--rm",
+        "--no-deps",
+        "--volume",
+        f"{output.parent}:{output.parent}",
+        "admin",
+        "portfolio",
+        "soak",
+        "report",
+        "--database",
+        "/app/state/intraday/intraday.sqlite3",
+        "--output",
+        str(output),
         "--owner-uid",
         "1234",
         "--owner-gid",

@@ -171,6 +171,51 @@ def test_soak_report_cli_prints_and_optionally_writes_identical_read_only_json(
     assert store.latest_portfolio_soak_evaluation() is None
 
 
+@pytest.mark.parametrize("with_output", [False, True])
+def test_global_soak_report_routes_to_isolated_admin_container(
+    monkeypatch, tmp_path, with_output
+):
+    from intraday import deployment as deployment_module
+
+    root = tmp_path / "checkout"
+    (root / "deploy" / "intraday").mkdir(parents=True)
+    (root / "deploy" / "intraday" / "compose.yaml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
+    (root / ".env.intraday").write_text(
+        "INTRADAY_MODE=paper\n", encoding="utf-8"
+    )
+    registered = deployment_module.Deployment.for_project(root)
+    output = tmp_path / "reports" / "readiness.json" if with_output else None
+    argv = ["aigt", "portfolio", "soak", "report"]
+    if output is not None:
+        argv.extend(("--output", str(output)))
+    calls = []
+    monkeypatch.setattr(deployment_module, "load_deployment", lambda: registered)
+    monkeypatch.setattr(
+        deployment_module,
+        "execute",
+        lambda command, *, cwd: calls.append((command, cwd)) or 0,
+    )
+    monkeypatch.setattr(sys, "argv", argv)
+
+    main()
+
+    assert calls == [
+        (
+            deployment_module.soak_report_command(
+                registered,
+                output=output,
+                owner_uid=os.getuid() if output is not None else None,
+                owner_gid=os.getgid() if output is not None else None,
+            ),
+            root,
+        )
+    ]
+    if output is not None:
+        assert output.parent.is_dir()
+
+
 def test_provider_setup_command_has_been_removed(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["aigt", "provider", "setup"])
 

@@ -166,6 +166,24 @@ def serialize_report(payload: dict) -> str:
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
+def prepare_report_output(destination: str | Path) -> Path:
+    """Validate a not-yet-created report path and prepare its parent."""
+
+    path = Path(destination).expanduser()
+    path = path if path.is_absolute() else Path.cwd() / path
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(f"report output already exists: {path}")
+    parent = path.parent
+    parent_was_missing = not parent.exists()
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    parent_details = parent.lstat()
+    if stat.S_ISLNK(parent_details.st_mode) or not stat.S_ISDIR(parent_details.st_mode):
+        raise PermissionError(f"report output parent must be a directory: {parent}")
+    if parent_was_missing:
+        parent.chmod(0o700)
+    return path
+
+
 def write_report(
     payload: dict,
     destination: str | Path,
@@ -175,15 +193,12 @@ def write_report(
 ) -> Path:
     """Atomically publish a private JSON report without replacing a file."""
 
-    path = Path(destination).expanduser()
-    path = (path if path.is_absolute() else Path.cwd() / path).resolve()
-    if path.exists() or path.is_symlink():
-        raise FileExistsError(f"report output already exists: {path}")
+    if owner_uid is not None and owner_uid < 0:
+        raise ValueError("report owner uid must not be negative")
+    if owner_gid is not None and owner_gid < 0:
+        raise ValueError("report owner gid must not be negative")
+    path = prepare_report_output(destination)
     parent = path.parent
-    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    parent_details = parent.lstat()
-    if stat.S_ISLNK(parent_details.st_mode) or not stat.S_ISDIR(parent_details.st_mode):
-        raise PermissionError(f"report output parent must be a directory: {parent}")
 
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=".soak-report.", suffix=".tmp", dir=parent
