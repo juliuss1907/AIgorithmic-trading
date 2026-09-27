@@ -13,6 +13,7 @@ from intraday.contracts import (
     AnalystReport,
     DecisionMode,
     DecisionScope,
+    ExternalObservation,
     FeatureSnapshot,
     GateDecision,
     JevDecision,
@@ -167,6 +168,17 @@ class IntradayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_venue_frames_time
                     ON venue_market_frames(venue, symbol, event_time);
+                CREATE TABLE IF NOT EXISTS external_observations (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    dataset TEXT NOT NULL,
+                    symbol TEXT,
+                    source_timestamp TEXT NOT NULL,
+                    received_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_external_observations_source_time
+                    ON external_observations(source, received_at DESC, id DESC);
                 CREATE TABLE IF NOT EXISTS cross_venue_evaluations (
                     id TEXT PRIMARY KEY,
                     status TEXT NOT NULL CHECK (status IN ('deferred', 'reject', 'promote')),
@@ -569,7 +581,7 @@ class IntradayStore:
                 "ON portfolio_soak_ticks(evidence_version, created_at, scope)"
             )
             connection.execute(
-                "UPDATE schema_meta SET value='18' WHERE key='schema_version'"
+                "UPDATE schema_meta SET value='19' WHERE key='schema_version'"
             )
 
     def load_scoped_rule(self, rule_id: str) -> ScopedRuleCandidate | None:
@@ -2728,6 +2740,64 @@ class IntradayStore:
                     _json(frame),
                 ),
             )
+
+    def record_external_observation(self, observation: ExternalObservation) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO external_observations VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    observation.observation_id,
+                    observation.source,
+                    observation.dataset,
+                    observation.symbol,
+                    observation.source_timestamp.isoformat(),
+                    observation.received_at.isoformat(),
+                    _json(observation),
+                ),
+            )
+
+    def list_external_observations(
+        self,
+        *,
+        source: str | None = None,
+        limit: int = 1000,
+    ) -> list[ExternalObservation]:
+        if not 1 <= limit <= 100_000:
+            raise ValueError("limit must be between 1 and 100000")
+        query = "SELECT payload_json FROM external_observations"
+        parameters: tuple = ()
+        if source is not None:
+            query += " WHERE source = ?"
+            parameters = (source,)
+        query += " ORDER BY received_at DESC, id DESC LIMIT ?"
+        parameters += (limit,)
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [
+            ExternalObservation.model_validate_json(row["payload_json"])
+            for row in reversed(rows)
+        ]
+
+    def external_source_health(
+        self, source: str, *, now: datetime | None = None
+    ) -> dict:
+        now = now or datetime.now(timezone.utc)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS total, MAX(received_at) AS last_received_at "
+                "FROM external_observations WHERE source = ?",
+                (source,),
+            ).fetchone()
+        last = row["last_received_at"]
+        return {
+            "source": source,
+            "total_observations": int(row["total"]),
+            "last_received_at": last,
+            "age_seconds": (
+                max(0.0, (now - datetime.fromisoformat(last)).total_seconds())
+                if last else None
+            ),
+        }
 
     def venue_frame_count(self, venue: str) -> int:
         with self._connect() as connection:

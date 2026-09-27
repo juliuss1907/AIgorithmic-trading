@@ -1,0 +1,277 @@
+"""Read-only collectors for slow context and shadow perp-DEX evidence."""
+
+from __future__ import annotations
+
+import json
+import threading
+from datetime import datetime, timezone
+from typing import Callable
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+from intraday.contracts import ExternalObservation
+
+
+USER_AGENT = "system-trading-lab/0.1 local-paper-research"
+CRYPTORANK_BASE_URL = "https://api.cryptorank.io/v2"
+ASTER_BASE_URL = "https://fapi.asterdex.com"
+VARIATIONAL_STATS_URL = (
+    "https://omni-client-api.prod.ap-northeast-1.variational.io/metadata/stats"
+)
+LIGHTER_WS_URL = "wss://mainnet.zklighter.elliot.ai/stream?readonly=true"
+ASTER_WS_URL = "wss://fstream.asterdex.com/ws/btcusdt@forceOrder"
+
+
+def _timestamp(value, fallback: datetime) -> datetime:
+    if value is None:
+        return fallback
+    if isinstance(value, (int, float)):
+        divisor = 1000 if value > 10_000_000_000 else 1
+        return datetime.fromtimestamp(value / divisor, tz=timezone.utc)
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+
+
+def _number(value, *, name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be numeric")
+    result = float(value)
+    if result != result or result in {float("inf"), float("-inf")}:
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def _payload_data(payload: dict) -> dict:
+    data = payload.get("data", payload)
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    if not isinstance(data, dict):
+        raise ValueError("API data must be an object")
+    return data
+
+
+def _first(data: dict, *names, default=None):
+    for name in names:
+        if name in data and data[name] is not None:
+            return data[name]
+    return default
+
+
+def parse_cryptorank_context(
+    *, fear_greed: dict, altcoin: dict, global_market: dict, received_at: datetime
+) -> ExternalObservation:
+    fear = _payload_data(fear_greed)
+    alt = _payload_data(altcoin)
+    market = _payload_data(global_market)
+    source_time = _timestamp(
+        _first(fear, "timestamp", "updatedAt", "updated_at"), received_at
+    )
+    return ExternalObservation.create(
+        source="cryptorank",
+        dataset="market_context",
+        symbol=None,
+        source_timestamp=source_time,
+        received_at=received_at,
+        metrics={
+            "fear_greed_value": _number(_first(fear, "value", "index"), name="fear_greed_value"),
+            "altcoin_index_value": _number(_first(alt, "value", "index"), name="altcoin_index_value"),
+            "total_market_cap": _number(_first(market, "marketCap", "market_cap"), name="total_market_cap"),
+            "total_volume_24h": _number(_first(market, "volume24h", "volume_24h"), name="total_volume_24h"),
+            "market_cap_change_24h": _number(_first(market, "marketCapChange24h", "market_cap_change_24h"), name="market_cap_change_24h"),
+        },
+        labels={
+            "fear_greed_classification": str(_first(fear, "classification", "name", default="unknown")),
+            "altcoin_index_classification": str(_first(alt, "classification", "name", default="unknown")),
+        },
+    )
+
+
+def _quote_spread_bps(quote: dict | None) -> float | None:
+    if not isinstance(quote, dict):
+        return None
+    bid = _number(quote.get("bid"), name="quote bid")
+    ask = _number(quote.get("ask"), name="quote ask")
+    if bid <= 0 or ask < bid:
+        raise ValueError("quote is crossed or non-positive")
+    return (ask - bid) / ((ask + bid) / 2) * 10_000
+
+
+def parse_variational_stats(payload: dict, *, received_at: datetime) -> ExternalObservation:
+    listings = payload.get("listings")
+    if not isinstance(listings, list):
+        raise ValueError("Variational listings are missing")
+    listing = next((item for item in listings if item.get("ticker") == "BTC"), None)
+    if not isinstance(listing, dict):
+        raise ValueError("Variational BTC listing is missing")
+    interest = listing.get("open_interest")
+    quotes = listing.get("quotes")
+    if not isinstance(interest, dict) or not isinstance(quotes, dict):
+        raise ValueError("Variational BTC OI or quotes are missing")
+    interval = _number(listing.get("funding_interval_s"), name="funding_interval_s")
+    funding = _number(listing.get("funding_rate"), name="funding_rate")
+    return ExternalObservation.create(
+        source="variational", dataset="perp_market", symbol="BTCUSDT",
+        source_timestamp=_timestamp(quotes.get("updated_at"), received_at), received_at=received_at,
+        metrics={
+            "mark_price": _number(listing.get("mark_price"), name="mark_price"),
+            "volume_24h_usd": _number(listing.get("volume_24h"), name="volume_24h"),
+            "long_open_interest_usd": _number(interest.get("long_open_interest"), name="long_open_interest"),
+            "short_open_interest_usd": _number(interest.get("short_open_interest"), name="short_open_interest"),
+            "funding_rate": funding,
+            "funding_bps_hour": funding * 10_000 * 3600 / interval,
+            "base_spread_bps": _number(listing.get("base_spread_bps"), name="base_spread_bps"),
+            "quote_spread_1k_bps": _quote_spread_bps(quotes.get("size_1k")),
+            "quote_spread_100k_bps": _quote_spread_bps(quotes.get("size_100k")),
+            "quote_spread_1m_bps": _quote_spread_bps(quotes.get("size_1m")),
+            "venue_tvl_usd": _number(payload.get("tvl"), name="tvl"),
+        }, labels={},
+    )
+
+
+def parse_aster_snapshot(
+    *, premium: dict, book: dict, liquidation: dict | None, received_at: datetime
+) -> ExternalObservation:
+    if premium.get("symbol", "BTCUSDT") != "BTCUSDT":
+        raise ValueError("Aster response is not BTCUSDT")
+    mark = _number(premium.get("markPrice"), name="markPrice")
+    index = _number(premium.get("indexPrice"), name="indexPrice")
+    bids, asks = book.get("bids"), book.get("asks")
+    if not bids or not asks:
+        raise ValueError("Aster book must contain both sides")
+    bid, ask = _number(bids[0][0], name="bid"), _number(asks[0][0], name="ask")
+    if bid > ask:
+        raise ValueError("Aster book is crossed")
+    metrics: dict[str, float | None] = {
+        "mark_price": mark, "index_price": index,
+        "basis_bps": (mark / index - 1) * 10_000,
+        "funding_rate": _number(premium.get("lastFundingRate"), name="lastFundingRate"),
+        "best_bid": bid, "best_ask": ask,
+        "spread_bps": (ask - bid) / ((ask + bid) / 2) * 10_000,
+        "bid_depth_usd": sum(_number(p, name="bid price") * _number(q, name="bid qty") for p, q, *_ in bids),
+        "ask_depth_usd": sum(_number(p, name="ask price") * _number(q, name="ask qty") for p, q, *_ in asks),
+        "liquidation_notional_usd": None,
+    }
+    labels = {}
+    source_time = _timestamp(_first(premium, "time", default=book.get("E")), received_at)
+    if liquidation is not None:
+        order = liquidation.get("o")
+        if isinstance(order, dict) and order.get("s") == "BTCUSDT":
+            price = _number(_first(order, "ap", "p"), name="liquidation price")
+            quantity = _number(_first(order, "z", "q"), name="liquidation quantity")
+            metrics["liquidation_notional_usd"] = price * quantity
+            labels["liquidation_side"] = str(order.get("S", "unknown"))
+            source_time = max(source_time, _timestamp(liquidation.get("E"), received_at))
+    return ExternalObservation.create(
+        source="aster", dataset="perp_market", symbol="BTCUSDT",
+        source_timestamp=source_time, received_at=received_at, metrics=metrics, labels=labels,
+    )
+
+
+def parse_lighter_market_stats(payload: dict, *, received_at: datetime) -> ExternalObservation:
+    stats = payload.get("market_stats")
+    if not isinstance(stats, dict) or stats.get("symbol") != "BTC":
+        raise ValueError("Lighter BTC market stats are missing")
+    bid = _number(stats.get("best_bid_price"), name="best_bid_price")
+    ask = _number(stats.get("best_ask_price"), name="best_ask_price")
+    if bid > ask:
+        raise ValueError("Lighter book is crossed")
+    return ExternalObservation.create(
+        source="lighter", dataset="perp_market", symbol="BTCUSDT",
+        source_timestamp=_timestamp(payload.get("timestamp"), received_at), received_at=received_at,
+        metrics={
+            "market_id": _number(stats.get("market_id"), name="market_id"),
+            "mark_price": _number(stats.get("mark_price"), name="mark_price"),
+            "index_price": _number(stats.get("index_price"), name="index_price"),
+            "open_interest_usd": _number(stats.get("open_interest"), name="open_interest"),
+            "estimated_funding_rate": _number(stats.get("current_funding_rate"), name="current_funding_rate"),
+            "last_funding_rate": _number(stats.get("funding_rate"), name="funding_rate"),
+            "spread_bps": (ask - bid) / ((ask + bid) / 2) * 10_000,
+            "volume_24h_usd": _number(stats.get("daily_quote_token_volume"), name="daily_quote_token_volume"),
+            "premium_pct": _number(stats.get("premium"), name="premium"),
+        }, labels={},
+    )
+
+
+def _get_json(url: str, *, headers: dict | None = None, timeout_seconds: float = 10):
+    request = Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
+    with urlopen(request, timeout=timeout_seconds) as response:
+        return json.load(response)
+
+
+class CryptoRankCollector:
+    def __init__(self, api_key: str, fetch_json=_get_json):
+        self.api_key, self.fetch_json = api_key, fetch_json
+
+    def __call__(self, now: datetime) -> ExternalObservation:
+        headers = {"X-Api-Key": self.api_key}
+        fetch = lambda path: self.fetch_json(f"{CRYPTORANK_BASE_URL}{path}", headers=headers)
+        return parse_cryptorank_context(
+            fear_greed=fetch("/analytics/fear-and-greed"),
+            altcoin=fetch("/analytics/altcoin-season"),
+            global_market=fetch("/global"), received_at=now,
+        )
+
+
+class VariationalCollector:
+    def __init__(self, fetch_json=_get_json):
+        self.fetch_json = fetch_json
+
+    def __call__(self, now: datetime) -> ExternalObservation:
+        return parse_variational_stats(self.fetch_json(VARIATIONAL_STATS_URL), received_at=now)
+
+
+class AsterLiquidationFeed:
+    def __init__(self):
+        self._lock, self._latest = threading.Lock(), None
+
+    def update(self, payload: dict) -> None:
+        if payload.get("e") == "forceOrder":
+            with self._lock:
+                self._latest = payload
+
+    def latest(self) -> dict | None:
+        with self._lock:
+            return self._latest
+
+
+class AsterCollector:
+    def __init__(self, feed: AsterLiquidationFeed | None = None, fetch_json=_get_json):
+        self.feed, self.fetch_json = feed, fetch_json
+
+    def __call__(self, now: datetime) -> ExternalObservation:
+        query = urlencode({"symbol": "BTCUSDT"})
+        premium = self.fetch_json(f"{ASTER_BASE_URL}/fapi/v3/premiumIndex?{query}")
+        book = self.fetch_json(f"{ASTER_BASE_URL}/fapi/v3/depth?{query}&limit=100")
+        return parse_aster_snapshot(
+            premium=premium, book=book,
+            liquidation=self.feed.latest() if self.feed else None, received_at=now,
+        )
+
+
+class LighterCollector:
+    def __call__(self, now: datetime) -> ExternalObservation:
+        from websockets.sync.client import connect
+
+        with connect(LIGHTER_WS_URL, open_timeout=10, close_timeout=2) as socket:
+            socket.send(json.dumps({"type": "subscribe", "channel": "market_stats/all"}))
+            for _ in range(20):
+                payload = json.loads(socket.recv(timeout=10))
+                stats = payload.get("market_stats")
+                if isinstance(stats, dict) and stats.get("symbol") == "BTC":
+                    return parse_lighter_market_stats(payload, received_at=now)
+        raise ValueError("Lighter BTC market stats were not received")
+
+
+def run_external_context_cycle(store, *, collectors: dict[str, Callable], now: datetime | None = None) -> dict:
+    now = now or datetime.now(timezone.utc)
+    recorded, failed = [], []
+    for source, collector in collectors.items():
+        try:
+            observation = collector(now)
+            if observation.source != source:
+                raise ValueError("collector returned the wrong source")
+            store.record_external_observation(observation)
+            recorded.append(source)
+        except Exception:
+            failed.append(source)
+    return {"recorded": recorded, "failed": failed}

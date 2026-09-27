@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import datetime
 from enum import Enum
 from typing import Annotated, Literal
@@ -470,6 +471,52 @@ class VenueMarketFrame(StrictContract):
         payload = {"schema_version": "1", **values}
         checksum = cls._checksum_for(payload)
         return cls(frame_id=checksum[:24], checksum=checksum, **values)
+
+
+class ExternalObservation(StrictContract):
+    """Content-addressed shadow evidence from a heterogeneous public source."""
+
+    observation_id: str = Field(min_length=16, max_length=64)
+    source: Literal["cryptorank", "aster", "variational", "lighter"]
+    dataset: Literal["market_context", "perp_market"]
+    symbol: Literal["BTCUSDT"] | None = None
+    source_timestamp: datetime
+    received_at: datetime
+    metrics: dict[str, float | None]
+    labels: dict[str, str]
+    checksum: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    _source_timestamp_is_aware = field_validator("source_timestamp")(_aware)
+    _observation_received_is_aware = field_validator("received_at")(_aware)
+
+    @model_validator(mode="after")
+    def valid_observation(self):
+        if not self.metrics:
+            raise ValueError("metrics cannot be empty")
+        for name, value in self.metrics.items():
+            if not name:
+                raise ValueError("metric names cannot be empty")
+            if value is not None and not math.isfinite(value):
+                raise ValueError("metrics must be finite")
+        expected = self._checksum_for(
+            self.model_dump(exclude={"observation_id", "checksum"})
+        )
+        if self.checksum != expected or self.observation_id != expected[:24]:
+            raise ValueError("observation checksum does not match its payload")
+        return self
+
+    @staticmethod
+    def _checksum_for(payload: dict) -> str:
+        encoded = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), default=str
+        ).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    @classmethod
+    def create(cls, **values) -> "ExternalObservation":
+        payload = {"schema_version": "1", **values}
+        checksum = cls._checksum_for(payload)
+        return cls(observation_id=checksum[:24], checksum=checksum, **values)
 
 
 class ProviderProfile(StrictContract):
