@@ -286,6 +286,7 @@ def test_bootstrap_creates_safe_files_starts_core_and_registers_globally(
     assert "INTRADAY_OPERATOR_ACTIONS_ENABLED=false" in env
     assert stat.S_IMODE((root / ".env.intraday").stat().st_mode) == 0o600
     assert stat.S_IMODE((root / "state" / "provider-secrets").stat().st_mode) == 0o700
+    assert stat.S_IMODE((root / "state" / "source-secrets").stat().st_mode) == 0o700
     secret_file = root / "state" / "provider-secrets" / "provider-secrets.toml"
     assert secret_file.read_text(encoding="utf-8") == ""
     assert stat.S_IMODE(secret_file.stat().st_mode) == 0o600

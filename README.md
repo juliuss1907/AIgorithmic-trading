@@ -121,6 +121,9 @@ aigt migrate-state --from state/intraday/intraday.sqlite3
 Migration từ chối ghi đè database đích đã tồn tại. Có thể chọn database khác bằng
 `--database`; mọi command dùng thứ tự ưu tiên `--database`, `INTRADAY_DATABASE`, rồi
 XDG state.
+Các nguồn shadow Hyperliquid, Aster, Variational, Lighter, CryptoRank và Leviathan,
+cùng cách cấp khóa CryptoRank worker-only, được mô tả tại
+[docs/external-data-runbook.md](docs/external-data-runbook.md).
 Runbook portfolio/VPS nằm tại
 [docs/shared-ai-portfolio-runbook.md](docs/shared-ai-portfolio-runbook.md). Thiết kế và
 các launch gate intraday cũ nằm ở

@@ -157,23 +157,27 @@ consistent SQLite snapshot to storage outside the container volume.
 
 Binance remains the reference and simulated execution venue. Hyperliquid is an optional
 evidence source: BTC L2 book arrives over WebSocket while funding, open interest, mark,
-and oracle context refresh over public REST every 30 seconds. The worker normalizes
-funding to basis points per hour, open interest to USD, and book depth/imbalance inside
-5/10/25 bps bands before binding the evidence into the immutable five-second snapshot.
+and oracle context refresh over public REST every 30 seconds. Aster, Variational, and
+Lighter add heterogeneous public perp evidence; CryptoRank supplies slower global-market
+context. The portfolio worker persists these observations with both source and receive
+timestamps, while the dashboard reports missing/stale sources independently.
 
-The overlay defaults to `shadow`. Confirming evidence may recommend `+0.5` entry quality;
+All new portfolio collectors default to `shadow` and do not modify the decision snapshot.
+The legacy intraday overlay can bind a complete Hyperliquid frame for controlled replay.
+There, confirming evidence may recommend `+0.5` entry quality;
 conflicting evidence recommends `-1.0` and a 0.5 notional multiplier; verified venue
 stress recommends no new exposure. It never changes direction, confidence, leverage,
 stop-loss, or any hard-risk limit. Missing Hyperliquid evidence is neutral and leaves
 Binance sizing unchanged. Activation requires a persisted 14-day promotion evaluation;
-changing configuration alone cannot bypass the gate. Lighter is deferred until the
-Hyperliquid pipeline completes its promotion evaluation and will reuse the same venue
-frame interface.
+changing configuration alone cannot bypass the gate. Partial venue observations remain
+in their own contract instead of pretending to be complete order-book frames.
 
 ### News-source policy
 
 The allowlist is verified independently of model prompts. V1 enables the public RSS
-feeds from the SEC, CFTC, Federal Reserve, CoinDesk, Decrypt, and Cointelegraph.
+feeds from the SEC, CFTC, Federal Reserve, CoinDesk, Decrypt, and Cointelegraph, plus
+approved, non-sponsored Leviathan articles. Leviathan keeps the original article URL
+and origin hostname so syndication cannot count as an independent confirmation.
 Binance announcements remain disabled until a separate signed, read-only announcement
 credential is approved. The Block is not sent to an LLM because its current terms
 prohibit automated AI/ML processing of its content. Wu Blockchain remains disabled

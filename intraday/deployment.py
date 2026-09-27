@@ -372,6 +372,14 @@ def _prepare_environment(
     else:
         descriptor = os.open(secret_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(descriptor)
+
+    source_secret_directory = project_root / "state" / "source-secrets"
+    if source_secret_directory.is_symlink() or (
+        source_secret_directory.exists() and not source_secret_directory.is_dir()
+    ):
+        raise PermissionError("source secret directory must be a real directory")
+    source_secret_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    source_secret_directory.chmod(0o700)
     return Deployment.for_project(project_root), read_token
 
 
