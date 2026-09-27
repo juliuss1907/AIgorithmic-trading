@@ -86,6 +86,11 @@ def _plain_text(value: str, limit: int) -> str:
     return " ".join("".join(parser.parts).split())[:limit]
 
 
+def _origin_id(url: str) -> str | None:
+    hostname = (urlsplit(url).hostname or "").lower()
+    return hostname.removeprefix("www.") or None
+
+
 def enabled_sources() -> tuple[NewsSource, ...]:
     return tuple(source for source in NEWS_SOURCES.values() if source.enabled)
 
@@ -157,7 +162,7 @@ def parse_feed(data: bytes, source: NewsSource, *, received_at: datetime) -> lis
             category=category,
             severity=severity,
             summary=summary or None,
-            origin_source_id=urlsplit(url).netloc.lower() or None,
+            origin_source_id=_origin_id(url),
         ))
     return events
 
@@ -170,11 +175,14 @@ def parse_leviathan_feed(payload: dict, *, received_at: datetime) -> list[NewsEv
     for item in results[:100]:
         if not isinstance(item, dict) or item.get("status") != "approved":
             continue
-        sponsored = item.get("sponsored")
+        sponsored = item.get("is_sponsored", item.get("sponsored"))
         if sponsored:
             continue
         title = _plain_text(str(item.get("headline") or ""), 500)
-        url = str(item.get("url") or "")[:2048]
+        structured = item.get("seo")
+        structured = structured.get("structured_data") if isinstance(structured, dict) else None
+        origin_url = structured.get("isBasedOn") if isinstance(structured, dict) else None
+        url = str(origin_url or item.get("url") or "")[:2048]
         if len(title) < 5 or not url.startswith(("https://", "http://")):
             continue
         try:
@@ -195,7 +203,7 @@ def parse_leviathan_feed(payload: dict, *, received_at: datetime) -> list[NewsEv
             event_id=hashlib.sha256(f"leviathan:{identity}".encode()).hexdigest()[:32],
             source_id="leviathan",
             source_tier=SourceTier.C,
-            origin_source_id=urlsplit(url).netloc.lower() or None,
+            origin_source_id=_origin_id(url),
             title=title,
             url=url,
             published_at=published.astimezone(timezone.utc),

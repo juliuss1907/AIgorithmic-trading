@@ -61,8 +61,15 @@ class NewsIntelligence:
     def _verified(events: list[NewsEvent]) -> bool:
         if any(event.source_tier == SourceTier.A for event in events):
             return True
+        legacy_origins = {
+            "coindesk": "coindesk.com",
+            "decrypt": "decrypt.co",
+            "cointelegraph": "cointelegraph.com",
+        }
         independent_sources = {
-            event.origin_source_id or event.source_id for event in events
+            event.origin_source_id
+            or legacy_origins.get(event.source_id, event.source_id)
+            for event in events
         }
         return (
             len(independent_sources) >= 2

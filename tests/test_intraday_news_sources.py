@@ -30,11 +30,12 @@ def test_leviathan_parser_accepts_only_unsponsored_approved_articles():
             {
                 "id": 24329,
                 "headline": "Bitcoin ETF flow accelerates after market open",
-                "url": "https://www.coindesk.com/markets/bitcoin-etf-flow",
+                "url": "https://leviathannews.xyz/redirect/24329",
                 "status": "approved",
                 "created_at": "2026-09-21T11:30:00Z",
                 "top_tldr": {"text": "Spot demand increased."},
-                "sponsored": None,
+                "is_sponsored": False,
+                "seo": {"structured_data": {"isBasedOn": "https://www.coindesk.com/markets/bitcoin-etf-flow"}},
             },
             {
                 "id": 24330,
@@ -42,7 +43,7 @@ def test_leviathan_parser_accepts_only_unsponsored_approved_articles():
                 "url": "https://example.com/ad",
                 "status": "approved",
                 "created_at": "2026-09-21T11:31:00Z",
-                "sponsored": {"is_paid": True},
+                "is_sponsored": True,
             },
         ]
     }
@@ -51,7 +52,8 @@ def test_leviathan_parser_accepts_only_unsponsored_approved_articles():
 
     assert len(events) == 1
     assert events[0].source_id == "leviathan"
-    assert events[0].origin_source_id == "www.coindesk.com"
+    assert events[0].origin_source_id == "coindesk.com"
+    assert events[0].url == "https://www.coindesk.com/markets/bitcoin-etf-flow"
     assert events[0].summary == "Spot demand increased."
 
 
@@ -59,9 +61,9 @@ def test_leviathan_origin_does_not_count_as_independent_confirmation(tmp_path):
     store = IntradayStore(tmp_path / "intraday.sqlite")
     title = "Major stablecoin loses its dollar peg after reserve incident"
     original = event("coindesk", "B", title, event_id="original")
-    original = original.model_copy(update={"origin_source_id": "www.coindesk.com"})
+    original = original.model_copy(update={"origin_source_id": "coindesk.com"})
     syndicated = event("leviathan", "C", title, event_id="syndicated").model_copy(
-        update={"origin_source_id": "www.coindesk.com"}
+        update={"origin_source_id": "coindesk.com"}
     )
 
     from intraday.news import NewsIntelligence
@@ -78,7 +80,7 @@ def test_rss_parser_records_origin_hostname_for_cross_feed_deduplication():
 
     event = parse_feed(xml, NEWS_SOURCES["coindesk"], received_at=NOW)[0]
 
-    assert event.origin_source_id == "www.coindesk.com"
+    assert event.origin_source_id == "coindesk.com"
 
 
 def test_rss_parser_normalizes_untrusted_content_and_classifies_risk():
