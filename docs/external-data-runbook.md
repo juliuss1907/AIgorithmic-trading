@@ -20,7 +20,8 @@ gates. A missing, stale, malformed, or rate-limited source degrades only that so
 
 The dashboard endpoint `/api/dashboard` exposes these under `external_sources`. Status is
 `missing`, `healthy`, or `stale`; source timestamps and local receive timestamps remain
-separate for replay and latency inspection.
+separate for replay and latency inspection. `aigt portfolio soak report` includes a
+bounded health projection without raw payloads. External observations retain 30 days.
 
 ## Configure CryptoRank
 

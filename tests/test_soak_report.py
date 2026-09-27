@@ -82,6 +82,13 @@ def snapshot(*, status="SOAK_ACTIVE", preview="deferred", persisted=None):
         "recent_model_calls": [{"request_hash": "must-not-leak"}],
         "thesis": {"prompt": "must-not-leak"},
         "markets": {"perp": {"reference_price": 100000}},
+        "external_sources": {
+            "aster": {
+                "source": "aster", "status": "healthy", "total_observations": 10,
+                "last_received_at": NOW.isoformat(), "age_seconds": 0,
+                "latest": {"metrics": {"secret_like_raw_payload": 1}},
+            }
+        },
     }
 
 
@@ -128,7 +135,7 @@ def test_report_recommends_one_non_mutating_next_action(
 def test_report_is_bounded_and_excludes_sensitive_dashboard_fields():
     report = build_soak_readiness_report(snapshot(), database_metrics())
 
-    assert report["report_schema_version"] == "1"
+    assert report["report_schema_version"] == "2"
     assert report["safety"] == {
         "paper_active": False,
         "entries_paused": True,
@@ -138,6 +145,13 @@ def test_report_is_bounded_and_excludes_sensitive_dashboard_fields():
         "trade_count": 1,
     }
     assert report["model_cost"] == {"daily_usd": 0.42}
+    assert report["external_sources"]["aster"] == {
+        "source": "aster",
+        "status": "healthy",
+        "total_observations": 10,
+        "last_received_at": NOW.isoformat(),
+        "age_seconds": 0,
+    }
     serialized = json.dumps(report)
     for secret in ("must-not-leak", "state_snapshot", "request_hash", "prompt"):
         assert secret not in serialized

@@ -1129,8 +1129,12 @@ def _external_context_loop(config: IntradayConfig) -> None:
         if key is not None:
             collectors["cryptorank"] = CryptoRankCollector(key)
             cadences["cryptorank"] = config.cryptorank_interval_seconds
+    last_retention_date = None
     while True:
         now = datetime.now(timezone.utc)
+        if last_retention_date != now.date():
+            store.prune_external_observations(before=now - timedelta(days=30))
+            last_retention_date = now.date()
         results = {}
         for source, collector in collectors.items():
             slot = claim_cadence(store, f"external_{source}", now, cadences[source])

@@ -2809,6 +2809,16 @@ class IntradayStore:
             "latest": latest.model_dump(mode="json") if latest else None,
         }
 
+    def prune_external_observations(self, *, before: datetime) -> int:
+        if before.tzinfo is None or before.utcoffset() is None:
+            raise ValueError("retention cutoff must be timezone-aware")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM external_observations WHERE received_at < ?",
+                (before.isoformat(),),
+            )
+        return cursor.rowcount
+
     def venue_frame_count(self, venue: str) -> int:
         with self._connect() as connection:
             return connection.execute(

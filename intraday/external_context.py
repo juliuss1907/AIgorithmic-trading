@@ -160,12 +160,19 @@ def parse_aster_snapshot(
     source_time = _timestamp(_first(premium, "time", default=book.get("E")), received_at)
     if liquidation is not None:
         order = liquidation.get("o")
-        if isinstance(order, dict) and order.get("s") == "BTCUSDT":
+        liquidation_time = _timestamp(liquidation.get("E"), received_at)
+        liquidation_age = (received_at - liquidation_time).total_seconds()
+        if (
+            isinstance(order, dict)
+            and order.get("s") == "BTCUSDT"
+            and -1 <= liquidation_age <= 300
+        ):
             price = _number(_first(order, "ap", "p"), name="liquidation price")
             quantity = _number(_first(order, "z", "q"), name="liquidation quantity")
             metrics["liquidation_notional_usd"] = price * quantity
+            metrics["liquidation_age_seconds"] = liquidation_age
             labels["liquidation_side"] = str(order.get("S", "unknown"))
-            source_time = max(source_time, _timestamp(liquidation.get("E"), received_at))
+            source_time = max(source_time, liquidation_time)
     return ExternalObservation.create(
         source="aster", dataset="perp_market", symbol="BTCUSDT",
         source_timestamp=source_time, received_at=received_at, metrics=metrics, labels=labels,
@@ -287,7 +294,7 @@ class LighterCollector:
                 "type": "subscribe",
                 "channel": f"market_stats/{LIGHTER_BTC_MARKET_ID}",
             }))
-            for _ in range(20):
+            for _ in range(3):
                 payload = json.loads(socket.recv(timeout=10))
                 stats = payload.get("market_stats")
                 if isinstance(stats, dict) and stats.get("symbol") == "BTC":

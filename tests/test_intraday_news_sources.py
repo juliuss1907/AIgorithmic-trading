@@ -59,8 +59,9 @@ def test_leviathan_origin_does_not_count_as_independent_confirmation(tmp_path):
     store = IntradayStore(tmp_path / "intraday.sqlite")
     title = "Major stablecoin loses its dollar peg after reserve incident"
     original = event("coindesk", "B", title, event_id="original")
+    original = original.model_copy(update={"origin_source_id": "www.coindesk.com"})
     syndicated = event("leviathan", "C", title, event_id="syndicated").model_copy(
-        update={"origin_source_id": "coindesk"}
+        update={"origin_source_id": "www.coindesk.com"}
     )
 
     from intraday.news import NewsIntelligence
@@ -68,6 +69,16 @@ def test_leviathan_origin_does_not_count_as_independent_confirmation(tmp_path):
     result = NewsIntelligence().ingest([original, syndicated], now=NOW)
 
     assert result.clusters[0].verified is False
+
+
+def test_rss_parser_records_origin_hostname_for_cross_feed_deduplication():
+    xml = b"""<rss><channel><item><title>Bitcoin market update from publisher</title>
+    <link>https://www.coindesk.com/markets/update</link><guid>origin-1</guid>
+    <pubDate>Mon, 21 Sep 2026 11:30:00 GMT</pubDate></item></channel></rss>"""
+
+    event = parse_feed(xml, NEWS_SOURCES["coindesk"], received_at=NOW)[0]
+
+    assert event.origin_source_id == "www.coindesk.com"
 
 
 def test_rss_parser_normalizes_untrusted_content_and_classifies_risk():

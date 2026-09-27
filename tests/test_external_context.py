@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -55,6 +55,25 @@ def test_store_round_trips_observations_idempotently(tmp_path):
     assert health["age_seconds"] == 0
 
 
+def test_external_observation_retention_removes_only_expired_rows(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    old = ExternalObservation.create(
+        source="aster", dataset="perp_market", symbol="BTCUSDT",
+        source_timestamp=NOW - timedelta(days=31), received_at=NOW - timedelta(days=31),
+        metrics={"mark_price": 90_000.0}, labels={},
+    )
+    current = ExternalObservation.create(
+        source="aster", dataset="perp_market", symbol="BTCUSDT",
+        source_timestamp=NOW, received_at=NOW,
+        metrics={"mark_price": 100_000.0}, labels={},
+    )
+    store.record_external_observation(old)
+    store.record_external_observation(current)
+
+    assert store.prune_external_observations(before=NOW - timedelta(days=30)) == 1
+    assert store.list_external_observations(source="aster") == [current]
+
+
 def test_cryptorank_parser_combines_slow_context():
     result = parse_cryptorank_context(
         fear_greed={"data": {"currentValue": 42, "classification": "Fear"}, "status": {"timestamp": 1790488500000}},
@@ -99,6 +118,18 @@ def test_aster_parser_normalizes_basis_funding_book_and_liquidation():
     assert result.metrics["funding_rate"] == pytest.approx(0.0008)
     assert result.metrics["liquidation_notional_usd"] == 50_000
     assert result.labels["liquidation_side"] == "SELL"
+
+
+def test_aster_parser_drops_stale_liquidation_from_current_snapshot():
+    result = parse_aster_snapshot(
+        premium={"markPrice": "100100", "indexPrice": "100000", "lastFundingRate": "0.0008", "time": int(NOW.timestamp() * 1000)},
+        book={"E": int(NOW.timestamp() * 1000), "bids": [["100090", "2"]], "asks": [["100110", "3"]]},
+        liquidation={"E": int((NOW - timedelta(minutes=10)).timestamp() * 1000), "o": {"s": "BTCUSDT", "S": "SELL", "q": "0.5", "ap": "100000"}},
+        received_at=NOW,
+    )
+
+    assert result.metrics["liquidation_notional_usd"] is None
+    assert "liquidation_side" not in result.labels
 
 
 def test_lighter_parser_normalizes_public_market_stats():

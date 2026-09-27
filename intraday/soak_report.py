@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 
-REPORT_SCHEMA_VERSION = "1"
+REPORT_SCHEMA_VERSION = "2"
 
 
 def _fields(payload: dict[str, Any] | None, names: tuple[str, ...]) -> dict | None:
@@ -86,6 +86,28 @@ def _scopes(payload: dict[str, Any]) -> dict[str, dict]:
     }
 
 
+def _external_sources(payload: dict[str, Any]) -> dict[str, dict]:
+    projected = {
+        source: _fields(
+            health,
+            (
+                "source",
+                "venue",
+                "status",
+                "total_observations",
+                "total_frames",
+                "last_received_at",
+                "age_seconds",
+            ),
+        )
+        for source, health in payload.items()
+    }
+    return {
+        source: {name: value for name, value in details.items() if value is not None}
+        for source, details in projected.items()
+    }
+
+
 def _recommended_action(snapshot: dict, database: dict) -> str:
     status = snapshot["status"]["code"]
     soak = snapshot["soak"]
@@ -143,6 +165,7 @@ def build_soak_readiness_report(snapshot: dict, database: dict) -> dict:
         "scopes": _scopes(snapshot["scopes"]),
         "providers": _providers(snapshot["providers"]),
         "scheduler": scheduler,
+        "external_sources": _external_sources(snapshot.get("external_sources", {})),
         "model_cost": {"daily_usd": snapshot["daily_model_cost_usd"]},
         "safety": {
             "paper_active": bool(parent.get("paper_active", False)),

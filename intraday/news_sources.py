@@ -157,6 +157,7 @@ def parse_feed(data: bytes, source: NewsSource, *, received_at: datetime) -> lis
             category=category,
             severity=severity,
             summary=summary or None,
+            origin_source_id=urlsplit(url).netloc.lower() or None,
         ))
     return events
 
