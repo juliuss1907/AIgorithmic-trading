@@ -61,7 +61,9 @@ class NewsIntelligence:
     def _verified(events: list[NewsEvent]) -> bool:
         if any(event.source_tier == SourceTier.A for event in events):
             return True
-        independent_sources = {event.source_id for event in events}
+        independent_sources = {
+            event.origin_source_id or event.source_id for event in events
+        }
         return (
             len(independent_sources) >= 2
             and any(event.source_tier == SourceTier.B for event in events)

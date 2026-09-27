@@ -8,11 +8,16 @@ services:
       - ${INTRADAY_ENV_FILE:-../../.env.intraday}
     environment:
       INTRADAY_PROVIDER_SECRETS_FILE: /run/provider-secrets/provider-secrets.toml
+      INTRADAY_CRYPTORANK_API_KEY_FILE: /run/source-secrets/cryptorank-api-key
     volumes:
       - intraday-state:/app/state/intraday
       - type: bind
         source: ${INTRADAY_PROVIDER_SECRETS_HOST_DIR:-../../state/provider-secrets}
         target: /run/provider-secrets
+        read_only: true
+      - type: bind
+        source: ${INTRADAY_SOURCE_SECRETS_HOST_DIR:-../../state/source-secrets}
+        target: /run/source-secrets
         read_only: true
     restart: unless-stopped
 

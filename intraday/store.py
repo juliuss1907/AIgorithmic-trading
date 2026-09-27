@@ -2788,7 +2788,16 @@ class IntradayStore:
                 "FROM external_observations WHERE source = ?",
                 (source,),
             ).fetchone()
+            latest_row = connection.execute(
+                "SELECT payload_json FROM external_observations WHERE source = ? "
+                "ORDER BY received_at DESC, id DESC LIMIT 1",
+                (source,),
+            ).fetchone()
         last = row["last_received_at"]
+        latest = (
+            ExternalObservation.model_validate_json(latest_row["payload_json"])
+            if latest_row else None
+        )
         return {
             "source": source,
             "total_observations": int(row["total"]),
@@ -2797,6 +2806,7 @@ class IntradayStore:
                 max(0.0, (now - datetime.fromisoformat(last)).total_seconds())
                 if last else None
             ),
+            "latest": latest.model_dump(mode="json") if latest else None,
         }
 
     def venue_frame_count(self, venue: str) -> int:

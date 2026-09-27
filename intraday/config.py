@@ -72,6 +72,13 @@ class IntradayConfig:
     cross_venue_mode: str = "shadow"
     hyperliquid_enabled: bool = True
     hyperliquid_metadata_interval_seconds: float = 30
+    external_context_enabled: bool = True
+    external_context_interval_seconds: float = 30
+    cryptorank_api_key_file: Path | None = None
+    cryptorank_interval_seconds: float = 3600
+    aster_interval_seconds: float = 60
+    variational_interval_seconds: float = 300
+    lighter_interval_seconds: float = 60
     telegram_enabled: bool = False
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
@@ -119,6 +126,15 @@ class IntradayConfig:
             raise ValueError("cross-venue mode must be off, shadow, or active")
         if self.hyperliquid_metadata_interval_seconds < 10:
             raise ValueError("Hyperliquid metadata interval must be at least ten seconds")
+        if self.external_context_interval_seconds < 10:
+            raise ValueError("external context loop interval must be at least ten seconds")
+        if min(
+            self.cryptorank_interval_seconds,
+            self.aster_interval_seconds,
+            self.variational_interval_seconds,
+            self.lighter_interval_seconds,
+        ) < 30:
+            raise ValueError("external source intervals must be at least thirty seconds")
         if self.telegram_enabled and not (self.telegram_bot_token and self.telegram_chat_id):
             raise ValueError("Telegram is enabled but credentials are incomplete")
 
@@ -170,6 +186,26 @@ class IntradayConfig:
             hyperliquid_enabled=_boolean("INTRADAY_HYPERLIQUID_ENABLED", True),
             hyperliquid_metadata_interval_seconds=float(
                 os.getenv("INTRADAY_HYPERLIQUID_METADATA_INTERVAL", "30")
+            ),
+            external_context_enabled=_boolean("INTRADAY_EXTERNAL_CONTEXT_ENABLED", True),
+            external_context_interval_seconds=float(
+                os.getenv("INTRADAY_EXTERNAL_CONTEXT_INTERVAL_SECONDS", "30")
+            ),
+            cryptorank_api_key_file=(
+                Path(os.environ["INTRADAY_CRYPTORANK_API_KEY_FILE"]).expanduser()
+                if os.getenv("INTRADAY_CRYPTORANK_API_KEY_FILE") else None
+            ),
+            cryptorank_interval_seconds=float(
+                os.getenv("INTRADAY_CRYPTORANK_INTERVAL_SECONDS", "3600")
+            ),
+            aster_interval_seconds=float(
+                os.getenv("INTRADAY_ASTER_INTERVAL_SECONDS", "60")
+            ),
+            variational_interval_seconds=float(
+                os.getenv("INTRADAY_VARIATIONAL_INTERVAL_SECONDS", "300")
+            ),
+            lighter_interval_seconds=float(
+                os.getenv("INTRADAY_LIGHTER_INTERVAL_SECONDS", "60")
             ),
             telegram_enabled=_boolean("TELEGRAM_ENABLED", False),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN") or None,

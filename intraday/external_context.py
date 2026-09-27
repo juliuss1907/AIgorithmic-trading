@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import threading
 from datetime import datetime, timezone
 from typing import Callable
@@ -13,12 +14,13 @@ from intraday.contracts import ExternalObservation
 
 
 USER_AGENT = "system-trading-lab/0.1 local-paper-research"
-CRYPTORANK_BASE_URL = "https://api.cryptorank.io/v2"
+CRYPTORANK_BASE_URL = "https://api.cryptorank.io/v3"
 ASTER_BASE_URL = "https://fapi.asterdex.com"
 VARIATIONAL_STATS_URL = (
     "https://omni-client-api.prod.ap-northeast-1.variational.io/metadata/stats"
 )
 LIGHTER_WS_URL = "wss://mainnet.zklighter.elliot.ai/stream?readonly=true"
+LIGHTER_BTC_MARKET_ID = 1
 ASTER_WS_URL = "wss://fstream.asterdex.com/ws/btcusdt@forceOrder"
 
 
@@ -63,8 +65,11 @@ def parse_cryptorank_context(
     fear = _payload_data(fear_greed)
     alt = _payload_data(altcoin)
     market = _payload_data(global_market)
+    status = fear_greed.get("status")
+    status = status if isinstance(status, dict) else {}
     source_time = _timestamp(
-        _first(fear, "timestamp", "updatedAt", "updated_at"), received_at
+        _first(status, "timestamp", default=_first(fear, "timestamp", "updatedAt", "updated_at")),
+        received_at,
     )
     return ExternalObservation.create(
         source="cryptorank",
@@ -73,11 +78,11 @@ def parse_cryptorank_context(
         source_timestamp=source_time,
         received_at=received_at,
         metrics={
-            "fear_greed_value": _number(_first(fear, "value", "index"), name="fear_greed_value"),
-            "altcoin_index_value": _number(_first(alt, "value", "index"), name="altcoin_index_value"),
-            "total_market_cap": _number(_first(market, "marketCap", "market_cap"), name="total_market_cap"),
-            "total_volume_24h": _number(_first(market, "volume24h", "volume_24h"), name="total_volume_24h"),
-            "market_cap_change_24h": _number(_first(market, "marketCapChange24h", "market_cap_change_24h"), name="market_cap_change_24h"),
+            "fear_greed_value": _number(_first(fear, "currentValue", "value", "index"), name="fear_greed_value"),
+            "altcoin_index_value": _number(_first(alt, "currentValue", "value", "index"), name="altcoin_index_value"),
+            "total_market_cap": _number(_first(market, "totalMarketCap", "marketCap", "market_cap"), name="total_market_cap"),
+            "total_volume_24h": _number(_first(market, "totalVolume24h", "volume24h", "volume_24h"), name="total_volume_24h"),
+            "market_cap_change_24h": _number(_first(market, "marketCapChangePercent24h", "marketCapChange24h", "market_cap_change_24h"), name="market_cap_change_24h"),
         },
         labels={
             "fear_greed_classification": str(_first(fear, "classification", "name", default="unknown")),
@@ -182,7 +187,9 @@ def parse_lighter_market_stats(payload: dict, *, received_at: datetime) -> Exter
             "market_id": _number(stats.get("market_id"), name="market_id"),
             "mark_price": _number(stats.get("mark_price"), name="mark_price"),
             "index_price": _number(stats.get("index_price"), name="index_price"),
-            "open_interest_usd": _number(stats.get("open_interest"), name="open_interest"),
+            "open_interest_base": _number(stats.get("open_interest"), name="open_interest"),
+            "open_interest_usd": _number(stats.get("open_interest"), name="open_interest")
+            * _number(stats.get("mark_price"), name="mark_price"),
             "estimated_funding_rate": _number(stats.get("current_funding_rate"), name="current_funding_rate"),
             "last_funding_rate": _number(stats.get("funding_rate"), name="funding_rate"),
             "spread_bps": (ask - bid) / ((ask + bid) / 2) * 10_000,
@@ -206,9 +213,9 @@ class CryptoRankCollector:
         headers = {"X-Api-Key": self.api_key}
         fetch = lambda path: self.fetch_json(f"{CRYPTORANK_BASE_URL}{path}", headers=headers)
         return parse_cryptorank_context(
-            fear_greed=fetch("/analytics/fear-and-greed"),
-            altcoin=fetch("/analytics/altcoin-season"),
-            global_market=fetch("/global"), received_at=now,
+            fear_greed=fetch("/global/fear-greed"),
+            altcoin=fetch("/global/altcoin-index"),
+            global_market=fetch("/global/market"), received_at=now,
         )
 
 
@@ -223,6 +230,7 @@ class VariationalCollector:
 class AsterLiquidationFeed:
     def __init__(self):
         self._lock, self._latest = threading.Lock(), None
+        self._stop = threading.Event()
 
     def update(self, payload: dict) -> None:
         if payload.get("e") == "forceOrder":
@@ -232,6 +240,28 @@ class AsterLiquidationFeed:
     def latest(self) -> dict | None:
         with self._lock:
             return self._latest
+
+    async def _run(self) -> None:
+        from websockets.asyncio.client import connect
+
+        backoff = 1.0
+        while not self._stop.is_set():
+            try:
+                async with connect(ASTER_WS_URL, open_timeout=10, ping_interval=20) as socket:
+                    backoff = 1.0
+                    async for raw in socket:
+                        self.update(json.loads(raw))
+                        if self._stop.is_set():
+                            break
+            except Exception:
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30)
+
+    def start(self) -> None:
+        threading.Thread(target=lambda: asyncio.run(self._run()), daemon=True).start()
+
+    def stop(self) -> None:
+        self._stop.set()
 
 
 class AsterCollector:
@@ -253,7 +283,10 @@ class LighterCollector:
         from websockets.sync.client import connect
 
         with connect(LIGHTER_WS_URL, open_timeout=10, close_timeout=2) as socket:
-            socket.send(json.dumps({"type": "subscribe", "channel": "market_stats/all"}))
+            socket.send(json.dumps({
+                "type": "subscribe",
+                "channel": f"market_stats/{LIGHTER_BTC_MARKET_ID}",
+            }))
             for _ in range(20):
                 payload = json.loads(socket.recv(timeout=10))
                 stats = payload.get("market_stats")

@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import sqlite3
+import stat
 import sys
 import threading
 import time
@@ -51,6 +52,14 @@ from intraday.decision_evaluation import (
 )
 from intraday import deployment as deployment_cli
 from intraday.hyperliquid import HyperliquidFeed
+from intraday.external_context import (
+    AsterCollector,
+    AsterLiquidationFeed,
+    CryptoRankCollector,
+    LighterCollector,
+    VariationalCollector,
+    run_external_context_cycle,
+)
 from intraday.journal import (
     count_training_candidates,
     export_training_data,
@@ -643,6 +652,9 @@ def _portfolio_cli(arguments) -> None:
             )
             interval = config.risk_interval_seconds
             background_started = False
+            hyperliquid = (
+                _start_portfolio_hyperliquid(config) if not arguments.once else None
+            )
             while True:
                 now = datetime.now(timezone.utc)
                 try:
@@ -654,6 +666,7 @@ def _portfolio_cli(arguments) -> None:
                         return
                     time.sleep(max(1, interval))
                     continue
+                _record_portfolio_hyperliquid(store, hyperliquid, now=now)
                 if store.load_parent_portfolio_state() is None:
                     initial = ParentPortfolioState(
                         mark_price=float(snapshot.features["mark_price"]),
@@ -757,6 +770,10 @@ def _portfolio_cli(arguments) -> None:
                     threading.Thread(
                         target=_analysis_loop, args=(config,), daemon=True
                     ).start()
+                    if config.external_context_enabled:
+                        threading.Thread(
+                            target=_external_context_loop, args=(config,), daemon=True
+                        ).start()
                     background_started = True
                 time.sleep(max(1, interval))
         evaluated_at = (
@@ -793,6 +810,9 @@ def _portfolio_cli(arguments) -> None:
             quote_interval_seconds=config.order_book_interval_seconds,
         )
         interval = config.risk_interval_seconds
+        hyperliquid = (
+            _start_portfolio_hyperliquid(config) if not arguments.once else None
+        )
         if not arguments.once:
             if config.news_enabled:
                 threading.Thread(
@@ -801,6 +821,10 @@ def _portfolio_cli(arguments) -> None:
             threading.Thread(
                 target=_analysis_loop, args=(config,), daemon=True
             ).start()
+            if config.external_context_enabled:
+                threading.Thread(
+                    target=_external_context_loop, args=(config,), daemon=True
+                ).start()
         cached_daily_close = None
         last_spot_check_day = None
         spot_observation = None
@@ -815,6 +839,7 @@ def _portfolio_cli(arguments) -> None:
                     return
                 time.sleep(max(1, interval))
                 continue
+            _record_portfolio_hyperliquid(store, hyperliquid, now=now)
             process_pending_commands(
                 store,
                 now=now,
@@ -1064,6 +1089,87 @@ def _news_loop(config: IntradayConfig) -> None:
         result = run_news_cycle(store)
         print(json.dumps({"news_cycle": result}), flush=True)
         time.sleep(config.news_interval_seconds)
+
+
+def _read_cryptorank_key(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    details = path.lstat()
+    if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
+        raise PermissionError("CryptoRank API key path must be a regular file")
+    if os.geteuid() != 0 and details.st_uid != os.getuid():
+        raise PermissionError("CryptoRank API key file must be owned by the current user")
+    if stat.S_IMODE(details.st_mode) != 0o600:
+        raise PermissionError("CryptoRank API key file permissions must be 0600")
+    value = path.read_text(encoding="utf-8").strip()
+    if not value or any(character in value for character in "\r\n\0"):
+        raise ValueError("CryptoRank API key file is invalid")
+    return value
+
+
+def _external_context_loop(config: IntradayConfig) -> None:
+    store = IntradayStore(config.database)
+    liquidation_feed = AsterLiquidationFeed()
+    liquidation_feed.start()
+    collectors = {
+        "aster": AsterCollector(liquidation_feed),
+        "variational": VariationalCollector(),
+        "lighter": LighterCollector(),
+    }
+    cadences = {
+        "aster": config.aster_interval_seconds,
+        "variational": config.variational_interval_seconds,
+        "lighter": config.lighter_interval_seconds,
+    }
+    try:
+        key = _read_cryptorank_key(config.cryptorank_api_key_file)
+    except (OSError, ValueError) as error:
+        print(json.dumps({"external_context": {"cryptorank": type(error).__name__}}), flush=True)
+    else:
+        if key is not None:
+            collectors["cryptorank"] = CryptoRankCollector(key)
+            cadences["cryptorank"] = config.cryptorank_interval_seconds
+    while True:
+        now = datetime.now(timezone.utc)
+        results = {}
+        for source, collector in collectors.items():
+            slot = claim_cadence(store, f"external_{source}", now, cadences[source])
+            if slot is None:
+                continue
+            result = run_external_context_cycle(
+                store, collectors={source: collector}, now=now
+            )
+            failed = bool(result["failed"])
+            store.finish_scheduler_run(
+                f"external_{source}", slot,
+                status="error" if failed else "success",
+                error_code="CollectorError" if failed else None,
+                finished_at=datetime.now(timezone.utc),
+            )
+            results[source] = "error" if failed else "recorded"
+        if results:
+            print(json.dumps({"external_context": results}), flush=True)
+        time.sleep(config.external_context_interval_seconds)
+
+
+def _start_portfolio_hyperliquid(config: IntradayConfig) -> HyperliquidFeed | None:
+    if not config.hyperliquid_enabled:
+        return None
+    feed = HyperliquidFeed(
+        metadata_interval_seconds=config.hyperliquid_metadata_interval_seconds
+    )
+    feed.start()
+    return feed
+
+
+def _record_portfolio_hyperliquid(
+    store: IntradayStore, feed: HyperliquidFeed | None, *, now: datetime
+) -> None:
+    if feed is None:
+        return
+    frame = feed.latest_frame(now=now)
+    if frame is not None:
+        store.record_venue_frame(frame)
 
 
 def _analysis_loop(config: IntradayConfig) -> None:

@@ -387,6 +387,7 @@ class NewsEvent(StrictContract):
     category: str = Field(min_length=1, max_length=100)
     severity: NewsSeverity
     summary: str | None = Field(default=None, max_length=2000)
+    origin_source_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     _published_at_is_aware = field_validator("published_at")(_aware)
     _received_at_is_aware = field_validator("received_at")(_aware)

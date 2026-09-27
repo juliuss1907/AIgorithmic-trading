@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 from xml.etree import ElementTree
 
 from intraday.contracts import NewsEvent, NewsSeverity, SourceTier
@@ -20,6 +22,7 @@ class NewsSource:
     url: str | None
     enabled: bool
     disabled_reason: str | None = None
+    format: str = "rss"
 
 
 NEWS_SOURCES = {
@@ -36,6 +39,13 @@ NEWS_SOURCES = {
     "decrypt": NewsSource("decrypt", SourceTier.B, "https://decrypt.co/feed", True),
     "cointelegraph": NewsSource(
         "cointelegraph", SourceTier.C, "https://cointelegraph.com/rss", True
+    ),
+    "leviathan": NewsSource(
+        "leviathan",
+        SourceTier.C,
+        "https://api.leviathannews.xyz/api/v1/news/?status=approved&sort_type=new&per_page=50",
+        True,
+        format="leviathan_json",
     ),
     "binance": NewsSource(
         "binance",
@@ -151,6 +161,51 @@ def parse_feed(data: bytes, source: NewsSource, *, received_at: datetime) -> lis
     return events
 
 
+def parse_leviathan_feed(payload: dict, *, received_at: datetime) -> list[NewsEvent]:
+    results = payload.get("results")
+    if not isinstance(results, list):
+        raise ValueError("Leviathan results are missing")
+    events = []
+    for item in results[:100]:
+        if not isinstance(item, dict) or item.get("status") != "approved":
+            continue
+        sponsored = item.get("sponsored")
+        if sponsored:
+            continue
+        title = _plain_text(str(item.get("headline") or ""), 500)
+        url = str(item.get("url") or "")[:2048]
+        if len(title) < 5 or not url.startswith(("https://", "http://")):
+            continue
+        try:
+            published = datetime.fromisoformat(
+                str(item.get("created_at") or item.get("date_posted")).replace("Z", "+00:00")
+            )
+        except ValueError:
+            published = received_at
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        top_tldr = item.get("top_tldr")
+        if isinstance(top_tldr, dict):
+            top_tldr = top_tldr.get("text") or top_tldr.get("tldr") or top_tldr.get("content")
+        summary = _plain_text(str(top_tldr or ""), 2000)
+        category, severity = _classification(title)
+        identity = item.get("id") or url
+        events.append(NewsEvent(
+            event_id=hashlib.sha256(f"leviathan:{identity}".encode()).hexdigest()[:32],
+            source_id="leviathan",
+            source_tier=SourceTier.C,
+            origin_source_id=urlsplit(url).netloc.lower() or None,
+            title=title,
+            url=url,
+            published_at=published.astimezone(timezone.utc),
+            received_at=received_at,
+            category=category,
+            severity=severity,
+            summary=summary or None,
+        ))
+    return events
+
+
 def fetch_source(source: NewsSource, *, received_at: datetime, timeout_seconds: float = 10):
     if not source.enabled or source.url is None:
         raise ValueError("source is not enabled")
@@ -160,4 +215,12 @@ def fetch_source(source: NewsSource, *, received_at: datetime, timeout_seconds: 
     )
     with urlopen(request, timeout=timeout_seconds) as response:
         data = response.read(2_000_001)
+    if source.format == "leviathan_json":
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError as error:
+            raise ValueError("invalid Leviathan JSON") from error
+        if not isinstance(payload, dict):
+            raise ValueError("invalid Leviathan response")
+        return parse_leviathan_feed(payload, received_at=received_at)
     return parse_feed(data, source, received_at=received_at)

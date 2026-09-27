@@ -12,6 +12,7 @@ from intraday.cross_venue import (
 )
 from intraday.market import build_feature_snapshot
 from intraday.store import IntradayStore
+from intraday.__main__ import _record_portfolio_hyperliquid
 
 
 NOW = datetime(2026, 9, 22, 12, 0, 5, tzinfo=timezone.utc)
@@ -155,6 +156,23 @@ def test_venue_frames_are_stored_idempotently_and_listed_chronologically(tmp_pat
 
     assert store.venue_frame_count("hyperliquid") == 1
     assert store.list_venue_frames("hyperliquid", limit=10) == [frame]
+
+
+def test_portfolio_shadow_capture_records_hyperliquid_without_mutating_snapshot(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    frame = build_hyperliquid_frame(
+        hyperliquid_book(), asset_context(), received_at=NOW
+    )
+
+    class Feed:
+        def latest_frame(self, *, now):
+            return frame
+
+    snapshot = binance_snapshot()
+    _record_portfolio_hyperliquid(store, Feed(), now=NOW)
+
+    assert store.list_venue_frames("hyperliquid") == [frame]
+    assert snapshot.features.get("hl_mark_price") is None
 
 
 def test_venue_frame_retention_removes_only_expired_rows(tmp_path):

@@ -1,7 +1,12 @@
 from datetime import datetime, timezone
 
 from intraday.contracts import NewsSeverity, SourceTier
-from intraday.news_sources import NEWS_SOURCES, enabled_sources, parse_feed
+from intraday.news_sources import (
+    NEWS_SOURCES,
+    enabled_sources,
+    parse_feed,
+    parse_leviathan_feed,
+)
 from intraday.runtime import run_news_cycle
 from intraday.store import IntradayStore
 from tests.test_intraday_news import event
@@ -17,6 +22,52 @@ def test_source_catalog_keeps_unlicensed_or_unstable_sources_disabled():
     assert NEWS_SOURCES["the_block"].enabled is False
     assert NEWS_SOURCES["wu_blockchain"].enabled is False
     assert NEWS_SOURCES["the_block"].disabled_reason
+
+
+def test_leviathan_parser_accepts_only_unsponsored_approved_articles():
+    payload = {
+        "results": [
+            {
+                "id": 24329,
+                "headline": "Bitcoin ETF flow accelerates after market open",
+                "url": "https://www.coindesk.com/markets/bitcoin-etf-flow",
+                "status": "approved",
+                "created_at": "2026-09-21T11:30:00Z",
+                "top_tldr": {"text": "Spot demand increased."},
+                "sponsored": None,
+            },
+            {
+                "id": 24330,
+                "headline": "Paid token promotion",
+                "url": "https://example.com/ad",
+                "status": "approved",
+                "created_at": "2026-09-21T11:31:00Z",
+                "sponsored": {"is_paid": True},
+            },
+        ]
+    }
+
+    events = parse_leviathan_feed(payload, received_at=NOW)
+
+    assert len(events) == 1
+    assert events[0].source_id == "leviathan"
+    assert events[0].origin_source_id == "www.coindesk.com"
+    assert events[0].summary == "Spot demand increased."
+
+
+def test_leviathan_origin_does_not_count_as_independent_confirmation(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    title = "Major stablecoin loses its dollar peg after reserve incident"
+    original = event("coindesk", "B", title, event_id="original")
+    syndicated = event("leviathan", "C", title, event_id="syndicated").model_copy(
+        update={"origin_source_id": "coindesk"}
+    )
+
+    from intraday.news import NewsIntelligence
+
+    result = NewsIntelligence().ingest([original, syndicated], now=NOW)
+
+    assert result.clusters[0].verified is False
 
 
 def test_rss_parser_normalizes_untrusted_content_and_classifies_risk():

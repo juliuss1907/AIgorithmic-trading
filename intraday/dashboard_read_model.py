@@ -19,6 +19,12 @@ HEARTBEAT_LIMITS = {
     DecisionScope.SPOT_DAILY.value: timedelta(hours=26),
     DecisionScope.PERP_INTRADAY.value: timedelta(hours=1),
 }
+EXTERNAL_SOURCE_TTLS = {
+    "cryptorank": timedelta(hours=2),
+    "aster": timedelta(minutes=3),
+    "variational": timedelta(minutes=10),
+    "lighter": timedelta(minutes=3),
+}
 
 
 def _choice(answers: dict[str, Any], name: str) -> str | None:
@@ -259,6 +265,21 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
     recent_signals = list_public_signals(store, limit=20, scope=None)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     persisted = store.latest_portfolio_soak_evaluation()
+    external_sources = {}
+    for source, ttl in EXTERNAL_SOURCE_TTLS.items():
+        health = store.external_source_health(source, now=now)
+        age = health["age_seconds"]
+        health["status"] = (
+            "missing" if age is None else "healthy" if age <= ttl.total_seconds() else "stale"
+        )
+        external_sources[source] = health
+    hyperliquid = store.venue_health("hyperliquid", now=now)
+    hyperliquid["status"] = (
+        "missing" if hyperliquid["age_seconds"] is None
+        else "healthy" if hyperliquid["age_seconds"] <= 60
+        else "stale"
+    )
+    external_sources["hyperliquid"] = hyperliquid
     return {
         "generated_at": now.isoformat(),
         "status": {
@@ -291,4 +312,5 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
         "portfolio": parent.model_dump(mode="json") if parent else None,
         "thesis": bundle.model_dump(mode="json") if bundle else None,
         "scheduler": store.latest_scheduler_runs(),
+        "external_sources": external_sources,
     }

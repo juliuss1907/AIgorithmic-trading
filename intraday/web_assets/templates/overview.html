@@ -141,6 +141,28 @@
         {% endif %}
       </section>
 
+      <section class="ledger" aria-labelledby="external-sources-heading">
+        <div class="section-head">
+          <div><p class="eyebrow">Read-only evidence</p><h2 id="external-sources-heading">Shadow data sources</h2></div>
+          <small>Không tác động hard gate</small>
+        </div>
+        <div class="table-wrap" tabindex="0" aria-label="Tình trạng nguồn dữ liệu shadow">
+          <table>
+            <thead><tr><th>Source</th><th>Status</th><th>Latest (VN)</th><th>Samples</th></tr></thead>
+            <tbody>
+              {% for source, health in dashboard.external_sources.items() %}
+              <tr>
+                <td>{{ source|capitalize }}</td>
+                <td><span class="outcome outcome-{{ health.status }}">{{ health.status }}</span></td>
+                <td>{{ health.last_received_at|vn_time }}</td>
+                <td>{{ health.total_observations if health.total_observations is defined else health.total_frames }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="operations-columns" aria-label="Phân tích và provider">
         <article class="operations-panel">
           <div class="section-head">

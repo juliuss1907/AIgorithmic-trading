@@ -57,9 +57,9 @@ def test_store_round_trips_observations_idempotently(tmp_path):
 
 def test_cryptorank_parser_combines_slow_context():
     result = parse_cryptorank_context(
-        fear_greed={"data": {"value": 42, "classification": "Fear", "timestamp": "2026-09-27T05:55:00Z"}},
-        altcoin={"data": {"value": 61, "classification": "Altcoin Season"}},
-        global_market={"data": {"marketCap": 2_400_000_000_000, "volume24h": 90_000_000_000, "marketCapChange24h": -1.2}},
+        fear_greed={"data": {"currentValue": 42, "classification": "Fear"}, "status": {"timestamp": 1790488500000}},
+        altcoin={"data": {"currentValue": 61, "classification": "Altcoin Season"}},
+        global_market={"data": {"totalMarketCap": "2400000000000", "totalVolume24h": "90000000000", "marketCapChangePercent24h": -1.2}},
         received_at=NOW,
     )
 
@@ -106,14 +106,15 @@ def test_lighter_parser_normalizes_public_market_stats():
         "market_stats": {
             "symbol": "BTC", "market_id": 1, "index_price": "100000",
             "mark_price": "100020", "best_bid_price": "100010", "best_ask_price": "100030",
-            "open_interest": "5000000", "current_funding_rate": "0.0003",
+            "open_interest": "50", "current_funding_rate": "0.0003",
             "funding_rate": "0.0002", "funding_timestamp": 1790485200000,
             "daily_quote_token_volume": 90000000, "premium": "0.02",
         },
         "timestamp": 1790488740000,
     }, received_at=NOW)
 
-    assert result.metrics["open_interest_usd"] == 5_000_000
+    assert result.metrics["open_interest_base"] == 50
+    assert result.metrics["open_interest_usd"] == 5_001_000
     assert result.metrics["estimated_funding_rate"] == pytest.approx(0.0003)
     assert result.metrics["spread_bps"] == pytest.approx(1.99960008)
 

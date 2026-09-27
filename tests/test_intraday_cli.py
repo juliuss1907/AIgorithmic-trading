@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from intraday.__main__ import main
+from intraday.__main__ import _read_cryptorank_key
 from intraday.config import IntradayConfig
 from intraday.contracts import Direction, FeatureSnapshot
 from intraday.runtime import run_once
@@ -528,11 +529,28 @@ def test_multi_cadence_defaults_are_safe_and_explicit():
     assert config.derivatives_interval_seconds == 60
     assert config.compact_shadow_interval_seconds == 900
     assert config.news_interval_seconds == 1800
+    assert config.external_context_enabled is True
+    assert config.cryptorank_interval_seconds == 3600
+    assert config.aster_interval_seconds == 60
+    assert config.variational_interval_seconds == 300
+    assert config.lighter_interval_seconds == 60
     assert config.llm_analysis_interval_seconds == 3600
     assert config.retrospective_hour_vietnam == 9
     assert config.operator_actions_enabled is False
     assert config.operator_read_token is None
     assert config.operator_action_token is None
+
+
+def test_cryptorank_key_file_requires_private_permissions(tmp_path):
+    key_file = tmp_path / "cryptorank-api-key"
+    key_file.write_text("sandbox-key\n", encoding="utf-8")
+    key_file.chmod(0o644)
+
+    with pytest.raises(PermissionError, match="0600"):
+        _read_cryptorank_key(key_file)
+
+    key_file.chmod(0o600)
+    assert _read_cryptorank_key(key_file) == "sandbox-key"
 
 
 def test_operator_credentials_are_separate_and_actions_require_both(monkeypatch):

@@ -11,6 +11,7 @@ from intraday.contracts import (
     ProviderProfile,
     ProviderRole,
     StateVariant,
+    ExternalObservation,
 )
 from intraday.store import IntradayStore
 from intraday.web import create_app
@@ -124,6 +125,28 @@ def test_dashboard_api_reports_waiting_when_no_model_backed_soak_exists(tmp_path
     assert payload["soak"]["started_at"] is None
     assert payload["soak"]["progress_pct"] == 0
     assert payload["signals"]["total"] == 0
+
+
+def test_dashboard_exposes_shadow_source_health_and_latest_metrics(tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime.now(timezone.utc)
+    store.record_external_observation(ExternalObservation.create(
+        source="aster", dataset="perp_market", symbol="BTCUSDT",
+        source_timestamp=now, received_at=now,
+        metrics={"basis_bps": 4.2, "funding_rate": 0.0001}, labels={},
+    ))
+
+    client = TestClient(create_app(database=database))
+    payload = client.get("/api/dashboard").json()
+
+    aster = payload["external_sources"]["aster"]
+    assert aster["status"] == "healthy"
+    assert aster["latest"]["metrics"]["basis_bps"] == 4.2
+    assert payload["external_sources"]["variational"]["status"] == "missing"
+    page = client.get("/")
+    assert "Shadow data sources" in page.text
+    assert "Aster" in page.text
 
 
 def test_dashboard_api_projects_live_soak_without_persisting_an_evaluation(tmp_path):
