@@ -1225,13 +1225,22 @@ def _external_context_loop(config: IntradayConfig) -> None:
                 store, collectors={source: collector}, now=now
             )
             failed = bool(result["failed"])
+            partial = bool(result.get("partial"))
             store.finish_scheduler_run(
                 f"external_{source}", slot,
-                status="error" if failed else "success",
-                error_code="CollectorError" if failed else None,
+                status="error" if failed or partial else "success",
+                error_code=(
+                    "CollectorError"
+                    if failed
+                    else "PartialCollectorError"
+                    if partial
+                    else None
+                ),
                 finished_at=datetime.now(timezone.utc),
             )
-            results[source] = "error" if failed else "recorded"
+            results[source] = (
+                "error" if failed else "partial" if partial else "recorded"
+            )
         if results:
             print(json.dumps({"external_context": results}), flush=True)
         time.sleep(config.external_context_interval_seconds)
