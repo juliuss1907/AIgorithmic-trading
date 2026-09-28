@@ -125,6 +125,12 @@ def test_dashboard_api_reports_waiting_when_no_model_backed_soak_exists(tmp_path
     assert payload["soak"]["started_at"] is None
     assert payload["soak"]["progress_pct"] == 0
     assert payload["signals"]["total"] == 0
+    assert [item["symbol"] for item in payload["assets"]] == [
+        "BTCUSDT", "ETHUSDT", "HYPEUSDT", "NEARUSDT", "ZECUSDT", "SOLUSDT"
+    ]
+    assert payload["assets"][1]["stages"] == {
+        "perp_intraday": "shadow", "spot_daily": "shadow"
+    }
 
 
 def test_dashboard_exposes_shadow_source_health_and_latest_metrics(tmp_path):
@@ -136,16 +142,26 @@ def test_dashboard_exposes_shadow_source_health_and_latest_metrics(tmp_path):
         source_timestamp=now, received_at=now,
         metrics={"basis_bps": 4.2, "funding_rate": 0.0001}, labels={},
     ))
+    store.record_external_observation(ExternalObservation.create(
+        source="aster", dataset="perp_market", symbol="ETHUSDT",
+        source_timestamp=now, received_at=now,
+        metrics={"basis_bps": 2.1, "funding_rate": 0.0002}, labels={},
+    ))
 
     client = TestClient(create_app(database=database))
     payload = client.get("/api/dashboard").json()
 
     aster = payload["external_sources"]["aster"]
     assert aster["status"] == "healthy"
-    assert aster["latest"]["metrics"]["basis_bps"] == 4.2
+    assert aster["total_observations"] == 2
     assert payload["external_sources"]["variational"]["status"] == "missing"
+    eth = next(item for item in payload["assets"] if item["symbol"] == "ETHUSDT")
+    assert eth["sources"]["aster"]["status"] == "healthy"
+    assert eth["sources"]["aster"]["latest"]["metrics"]["basis_bps"] == 2.1
     page = client.get("/")
     assert "Shadow data sources" in page.text
+    assert "Asset rollout" in page.text
+    assert "ETHUSDT" in page.text
     assert "Aster" in page.text
 
 

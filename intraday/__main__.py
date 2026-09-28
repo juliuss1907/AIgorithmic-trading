@@ -18,6 +18,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from intraday.assets import ASSET_REGISTRY, asset_spec
 from intraday.backups import create_backup, prepare_backup_directory, verify_backup
 from intraday.config import (
     IntradayConfig,
@@ -149,6 +150,19 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--database", default=None)
     positions = commands.add_parser("positions")
     positions.add_argument("--database", default=None)
+    assets = commands.add_parser("assets")
+    asset_commands = assets.add_subparsers(dest="assets_command", required=True)
+    assets_list = asset_commands.add_parser("list")
+    assets_list.add_argument("--database", default=None)
+    assets_status = asset_commands.add_parser("status")
+    assets_status.add_argument("symbol", nargs="?")
+    assets_status.add_argument("--database", default=None)
+    assets_start_soak = asset_commands.add_parser("start-soak")
+    assets_start_soak.add_argument("symbol")
+    assets_start_soak.add_argument(
+        "--scope", required=True, choices=[scope.value for scope in DecisionScope]
+    )
+    assets_start_soak.add_argument("--database", default=None)
     setup = commands.add_parser("setup")
     setup.add_argument("--project-root", type=Path, default=Path.cwd())
     setup.add_argument("--with-hermes", action="store_true")
@@ -290,6 +304,53 @@ def _parser() -> argparse.ArgumentParser:
 def _default_secrets_file() -> Path:
     configured = os.getenv("INTRADAY_PROVIDER_SECRETS_FILE")
     return Path(configured).expanduser() if configured else default_provider_secrets_path()
+
+
+def _asset_payload(store: IntradayStore, symbol: str) -> dict:
+    spec = asset_spec(symbol)
+    lifecycles = store.list_asset_lifecycles(spec.symbol)
+    return {
+        "symbol": spec.symbol,
+        "base_asset": spec.base_asset,
+        "quote_asset": spec.quote_asset,
+        "capability": spec.capability.value,
+        "stages": {item.scope.value: item.stage.value for item in lifecycles},
+        "venues": {
+            "binance_spot": spec.binance_spot_symbol,
+            "binance_perp": spec.binance_perp_symbol,
+            "hyperliquid": spec.hyperliquid_coin,
+            "aster": spec.aster_symbol,
+            "variational": spec.variational_ticker,
+            "lighter_market_id": spec.lighter_market_id,
+        },
+    }
+
+
+def _assets_cli(arguments) -> None:
+    store = IntradayStore(resolve_database_path(arguments.database))
+    if arguments.assets_command == "list":
+        result = [_asset_payload(store, symbol) for symbol in ASSET_REGISTRY]
+    elif arguments.assets_command == "status":
+        result = (
+            _asset_payload(store, arguments.symbol)
+            if arguments.symbol
+            else [_asset_payload(store, symbol) for symbol in ASSET_REGISTRY]
+        )
+    else:
+        scope = DecisionScope(arguments.scope)
+        try:
+            lifecycle = store.asset_lifecycle(arguments.symbol, scope).start_soak()
+            stored = store.save_asset_lifecycle(
+                lifecycle, updated_at=datetime.now(timezone.utc)
+            )
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
+        result = {
+            "symbol": stored.symbol,
+            "scope": stored.scope.value,
+            "stage": stored.stage.value,
+        }
+    print(json.dumps(result, indent=2))
 
 
 def _provider_cli(arguments) -> None:
@@ -1156,24 +1217,36 @@ def _external_context_loop(config: IntradayConfig) -> None:
         time.sleep(config.external_context_interval_seconds)
 
 
-def _start_portfolio_hyperliquid(config: IntradayConfig) -> HyperliquidFeed | None:
+def _start_portfolio_hyperliquid(
+    config: IntradayConfig,
+) -> dict[str, HyperliquidFeed] | None:
     if not config.hyperliquid_enabled:
         return None
-    feed = HyperliquidFeed(
-        metadata_interval_seconds=config.hyperliquid_metadata_interval_seconds
-    )
-    feed.start()
-    return feed
+    feeds = {
+        symbol: HyperliquidFeed(
+            symbol=symbol,
+            metadata_interval_seconds=config.hyperliquid_metadata_interval_seconds,
+        )
+        for symbol in ASSET_REGISTRY
+    }
+    for feed in feeds.values():
+        feed.start()
+    return feeds
 
 
 def _record_portfolio_hyperliquid(
-    store: IntradayStore, feed: HyperliquidFeed | None, *, now: datetime
+    store: IntradayStore,
+    feed: HyperliquidFeed | dict[str, HyperliquidFeed] | None,
+    *,
+    now: datetime,
 ) -> None:
     if feed is None:
         return
-    frame = feed.latest_frame(now=now)
-    if frame is not None:
-        store.record_venue_frame(frame)
+    feeds = feed.values() if isinstance(feed, dict) else (feed,)
+    for current in feeds:
+        frame = current.latest_frame(now=now)
+        if frame is not None:
+            store.record_venue_frame(frame)
 
 
 def _analysis_loop(config: IntradayConfig) -> None:
@@ -1291,6 +1364,16 @@ def main() -> None:
             if code:
                 raise SystemExit(code)
             return
+    if arguments.command == "assets" and arguments.database is None:
+        deployment = deployment_cli.load_deployment()
+        if deployment is not None:
+            code = deployment_cli.execute(
+                deployment_cli.admin_command(deployment, raw_arguments),
+                cwd=deployment.project_root,
+            )
+            if code:
+                raise SystemExit(code)
+            return
     if arguments.command in {"start", "stop", "restart", "logs"}:
         deployment = deployment_cli.load_deployment()
         if deployment is None:
@@ -1349,6 +1432,9 @@ def main() -> None:
                 indent=2,
             )
         )
+        return
+    if arguments.command == "assets":
+        _assets_cli(arguments)
         return
     if arguments.command == "provider":
         _provider_cli(arguments)

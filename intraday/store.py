@@ -1945,13 +1945,23 @@ class IntradayStore:
         ]
 
     def latest_snapshot(
-        self, *, market: str = "binance_usdm_perp"
+        self,
+        *,
+        market: str = "binance_usdm_perp",
+        symbol: str | None = None,
     ) -> FeatureSnapshot | None:
+        parameters: tuple = (market,)
+        symbol_filter = ""
+        if symbol is not None:
+            symbol = asset_spec(symbol).symbol
+            symbol_filter = " AND symbol=?"
+            parameters += (symbol,)
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT payload_json FROM snapshots "
-                "WHERE market=? ORDER BY event_time DESC, id DESC LIMIT 1",
-                (market,),
+                f"WHERE market=?{symbol_filter} "
+                "ORDER BY event_time DESC, id DESC LIMIT 1",
+                parameters,
             ).fetchone()
         return None if row is None else FeatureSnapshot.model_validate_json(row["payload_json"])
 
@@ -2999,21 +3009,31 @@ class IntradayStore:
         self,
         venue: str,
         *,
+        symbol: str | None = None,
         now: datetime | None = None,
         window_days: int = 14,
     ) -> dict:
         now = now or datetime.now(timezone.utc)
         since = now - timedelta(days=window_days)
+        parameters: tuple = (since.isoformat(), venue)
+        latest_parameters: tuple = (venue,)
+        symbol_filter = ""
+        if symbol is not None:
+            symbol = asset_spec(symbol).symbol
+            symbol_filter = " AND symbol = ?"
+            parameters += (symbol,)
+            latest_parameters += (symbol,)
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT COUNT(*) AS total, MAX(received_at) AS last_received_at, "
                 "SUM(CASE WHEN event_time >= ? THEN 1 ELSE 0 END) AS window_frames "
-                "FROM venue_market_frames WHERE venue = ?",
-                (since.isoformat(), venue),
+                f"FROM venue_market_frames WHERE venue = ?{symbol_filter}",
+                parameters,
             ).fetchone()
             latest_row = connection.execute(
                 "SELECT payload_json FROM venue_market_frames WHERE venue = ? "
-                "ORDER BY event_time DESC, id DESC LIMIT 1", (venue,)
+                f"{symbol_filter} ORDER BY event_time DESC, id DESC LIMIT 1",
+                latest_parameters,
             ).fetchone()
         last = row["last_received_at"]
         recent = int(row["window_frames"] or 0)
@@ -3024,6 +3044,7 @@ class IntradayStore:
         )
         return {
             "venue": venue,
+            "symbol": symbol,
             "total_frames": int(row["total"]),
             "window_days": window_days,
             "window_frames": recent,

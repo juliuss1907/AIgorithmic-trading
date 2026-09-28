@@ -189,6 +189,33 @@ def test_portfolio_shadow_capture_records_hyperliquid_without_mutating_snapshot(
     assert snapshot.features.get("hl_mark_price") is None
 
 
+def test_portfolio_shadow_capture_isolates_multi_asset_feeds(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    btc = build_hyperliquid_frame(
+        hyperliquid_book(), asset_context(), received_at=NOW
+    )
+    eth = build_hyperliquid_frame(
+        {**hyperliquid_book(), "coin": "ETH"}, asset_context(),
+        symbol="ETHUSDT", received_at=NOW,
+    )
+
+    class Feed:
+        def __init__(self, frame):
+            self.frame = frame
+
+        def latest_frame(self, *, now):
+            return self.frame
+
+    _record_portfolio_hyperliquid(
+        store,
+        {"BTCUSDT": Feed(btc), "ETHUSDT": Feed(eth), "SOLUSDT": Feed(None)},
+        now=NOW,
+    )
+
+    assert store.list_venue_frames("hyperliquid", symbol="BTCUSDT") == [btc]
+    assert store.list_venue_frames("hyperliquid", symbol="ETHUSDT") == [eth]
+
+
 def test_venue_frame_retention_removes_only_expired_rows(tmp_path):
     store = IntradayStore(tmp_path / "intraday.sqlite")
     old_time = NOW - timedelta(days=31)

@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from intraday.assets import ASSET_REGISTRY
 from intraday.contracts import DecisionScope, ProviderRole
 from intraday.portfolio_soak import (
     CURRENT_SOAK_EVIDENCE_VERSION,
@@ -126,14 +127,15 @@ def _public_call(call) -> dict:
     }
 
 
-def _market_snapshot(store, *, market: str) -> dict | None:
-    snapshot = store.latest_snapshot(market=market)
+def _market_snapshot(store, *, market: str, symbol: str | None = None) -> dict | None:
+    snapshot = store.latest_snapshot(market=market, symbol=symbol)
     if snapshot is None:
         return None
     reference = snapshot.features.get("reference_price")
     if reference is None:
         reference = (snapshot.bid + snapshot.ask) / 2
     return {
+        "symbol": snapshot.symbol,
         "market": market,
         "timeframe": snapshot.timeframe,
         "reference_price": reference,
@@ -142,6 +144,48 @@ def _market_snapshot(store, *, market: str) -> dict | None:
         ),
         "event_time": snapshot.event_time.isoformat(),
         "quality_flags": list(snapshot.quality_flags),
+    }
+
+
+def _health_status(health: dict, ttl: timedelta) -> dict:
+    age = health["age_seconds"]
+    health["status"] = (
+        "missing"
+        if age is None
+        else "healthy"
+        if age <= ttl.total_seconds()
+        else "stale"
+    )
+    return health
+
+
+def _asset_projection(store, symbol: str, *, now: datetime) -> dict:
+    spec = ASSET_REGISTRY[symbol]
+    lifecycles = store.list_asset_lifecycles(symbol)
+    sources = {
+        source: _health_status(
+            store.external_source_health(source, symbol=symbol, now=now), ttl
+        )
+        for source, ttl in EXTERNAL_SOURCE_TTLS.items()
+        if source != "cryptorank"
+    }
+    sources["hyperliquid"] = _health_status(
+        store.venue_health("hyperliquid", symbol=symbol, now=now),
+        timedelta(seconds=60),
+    )
+    return {
+        "symbol": symbol,
+        "capability": spec.capability.value,
+        "stages": {item.scope.value: item.stage.value for item in lifecycles},
+        "markets": {
+            "spot": _market_snapshot(
+                store, market="binance_spot", symbol=symbol
+            ),
+            "perp": _market_snapshot(
+                store, market="binance_usdm_perp", symbol=symbol
+            ),
+        },
+        "sources": sources,
     }
 
 
@@ -268,18 +312,11 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
     external_sources = {}
     for source, ttl in EXTERNAL_SOURCE_TTLS.items():
         health = store.external_source_health(source, now=now)
-        age = health["age_seconds"]
-        health["status"] = (
-            "missing" if age is None else "healthy" if age <= ttl.total_seconds() else "stale"
-        )
-        external_sources[source] = health
+        external_sources[source] = _health_status(health, ttl)
     hyperliquid = store.venue_health("hyperliquid", now=now)
-    hyperliquid["status"] = (
-        "missing" if hyperliquid["age_seconds"] is None
-        else "healthy" if hyperliquid["age_seconds"] <= 60
-        else "stale"
+    external_sources["hyperliquid"] = _health_status(
+        hyperliquid, timedelta(seconds=60)
     )
-    external_sources["hyperliquid"] = hyperliquid
     return {
         "generated_at": now.isoformat(),
         "status": {
@@ -313,4 +350,8 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
         "thesis": bundle.model_dump(mode="json") if bundle else None,
         "scheduler": store.latest_scheduler_runs(),
         "external_sources": external_sources,
+        "assets": [
+            _asset_projection(store, symbol, now=now)
+            for symbol in ASSET_REGISTRY
+        ],
     }

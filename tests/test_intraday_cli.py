@@ -63,6 +63,47 @@ def test_bare_aigt_prints_help_and_exits_successfully(monkeypatch, capsys):
     assert "setup" in output
     assert "backup" in output
     assert "positions" in output
+    assert "assets" in output
+
+
+def test_assets_list_reports_capability_and_scope_stage(monkeypatch, capsys, tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    monkeypatch.setattr(
+        sys, "argv", ["aigt", "assets", "list", "--database", str(database)]
+    )
+
+    main()
+
+    result = json.loads(capsys.readouterr().out)
+    eth = next(item for item in result if item["symbol"] == "ETHUSDT")
+    hype = next(item for item in result if item["symbol"] == "HYPEUSDT")
+    assert eth["capability"] == "full"
+    assert eth["stages"] == {"perp_intraday": "shadow", "spot_daily": "shadow"}
+    assert hype["capability"] == "shadow_only"
+
+
+def test_assets_start_soak_is_guarded_by_registry_capability(
+    monkeypatch, capsys, tmp_path
+):
+    database = tmp_path / "intraday.sqlite"
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "assets", "start-soak", "ETHUSDT",
+        "--scope", "perp_intraday", "--database", str(database),
+    ])
+
+    main()
+
+    result = json.loads(capsys.readouterr().out)
+    assert result == {
+        "symbol": "ETHUSDT", "scope": "perp_intraday", "stage": "soak"
+    }
+
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "assets", "start-soak", "HYPEUSDT",
+        "--scope", "perp_intraday", "--database", str(database),
+    ])
+    with pytest.raises(SystemExit, match="shadow-only"):
+        main()
 
 
 def test_backup_create_and_verify_cli_with_explicit_database(

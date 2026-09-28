@@ -13,7 +13,7 @@
     <a class="skip-link" href="#main">Đi tới nội dung chính</a>
     <header class="masthead operations-head">
       <div>
-        <p class="eyebrow">BTCUSDT · portfolio worker · paper / soak</p>
+        <p class="eyebrow">Multi-asset · portfolio worker · shadow / soak / paper</p>
         <h1>AIGT operations</h1>
       </div>
       <div class="head-actions">
@@ -139,6 +139,33 @@
         {% else %}
         <div class="empty" role="status"><strong>Chưa có Jev signal.</strong><p>Worker sẽ ghi mọi evaluation, kể cả signal không vượt gate.</p></div>
         {% endif %}
+      </section>
+
+      <section class="ledger" aria-labelledby="assets-heading">
+        <div class="section-head">
+          <div><p class="eyebrow">Registry-gated rollout</p><h2 id="assets-heading">Asset rollout</h2></div>
+          <small>HYPE / NEAR / ZEC / SOL luôn data-only</small>
+        </div>
+        <div class="table-wrap" tabindex="0" aria-label="Lifecycle của từng tài sản">
+          <table>
+            <thead><tr><th>Asset</th><th>Capability</th><th>Spot</th><th>Perp</th><th>Venue coverage</th></tr></thead>
+            <tbody>
+              {% for asset in dashboard.assets %}
+              <tr>
+                <td><strong>{{ asset.symbol }}</strong></td>
+                <td>{{ asset.capability }}</td>
+                <td><span class="outcome outcome-{{ asset.stages.spot_daily }}">{{ asset.stages.spot_daily }}</span></td>
+                <td><span class="outcome outcome-{{ asset.stages.perp_intraday }}">{{ asset.stages.perp_intraday }}</span></td>
+                <td>
+                  {% for source, health in asset.sources.items() %}
+                    {{ source|capitalize }}: {{ health.status }}{% if not loop.last %} · {% endif %}
+                  {% endfor %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section class="ledger" aria-labelledby="external-sources-heading">
