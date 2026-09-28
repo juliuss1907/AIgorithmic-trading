@@ -50,6 +50,8 @@ Kiểm tra cấu hình và trạng thái:
 aigt doctor
 aigt status
 aigt positions
+aigt assets list
+aigt assets status ETHUSDT
 aigt cross-venue-status
 ```
 
@@ -57,6 +59,19 @@ aigt cross-venue-status
 paper position đang mở, cùng entry price, latest mark, mark timestamp, notional và
 unrealized P&L. Lệnh tự route tới deployment Docker đã đăng ký, không tạo fill và
 không thay đổi portfolio state.
+
+Registry hiện theo dõi BTC, ETH, HYPE, NEAR, ZEC và SOL trên cả Spot/Perp. Năm asset
+mới bắt đầu ở `shadow`: worker ghi dữ liệu Binance và các perp DEX nhưng không gọi model,
+không tạo signal và không tạo fill. Chỉ ETH có capability rời shadow sang decision soak,
+và phải bật riêng từng scope bằng lệnh operator rõ ràng:
+
+```bash
+aigt assets start-soak ETHUSDT --scope perp_intraday
+# Spot vẫn chỉ ghi no-setup heartbeat cho tới khi có rule registry riêng theo asset.
+```
+
+HYPE, NEAR, ZEC và SOL là `shadow_only`, nên lệnh `start-soak` sẽ bị từ chối. Paper
+activation và ETH canary ledger chưa được bật trong rollout này.
 
 Luồng cũ `aigt run` vẫn được giữ để replay intraday tương thích. Luồng portfolio mới bắt
 đầu bằng decision-only soak, chưa tạo fill:
