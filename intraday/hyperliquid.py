@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Callable
 from urllib.request import Request, urlopen
 
+from intraday.assets import asset_spec
 from intraday.contracts import VenueMarketFrame
 from intraday.cross_venue import build_hyperliquid_frame
 
@@ -17,11 +18,12 @@ INFO_URL = "https://api.hyperliquid.xyz/info"
 WS_URL = "wss://api.hyperliquid.xyz/ws"
 
 
-def l2_book_from_message(message: dict) -> dict | None:
+def l2_book_from_message(message: dict, *, symbol: str = "BTCUSDT") -> dict | None:
     if message.get("channel") != "l2Book":
         return None
     data = message.get("data")
-    if not isinstance(data, dict) or data.get("coin") != "BTC":
+    coin = asset_spec(symbol).hyperliquid_coin
+    if not isinstance(data, dict) or data.get("coin") != coin:
         return None
     return data
 
@@ -49,24 +51,26 @@ class HyperliquidPublicClient:
         with urlopen(request, timeout=self.timeout_seconds) as response:
             return json.load(response)
 
-    def asset_context(self) -> dict:
+    def asset_context(self, symbol: str = "BTCUSDT") -> dict:
+        coin = asset_spec(symbol).hyperliquid_coin
         response = self._fetch_json({"type": "metaAndAssetCtxs"})
         if not isinstance(response, list) or len(response) != 2:
             raise ValueError("invalid Hyperliquid metadata response")
         meta, contexts = response
         universe = meta.get("universe", [])
         index = next(
-            (position for position, asset in enumerate(universe) if asset.get("name") == "BTC"),
+            (position for position, asset in enumerate(universe) if asset.get("name") == coin),
             None,
         )
         if index is None or index >= len(contexts):
-            raise ValueError("BTC context is missing from Hyperliquid metadata")
+            raise ValueError(f"{coin} context is missing from Hyperliquid metadata")
         return contexts[index]
 
-    def order_book(self) -> dict:
-        response = self._fetch_json({"type": "l2Book", "coin": "BTC"})
-        if not isinstance(response, dict) or response.get("coin") != "BTC":
-            raise ValueError("invalid Hyperliquid BTC order-book response")
+    def order_book(self, symbol: str = "BTCUSDT") -> dict:
+        coin = asset_spec(symbol).hyperliquid_coin
+        response = self._fetch_json({"type": "l2Book", "coin": coin})
+        if not isinstance(response, dict) or response.get("coin") != coin:
+            raise ValueError(f"invalid Hyperliquid {coin} order-book response")
         return response
 
 
@@ -77,11 +81,14 @@ class HyperliquidFeed:
         self,
         client: HyperliquidPublicClient | None = None,
         *,
+        symbol: str = "BTCUSDT",
         metadata_interval_seconds: float = 30,
         max_book_age_seconds: float = 2,
         max_metadata_age_seconds: float = 60,
     ):
         self.client = client or HyperliquidPublicClient()
+        self.symbol = asset_spec(symbol).symbol
+        self.coin = asset_spec(symbol).hyperliquid_coin
         self.metadata_interval_seconds = metadata_interval_seconds
         self.max_book_age_seconds = max_book_age_seconds
         self.max_metadata_age_seconds = max_metadata_age_seconds
@@ -106,7 +113,7 @@ class HyperliquidFeed:
 
     def refresh_context(self, *, now: datetime | None = None) -> None:
         self.update_context(
-            self.client.asset_context(),
+            self.client.asset_context(self.symbol),
             received_at=now or datetime.now(timezone.utc),
         )
 
@@ -138,6 +145,7 @@ class HyperliquidFeed:
         return build_hyperliquid_frame(
             book,
             context,
+            symbol=self.symbol,
             received_at=book_time,
             metadata_received_at=context_time,
         )
@@ -159,11 +167,11 @@ class HyperliquidFeed:
                 async with connect(WS_URL, open_timeout=10, ping_interval=20) as socket:
                     await socket.send(json.dumps({
                         "method": "subscribe",
-                        "subscription": {"type": "l2Book", "coin": "BTC"},
+                        "subscription": {"type": "l2Book", "coin": self.coin},
                     }))
                     backoff = 1.0
                     async for raw in socket:
-                        parsed = l2_book_from_message(json.loads(raw))
+                        parsed = l2_book_from_message(json.loads(raw), symbol=self.symbol)
                         if parsed is not None:
                             self.update_book(parsed, received_at=datetime.now(timezone.utc))
                         if self._stop.is_set():

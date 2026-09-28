@@ -10,6 +10,7 @@ from typing import Callable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from intraday.assets import ASSET_REGISTRY, asset_spec
 from intraday.contracts import ExternalObservation
 
 
@@ -20,8 +21,12 @@ VARIATIONAL_STATS_URL = (
     "https://omni-client-api.prod.ap-northeast-1.variational.io/metadata/stats"
 )
 LIGHTER_WS_URL = "wss://mainnet.zklighter.elliot.ai/stream?readonly=true"
-LIGHTER_BTC_MARKET_ID = 1
-ASTER_WS_URL = "wss://fstream.asterdex.com/ws/btcusdt@forceOrder"
+ASTER_WS_URL_TEMPLATE = "wss://fstream.asterdex.com/ws/{stream}@forceOrder"
+
+
+def _registered_symbols(symbols: tuple[str, ...] | None) -> tuple[str, ...]:
+    requested = symbols or tuple(ASSET_REGISTRY)
+    return tuple(asset_spec(symbol).symbol for symbol in requested)
 
 
 def _timestamp(value, fallback: datetime) -> datetime:
@@ -101,13 +106,19 @@ def _quote_spread_bps(quote: dict | None) -> float | None:
     return (ask - bid) / ((ask + bid) / 2) * 10_000
 
 
-def parse_variational_stats(payload: dict, *, received_at: datetime) -> ExternalObservation:
+def parse_variational_stats(
+    payload: dict, *, symbol: str = "BTCUSDT", received_at: datetime
+) -> ExternalObservation:
+    spec = asset_spec(symbol)
     listings = payload.get("listings")
     if not isinstance(listings, list):
         raise ValueError("Variational listings are missing")
-    listing = next((item for item in listings if item.get("ticker") == "BTC"), None)
+    listing = next(
+        (item for item in listings if item.get("ticker") == spec.variational_ticker),
+        None,
+    )
     if not isinstance(listing, dict):
-        raise ValueError("Variational BTC listing is missing")
+        raise ValueError(f"Variational {spec.variational_ticker} listing is missing")
     interest = listing.get("open_interest")
     quotes = listing.get("quotes")
     if not isinstance(interest, dict) or not isinstance(quotes, dict):
@@ -115,7 +126,7 @@ def parse_variational_stats(payload: dict, *, received_at: datetime) -> External
     interval = _number(listing.get("funding_interval_s"), name="funding_interval_s")
     funding = _number(listing.get("funding_rate"), name="funding_rate")
     return ExternalObservation.create(
-        source="variational", dataset="perp_market", symbol="BTCUSDT",
+        source="variational", dataset="perp_market", symbol=spec.symbol,
         source_timestamp=_timestamp(quotes.get("updated_at"), received_at), received_at=received_at,
         metrics={
             "mark_price": _number(listing.get("mark_price"), name="mark_price"),
@@ -134,10 +145,12 @@ def parse_variational_stats(payload: dict, *, received_at: datetime) -> External
 
 
 def parse_aster_snapshot(
-    *, premium: dict, book: dict, liquidation: dict | None, received_at: datetime
+    *, symbol: str = "BTCUSDT", premium: dict, book: dict,
+    liquidation: dict | None, received_at: datetime
 ) -> ExternalObservation:
-    if premium.get("symbol", "BTCUSDT") != "BTCUSDT":
-        raise ValueError("Aster response is not BTCUSDT")
+    spec = asset_spec(symbol)
+    if premium.get("symbol", spec.aster_symbol) != spec.aster_symbol:
+        raise ValueError(f"Aster response is not {spec.aster_symbol}")
     mark = _number(premium.get("markPrice"), name="markPrice")
     index = _number(premium.get("indexPrice"), name="indexPrice")
     bids, asks = book.get("bids"), book.get("asks")
@@ -164,7 +177,7 @@ def parse_aster_snapshot(
         liquidation_age = (received_at - liquidation_time).total_seconds()
         if (
             isinstance(order, dict)
-            and order.get("s") == "BTCUSDT"
+            and order.get("s") == spec.aster_symbol
             and -1 <= liquidation_age <= 300
         ):
             price = _number(_first(order, "ap", "p"), name="liquidation price")
@@ -174,21 +187,28 @@ def parse_aster_snapshot(
             labels["liquidation_side"] = str(order.get("S", "unknown"))
             source_time = max(source_time, liquidation_time)
     return ExternalObservation.create(
-        source="aster", dataset="perp_market", symbol="BTCUSDT",
+        source="aster", dataset="perp_market", symbol=spec.symbol,
         source_timestamp=source_time, received_at=received_at, metrics=metrics, labels=labels,
     )
 
 
-def parse_lighter_market_stats(payload: dict, *, received_at: datetime) -> ExternalObservation:
+def parse_lighter_market_stats(
+    payload: dict, *, symbol: str = "BTCUSDT", received_at: datetime
+) -> ExternalObservation:
+    spec = asset_spec(symbol)
     stats = payload.get("market_stats")
-    if not isinstance(stats, dict) or stats.get("symbol") != "BTC":
-        raise ValueError("Lighter BTC market stats are missing")
+    if (
+        not isinstance(stats, dict)
+        or stats.get("symbol") != spec.base_asset
+        or int(stats.get("market_id", -1)) != spec.lighter_market_id
+    ):
+        raise ValueError(f"Lighter {spec.base_asset} market stats are missing")
     bid = _number(stats.get("best_bid_price"), name="best_bid_price")
     ask = _number(stats.get("best_ask_price"), name="best_ask_price")
     if bid > ask:
         raise ValueError("Lighter book is crossed")
     return ExternalObservation.create(
-        source="lighter", dataset="perp_market", symbol="BTCUSDT",
+        source="lighter", dataset="perp_market", symbol=spec.symbol,
         source_timestamp=_timestamp(payload.get("timestamp"), received_at), received_at=received_at,
         metrics={
             "market_id": _number(stats.get("market_id"), name="market_id"),
@@ -227,34 +247,54 @@ class CryptoRankCollector:
 
 
 class VariationalCollector:
-    def __init__(self, fetch_json=_get_json):
+    def __init__(
+        self,
+        fetch_json=_get_json,
+        *,
+        symbols: tuple[str, ...] | None = None,
+    ):
         self.fetch_json = fetch_json
+        self.symbols = _registered_symbols(symbols)
 
-    def __call__(self, now: datetime) -> ExternalObservation:
-        return parse_variational_stats(self.fetch_json(VARIATIONAL_STATS_URL), received_at=now)
+    def __call__(self, now: datetime) -> tuple[ExternalObservation, ...]:
+        payload = self.fetch_json(VARIATIONAL_STATS_URL)
+        return tuple(
+            parse_variational_stats(payload, symbol=symbol, received_at=now)
+            for symbol in self.symbols
+        )
 
 
 class AsterLiquidationFeed:
-    def __init__(self):
-        self._lock, self._latest = threading.Lock(), None
+    def __init__(self, *, symbols: tuple[str, ...] | None = None):
+        self.symbols = _registered_symbols(symbols)
+        self._lock, self._latest = threading.Lock(), {}
         self._stop = threading.Event()
 
     def update(self, payload: dict) -> None:
-        if payload.get("e") == "forceOrder":
+        order = payload.get("o")
+        if payload.get("e") != "forceOrder" or not isinstance(order, dict):
+            return
+        try:
+            symbol = asset_spec(str(order.get("s", ""))).symbol
+        except ValueError:
+            return
+        if symbol in self.symbols:
             with self._lock:
-                self._latest = payload
+                self._latest[symbol] = payload
 
-    def latest(self) -> dict | None:
+    def latest(self, symbol: str = "BTCUSDT") -> dict | None:
         with self._lock:
-            return self._latest
+            return self._latest.get(asset_spec(symbol).symbol)
 
-    async def _run(self) -> None:
+    async def _run(self, symbol: str) -> None:
         from websockets.asyncio.client import connect
 
+        stream = asset_spec(symbol).aster_symbol.lower()
+        url = ASTER_WS_URL_TEMPLATE.format(stream=stream)
         backoff = 1.0
         while not self._stop.is_set():
             try:
-                async with connect(ASTER_WS_URL, open_timeout=10, ping_interval=20) as socket:
+                async with connect(url, open_timeout=10, ping_interval=20) as socket:
                     backoff = 1.0
                     async for raw in socket:
                         self.update(json.loads(raw))
@@ -265,41 +305,76 @@ class AsterLiquidationFeed:
                 backoff = min(backoff * 2, 30)
 
     def start(self) -> None:
-        threading.Thread(target=lambda: asyncio.run(self._run()), daemon=True).start()
+        for symbol in self.symbols:
+            threading.Thread(
+                target=lambda current=symbol: asyncio.run(self._run(current)),
+                daemon=True,
+            ).start()
 
     def stop(self) -> None:
         self._stop.set()
 
 
 class AsterCollector:
-    def __init__(self, feed: AsterLiquidationFeed | None = None, fetch_json=_get_json):
+    def __init__(
+        self,
+        feed: AsterLiquidationFeed | None = None,
+        fetch_json=_get_json,
+        *,
+        symbols: tuple[str, ...] | None = None,
+    ):
         self.feed, self.fetch_json = feed, fetch_json
+        self.symbols = _registered_symbols(symbols)
 
-    def __call__(self, now: datetime) -> ExternalObservation:
-        query = urlencode({"symbol": "BTCUSDT"})
-        premium = self.fetch_json(f"{ASTER_BASE_URL}/fapi/v3/premiumIndex?{query}")
-        book = self.fetch_json(f"{ASTER_BASE_URL}/fapi/v3/depth?{query}&limit=100")
-        return parse_aster_snapshot(
-            premium=premium, book=book,
-            liquidation=self.feed.latest() if self.feed else None, received_at=now,
-        )
+    def __call__(self, now: datetime) -> tuple[ExternalObservation, ...]:
+        observations = []
+        for symbol in self.symbols:
+            spec = asset_spec(symbol)
+            query = urlencode({"symbol": spec.aster_symbol})
+            premium = self.fetch_json(f"{ASTER_BASE_URL}/fapi/v3/premiumIndex?{query}")
+            book = self.fetch_json(f"{ASTER_BASE_URL}/fapi/v3/depth?{query}&limit=100")
+            observations.append(parse_aster_snapshot(
+                symbol=symbol,
+                premium=premium,
+                book=book,
+                liquidation=self.feed.latest(symbol) if self.feed else None,
+                received_at=now,
+            ))
+        return tuple(observations)
 
 
 class LighterCollector:
-    def __call__(self, now: datetime) -> ExternalObservation:
+    def __init__(self, *, symbols: tuple[str, ...] | None = None):
+        self.symbols = _registered_symbols(symbols)
+
+    @staticmethod
+    def _collect_symbol(socket, symbol: str, now: datetime) -> ExternalObservation:
+        spec = asset_spec(symbol)
+        socket.send(json.dumps({
+            "type": "subscribe",
+            "channel": f"market_stats/{spec.lighter_market_id}",
+        }))
+        for _ in range(3):
+            payload = json.loads(socket.recv(timeout=10))
+            stats = payload.get("market_stats")
+            if (
+                isinstance(stats, dict)
+                and stats.get("symbol") == spec.base_asset
+                and int(stats.get("market_id", -1)) == spec.lighter_market_id
+            ):
+                return parse_lighter_market_stats(
+                    payload, symbol=symbol, received_at=now
+                )
+        raise ValueError(f"Lighter {spec.base_asset} market stats were not received")
+
+    def __call__(self, now: datetime) -> tuple[ExternalObservation, ...]:
         from websockets.sync.client import connect
 
-        with connect(LIGHTER_WS_URL, open_timeout=10, close_timeout=2) as socket:
-            socket.send(json.dumps({
-                "type": "subscribe",
-                "channel": f"market_stats/{LIGHTER_BTC_MARKET_ID}",
-            }))
-            for _ in range(3):
-                payload = json.loads(socket.recv(timeout=10))
-                stats = payload.get("market_stats")
-                if isinstance(stats, dict) and stats.get("symbol") == "BTC":
-                    return parse_lighter_market_stats(payload, received_at=now)
-        raise ValueError("Lighter BTC market stats were not received")
+        observations = []
+        for symbol in self.symbols:
+            with connect(LIGHTER_WS_URL, open_timeout=10, close_timeout=2) as socket:
+                observations.append(self._collect_symbol(socket, symbol, now))
+        return tuple(observations)
 
 
 def run_external_context_cycle(store, *, collectors: dict[str, Callable], now: datetime | None = None) -> dict:
@@ -307,10 +382,14 @@ def run_external_context_cycle(store, *, collectors: dict[str, Callable], now: d
     recorded, failed = [], []
     for source, collector in collectors.items():
         try:
-            observation = collector(now)
-            if observation.source != source:
-                raise ValueError("collector returned the wrong source")
-            store.record_external_observation(observation)
+            result = collector(now)
+            observations = (result,) if isinstance(result, ExternalObservation) else tuple(result)
+            if not observations:
+                raise ValueError("collector returned no observations")
+            for observation in observations:
+                if observation.source != source:
+                    raise ValueError("collector returned the wrong source")
+                store.record_external_observation(observation)
             recorded.append(source)
         except Exception:
             failed.append(source)

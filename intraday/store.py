@@ -2876,15 +2876,24 @@ class IntradayStore:
         self,
         *,
         source: str | None = None,
+        symbol: str | None = None,
         limit: int = 1000,
     ) -> list[ExternalObservation]:
         if not 1 <= limit <= 100_000:
             raise ValueError("limit must be between 1 and 100000")
         query = "SELECT payload_json FROM external_observations"
-        parameters: tuple = ()
+        filters, values = [], []
         if source is not None:
-            query += " WHERE source = ?"
-            parameters = (source,)
+            filters.append("source = ?")
+            values.append(source)
+        if symbol is not None:
+            from intraday.assets import asset_spec
+
+            filters.append("symbol = ?")
+            values.append(asset_spec(symbol).symbol)
+        if filters:
+            query += " WHERE " + " AND ".join(filters)
+        parameters = tuple(values)
         query += " ORDER BY received_at DESC, id DESC LIMIT ?"
         parameters += (limit,)
         with self._connect() as connection:
@@ -2895,19 +2904,32 @@ class IntradayStore:
         ]
 
     def external_source_health(
-        self, source: str, *, now: datetime | None = None
+        self,
+        source: str,
+        *,
+        symbol: str | None = None,
+        now: datetime | None = None,
     ) -> dict:
         now = now or datetime.now(timezone.utc)
+        parameters: tuple = (source,)
+        symbol_filter = ""
+        if symbol is not None:
+            from intraday.assets import asset_spec
+
+            symbol = asset_spec(symbol).symbol
+            symbol_filter = " AND symbol = ?"
+            parameters += (symbol,)
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT COUNT(*) AS total, MAX(received_at) AS last_received_at "
-                "FROM external_observations WHERE source = ?",
-                (source,),
+                f"FROM external_observations WHERE source = ?{symbol_filter}",
+                parameters,
             ).fetchone()
             latest_row = connection.execute(
                 "SELECT payload_json FROM external_observations WHERE source = ? "
+                f"{symbol_filter} "
                 "ORDER BY received_at DESC, id DESC LIMIT 1",
-                (source,),
+                parameters,
             ).fetchone()
         last = row["last_received_at"]
         latest = (
@@ -2916,6 +2938,7 @@ class IntradayStore:
         )
         return {
             "source": source,
+            "symbol": symbol,
             "total_observations": int(row["total"]),
             "last_received_at": last,
             "age_seconds": (

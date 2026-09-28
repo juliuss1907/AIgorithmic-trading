@@ -46,6 +46,14 @@ def test_public_client_selects_btc_context_from_meta_response():
     assert context["markPx"] == "100005"
 
 
+def test_public_client_selects_registered_eth_context():
+    context = HyperliquidPublicClient(
+        fetch_json=lambda payload: metadata_response()
+    ).asset_context("ETHUSDT")
+
+    assert context["markPx"] == "4001"
+
+
 def test_public_client_requests_public_btc_l2_snapshot():
     calls = []
     client = HyperliquidPublicClient(
@@ -56,10 +64,26 @@ def test_public_client_requests_public_btc_l2_snapshot():
     assert calls == [{"type": "l2Book", "coin": "BTC"}]
 
 
+def test_public_client_requests_registered_eth_l2_snapshot():
+    calls = []
+    eth_book = {**book(), "coin": "ETH"}
+    client = HyperliquidPublicClient(
+        fetch_json=lambda payload: calls.append(payload) or eth_book
+    )
+
+    assert client.order_book("ETHUSDT") == eth_book
+    assert calls == [{"type": "l2Book", "coin": "ETH"}]
+
+
 def test_l2_websocket_parser_accepts_only_btc_book_updates():
     assert l2_book_from_message({"channel": "l2Book", "data": book()}) == book()
     assert l2_book_from_message({"channel": "trades", "data": []}) is None
     assert l2_book_from_message({"channel": "l2Book", "data": {**book(), "coin": "ETH"}}) is None
+
+    assert l2_book_from_message(
+        {"channel": "l2Book", "data": {**book(), "coin": "ETH"}},
+        symbol="ETHUSDT",
+    )["coin"] == "ETH"
 
 
 def test_feed_emits_frame_only_when_book_and_metadata_are_fresh():

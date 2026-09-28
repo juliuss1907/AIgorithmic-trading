@@ -66,6 +66,20 @@ def test_hyperliquid_frame_normalizes_funding_oi_and_bps_depth():
     assert frame.ask_depth_usd["25"] == pytest.approx(550_855)
 
 
+def test_hyperliquid_frame_preserves_registered_asset_identity():
+    eth_book = {**hyperliquid_book(), "coin": "ETH"}
+    frame = build_hyperliquid_frame(
+        eth_book, asset_context(), symbol="ETHUSDT", received_at=NOW
+    )
+
+    assert frame.symbol == "ETHUSDT"
+
+    with pytest.raises(ValueError, match="unsupported asset symbol"):
+        build_hyperliquid_frame(
+            eth_book, asset_context(), symbol="DOGEUSDT", received_at=NOW
+        )
+
+
 def test_frame_checksum_rejects_payload_mutation():
     frame = build_hyperliquid_frame(
         hyperliquid_book(), asset_context(), received_at=NOW

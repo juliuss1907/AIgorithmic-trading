@@ -437,7 +437,7 @@ class VenueMarketFrame(StrictContract):
 
     frame_id: str = Field(min_length=16, max_length=64)
     venue: Literal["hyperliquid", "lighter"]
-    symbol: Literal["BTCUSDT"] = "BTCUSDT"
+    symbol: str = "BTCUSDT"
     event_time: datetime
     received_at: datetime
     metadata_received_at: datetime
@@ -456,6 +456,13 @@ class VenueMarketFrame(StrictContract):
     _event_time_is_aware = field_validator("event_time")(_aware)
     _received_at_is_aware = field_validator("received_at")(_aware)
     _metadata_received_at_is_aware = field_validator("metadata_received_at")(_aware)
+
+    @field_validator("symbol")
+    @classmethod
+    def registered_venue_symbol(cls, value: str) -> str:
+        from intraday.assets import asset_spec
+
+        return asset_spec(value).symbol
 
     @model_validator(mode="after")
     def valid_frame(self):
@@ -482,6 +489,9 @@ class VenueMarketFrame(StrictContract):
 
     @classmethod
     def create(cls, **values) -> "VenueMarketFrame":
+        from intraday.assets import asset_spec
+
+        values["symbol"] = asset_spec(values.get("symbol", "BTCUSDT")).symbol
         payload = {"schema_version": "1", **values}
         checksum = cls._checksum_for(payload)
         return cls(frame_id=checksum[:24], checksum=checksum, **values)
@@ -493,7 +503,7 @@ class ExternalObservation(StrictContract):
     observation_id: str = Field(min_length=16, max_length=64)
     source: Literal["cryptorank", "aster", "variational", "lighter"]
     dataset: Literal["market_context", "perp_market"]
-    symbol: Literal["BTCUSDT"] | None = None
+    symbol: str | None = None
     source_timestamp: datetime
     received_at: datetime
     metrics: dict[str, float | None]
@@ -502,6 +512,15 @@ class ExternalObservation(StrictContract):
 
     _source_timestamp_is_aware = field_validator("source_timestamp")(_aware)
     _observation_received_is_aware = field_validator("received_at")(_aware)
+
+    @field_validator("symbol")
+    @classmethod
+    def registered_observation_symbol(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from intraday.assets import asset_spec
+
+        return asset_spec(value).symbol
 
     @model_validator(mode="after")
     def valid_observation(self):
@@ -528,6 +547,10 @@ class ExternalObservation(StrictContract):
 
     @classmethod
     def create(cls, **values) -> "ExternalObservation":
+        if values.get("symbol") is not None:
+            from intraday.assets import asset_spec
+
+            values["symbol"] = asset_spec(values["symbol"]).symbol
         payload = {"schema_version": "1", **values}
         checksum = cls._checksum_for(payload)
         return cls(observation_id=checksum[:24], checksum=checksum, **values)
