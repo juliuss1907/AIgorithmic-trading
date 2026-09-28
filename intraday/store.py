@@ -1413,6 +1413,7 @@ class IntradayStore:
     def record_portfolio_soak_tick(
         self,
         *,
+        symbol: str = "BTCUSDT",
         scope: DecisionScope,
         status: str,
         created_at: datetime,
@@ -1423,12 +1424,14 @@ class IntradayStore:
             "success", "skipped_no_setup", "provider_error", "gate_error"
         }:
             raise ValueError("invalid portfolio soak status")
+        symbol = asset_spec(symbol).symbol
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO portfolio_soak_ticks "
-                "(scope, status, hard_risk_violation, evidence_version, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "(symbol, scope, status, hard_risk_violation, evidence_version, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (
+                    symbol,
                     scope.value,
                     status,
                     int(hard_risk_violation),
@@ -1438,14 +1441,24 @@ class IntradayStore:
             )
 
     def list_portfolio_soak_ticks(
-        self, *, evidence_version: str = "scope-price-v2"
+        self,
+        *,
+        evidence_version: str = "scope-price-v2",
+        symbol: str | None = None,
     ) -> list[dict]:
+        parameters: tuple = (evidence_version,)
+        symbol_filter = ""
+        if symbol is not None:
+            symbol = asset_spec(symbol).symbol
+            symbol_filter = " AND symbol=?"
+            parameters += (symbol,)
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT scope, status, hard_risk_violation, evidence_version, "
                 "created_at FROM portfolio_soak_ticks WHERE evidence_version=? "
+                f"{symbol_filter} "
                 "ORDER BY created_at, id",
-                (evidence_version,),
+                parameters,
             ).fetchall()
         return [dict(row) for row in rows]
 

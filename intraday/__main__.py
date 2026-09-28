@@ -82,6 +82,7 @@ from intraday.positions import build_positions_snapshot
 from intraday.portfolio_soak import (
     CURRENT_SOAK_EVIDENCE_VERSION,
     evaluate_portfolio_soak,
+    run_asset_lifecycle_observation,
     run_soak_cycle,
     run_spot_soak_observation,
 )
@@ -711,6 +712,7 @@ def _portfolio_cli(arguments) -> None:
                 BinanceSpotDailyClient(),
                 quote_interval_seconds=config.order_book_interval_seconds,
             )
+            asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config)
             interval = config.risk_interval_seconds
             background_started = False
             hyperliquid = (
@@ -820,6 +822,14 @@ def _portfolio_cli(arguments) -> None:
                         store.finish_scheduler_run(
                             "portfolio_soak_perp", slot, status="success", finished_at=now
                         )
+                result["assets"] = _run_registered_asset_cycles(
+                    store,
+                    provider,
+                    perp_markets=asset_perp_markets,
+                    spot_markets=asset_spot_markets,
+                    config=config,
+                    now=now,
+                )
                 print(json.dumps(result), flush=True)
                 if arguments.once:
                     return
@@ -870,6 +880,7 @@ def _portfolio_cli(arguments) -> None:
             BinanceSpotDailyClient(),
             quote_interval_seconds=config.order_book_interval_seconds,
         )
+        asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config)
         interval = config.risk_interval_seconds
         hyperliquid = (
             _start_portfolio_hyperliquid(config) if not arguments.once else None
@@ -901,6 +912,14 @@ def _portfolio_cli(arguments) -> None:
                 time.sleep(max(1, interval))
                 continue
             _record_portfolio_hyperliquid(store, hyperliquid, now=now)
+            asset_results = _run_registered_asset_cycles(
+                store,
+                provider,
+                perp_markets=asset_perp_markets,
+                spot_markets=asset_spot_markets,
+                config=config,
+                now=now,
+            )
             process_pending_commands(
                 store,
                 now=now,
@@ -1025,6 +1044,7 @@ def _portfolio_cli(arguments) -> None:
                             )
                 result["shadow_errors"] = shadow_errors
             result["risk_fills"] = risk_result["fills"]
+            result["assets"] = asset_results
             result["decision_scopes"] = [scope.value for scope in slots]
             outcome_slot = claim_cadence(store, "signal_outcomes", now, 60)
             if outcome_slot is not None:
@@ -1247,6 +1267,71 @@ def _record_portfolio_hyperliquid(
         frame = current.latest_frame(now=now)
         if frame is not None:
             store.record_venue_frame(frame)
+
+
+def _new_asset_market_caches(config: IntradayConfig) -> tuple[dict, dict]:
+    symbols = tuple(symbol for symbol in ASSET_REGISTRY if symbol != "BTCUSDT")
+    perp = {
+        symbol: MultiCadenceMarketCache(BinanceUsdMClient())
+        for symbol in symbols
+    }
+    spot = {
+        symbol: MultiCadenceSpotCache(
+            BinanceSpotDailyClient(),
+            quote_interval_seconds=config.order_book_interval_seconds,
+        )
+        for symbol in symbols
+    }
+    return perp, spot
+
+
+def _run_registered_asset_cycles(
+    store: IntradayStore,
+    provider,
+    *,
+    perp_markets: dict,
+    spot_markets: dict,
+    config: IntradayConfig,
+    now: datetime,
+) -> dict[str, str]:
+    """Collect every registered asset with per-symbol failure isolation."""
+    results = {}
+    for symbol in perp_markets:
+        for scope, markets, interval in (
+            (
+                DecisionScope.PERP_INTRADAY,
+                perp_markets,
+                config.perp_decision_interval_seconds,
+            ),
+            (DecisionScope.SPOT_DAILY, spot_markets, 86_400),
+        ):
+            job = f"asset_{scope.value}_{symbol.lower()}"
+            slot = claim_cadence(store, job, now, interval)
+            if slot is None:
+                continue
+            try:
+                snapshot = markets[symbol].snapshot(symbol, now=now)
+                result = run_asset_lifecycle_observation(
+                    store, provider, snapshot, scope=scope, now=now
+                )
+            except Exception as error:
+                results[f"{symbol}:{scope.value}"] = f"error:{type(error).__name__}"
+                store.finish_scheduler_run(
+                    job,
+                    slot,
+                    status="error",
+                    error_code=type(error).__name__,
+                    finished_at=datetime.now(timezone.utc),
+                )
+            else:
+                results[f"{symbol}:{scope.value}"] = result
+                store.finish_scheduler_run(
+                    job,
+                    slot,
+                    status="success",
+                    finished_at=datetime.now(timezone.utc),
+                )
+    return results
 
 
 def _analysis_loop(config: IntradayConfig) -> None:

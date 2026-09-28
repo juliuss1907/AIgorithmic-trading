@@ -167,8 +167,11 @@ class JevDecisionProvider:
         )
 
     @staticmethod
-    def _questions(scope: DecisionScope | None = None) -> dict:
-        market = "BTC spot" if scope == DecisionScope.SPOT_DAILY else "BTC perpetual"
+    def _questions(
+        scope: DecisionScope | None = None, symbol: str = "BTCUSDT"
+    ) -> dict:
+        market_type = "spot" if scope == DecisionScope.SPOT_DAILY else "perpetual"
+        market = f"{symbol} {market_type}"
         horizon = "daily/swing" if scope == DecisionScope.SPOT_DAILY else "intraday"
         return {
             "direction": {
@@ -404,7 +407,7 @@ class JevDecisionProvider:
         payload = {
             "model": self.credential.profile.model,
             "state": state,
-            "questions": self._questions(scope),
+            "questions": self._questions(scope, snapshot.symbol),
         }
         body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         request_hash = hashlib.sha256(body).hexdigest()

@@ -9,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from intraday.assets import AssetStage
 from intraday.contracts import DecisionScope, FeatureSnapshot
 from intraday.journal import record_scoped_signal
 from intraday.spot_signal import evaluate_donchian
@@ -78,6 +79,7 @@ def run_soak_cycle(
             else:
                 status = "success"
         store.record_portfolio_soak_tick(
+            symbol=snapshot.symbol,
             scope=scope,
             status=status,
             created_at=now,
@@ -98,6 +100,7 @@ def run_spot_soak_observation(
     """Record the daily Spot heartbeat and call Jev only for a valid setup."""
     if rule is None or not candles:
         store.record_portfolio_soak_tick(
+            symbol=snapshot.symbol,
             scope=DecisionScope.SPOT_DAILY,
             status="skipped_no_setup",
             created_at=now,
@@ -118,6 +121,30 @@ def run_spot_soak_observation(
         now=now,
         scopes=(DecisionScope.SPOT_DAILY,),
     )[DecisionScope.SPOT_DAILY.value]
+
+
+def run_asset_lifecycle_observation(
+    store,
+    provider,
+    snapshot: FeatureSnapshot,
+    *,
+    scope: DecisionScope,
+    now: datetime,
+) -> str:
+    """Persist registered shadow data and cross the model boundary only in soak."""
+    lifecycle = store.asset_lifecycle(snapshot.symbol, scope)
+    store.record_snapshot(snapshot)
+    if lifecycle.stage is AssetStage.DISABLED:
+        return "disabled"
+    if lifecycle.stage is AssetStage.SHADOW:
+        return "shadow_recorded"
+    if lifecycle.stage is AssetStage.SOAK:
+        return run_soak_cycle(
+            store, provider, snapshot, now=now, scopes=(scope,)
+        )[scope.value]
+    raise ValueError(
+        f"{snapshot.symbol} {scope.value} paper runtime is not enabled"
+    )
 
 
 def evaluate_portfolio_soak(
