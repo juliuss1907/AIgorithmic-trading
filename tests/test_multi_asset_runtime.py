@@ -117,3 +117,22 @@ def test_eth_soak_calls_model_and_journals_only_promoted_scope(tmp_path):
             "SELECT symbol, scope, gate_passed, gate_reason FROM signals"
         ).fetchone()
     assert row == ("ETHUSDT", "perp_intraday", 0, "soak_observation_only")
+
+
+def test_eth_spot_soak_does_not_inherit_btc_rule_or_call_model(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    provider = Provider()
+    lifecycle = store.asset_lifecycle("ETHUSDT", DecisionScope.SPOT_DAILY)
+    store.save_asset_lifecycle(lifecycle.start_soak(), updated_at=NOW)
+
+    status = run_asset_lifecycle_observation(
+        store,
+        provider,
+        snapshot("ETHUSDT", DecisionScope.SPOT_DAILY),
+        scope=DecisionScope.SPOT_DAILY,
+        now=NOW,
+    )
+
+    assert status == "skipped_no_setup"
+    assert provider.calls == []
+    assert store.list_portfolio_soak_ticks(symbol="ETHUSDT")[0]["scope"] == "spot_daily"

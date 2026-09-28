@@ -4,6 +4,7 @@ import pytest
 
 from intraday.contracts import ExternalObservation
 from intraday.external_context import (
+    VariationalCollector,
     parse_aster_snapshot,
     parse_cryptorank_context,
     parse_lighter_market_stats,
@@ -247,3 +248,35 @@ def test_cycle_records_batch_results_per_asset(tmp_path):
     assert sorted(item.symbol for item in store.list_external_observations(
         source="variational"
     )) == ["BTCUSDT", "ETHUSDT"]
+
+
+def test_variational_batch_isolates_one_missing_asset(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    collector = VariationalCollector(
+        fetch_json=lambda url: {
+            "tvl": "100000000",
+            "listings": [{
+                "ticker": "BTC", "mark_price": "100000", "volume_24h": "123",
+                "open_interest": {"long_open_interest": "110", "short_open_interest": "90"},
+                "funding_rate": "0.0002", "funding_interval_s": 28800,
+                "base_spread_bps": "0.5", "quotes": {
+                    "updated_at": "2026-09-27T05:59:00Z",
+                    "size_1k": {"bid": "99995", "ask": "100005"},
+                },
+            }],
+        },
+        symbols=("BTCUSDT", "ETHUSDT"),
+    )
+
+    result = run_external_context_cycle(
+        store, collectors={"variational": collector}, now=NOW
+    )
+
+    assert result == {
+        "recorded": ["variational"],
+        "failed": [],
+        "partial": {"variational": ["ETHUSDT"]},
+    }
+    assert [item.symbol for item in store.list_external_observations(
+        source="variational"
+    )] == ["BTCUSDT"]

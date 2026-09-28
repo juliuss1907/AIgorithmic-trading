@@ -127,7 +127,9 @@ def _public_call(call) -> dict:
     }
 
 
-def _market_snapshot(store, *, market: str, symbol: str | None = None) -> dict | None:
+def _market_snapshot(
+    store, *, market: str, symbol: str = "BTCUSDT"
+) -> dict | None:
     snapshot = store.latest_snapshot(market=market, symbol=symbol)
     if snapshot is None:
         return None

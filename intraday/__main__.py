@@ -1312,7 +1312,20 @@ def _run_registered_asset_cycles(
             try:
                 snapshot = markets[symbol].snapshot(symbol, now=now)
                 result = run_asset_lifecycle_observation(
-                    store, provider, snapshot, scope=scope, now=now
+                    store,
+                    provider,
+                    snapshot,
+                    scope=scope,
+                    now=now,
+                    # New assets do not inherit BTC's Spot champion. Until an
+                    # asset-owned rule registry lands, Spot soak records a safe
+                    # no-setup heartbeat and never crosses the model boundary.
+                    spot_rule=None,
+                    spot_candles=(
+                        markets[symbol].closed_candles()
+                        if scope is DecisionScope.SPOT_DAILY
+                        else None
+                    ),
                 )
             except Exception as error:
                 results[f"{symbol}:{scope.value}"] = f"error:{type(error).__name__}"

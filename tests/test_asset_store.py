@@ -45,6 +45,24 @@ def test_asset_lifecycle_round_trips_by_symbol_and_scope(tmp_path):
     ).stage is AssetStage.SHADOW
 
 
+def test_legacy_snapshot_readers_remain_btc_scoped(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    btc = FeatureSnapshot.create(
+        symbol="BTCUSDT", event_time=NOW, built_at=NOW,
+        bid=99, ask=101, features={"price": 100}, freshness={"book": True},
+    )
+    eth = FeatureSnapshot.create(
+        symbol="ETHUSDT", event_time=NOW, built_at=NOW,
+        bid=3_999, ask=4_001, features={"price": 4_000}, freshness={"book": True},
+    )
+    store.record_snapshot(btc)
+    store.record_snapshot(eth)
+
+    assert store.latest_snapshot() == btc
+    assert store.list_snapshots() == [btc]
+    assert store.latest_snapshot(symbol="ETHUSDT") == eth
+
+
 def test_schema_v19_backfills_btc_snapshot_and_soak_ownership(tmp_path):
     database = tmp_path / "intraday.sqlite"
     snapshot = FeatureSnapshot.create(

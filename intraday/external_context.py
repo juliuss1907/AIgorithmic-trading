@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import asyncio
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
 from urllib.parse import urlencode
@@ -27,6 +28,16 @@ ASTER_WS_URL_TEMPLATE = "wss://fstream.asterdex.com/ws/{stream}@forceOrder"
 def _registered_symbols(symbols: tuple[str, ...] | None) -> tuple[str, ...]:
     requested = symbols or tuple(ASSET_REGISTRY)
     return tuple(asset_spec(symbol).symbol for symbol in requested)
+
+
+@dataclass(frozen=True)
+class AssetCollectionBatch:
+    observations: tuple[ExternalObservation, ...]
+    failed_symbols: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.observations and not self.failed_symbols:
+            raise ValueError("collection batch cannot be empty")
 
 
 def _timestamp(value, fallback: datetime) -> datetime:
@@ -256,12 +267,17 @@ class VariationalCollector:
         self.fetch_json = fetch_json
         self.symbols = _registered_symbols(symbols)
 
-    def __call__(self, now: datetime) -> tuple[ExternalObservation, ...]:
+    def __call__(self, now: datetime) -> AssetCollectionBatch:
         payload = self.fetch_json(VARIATIONAL_STATS_URL)
-        return tuple(
-            parse_variational_stats(payload, symbol=symbol, received_at=now)
-            for symbol in self.symbols
-        )
+        observations, failed = [], []
+        for symbol in self.symbols:
+            try:
+                observations.append(
+                    parse_variational_stats(payload, symbol=symbol, received_at=now)
+                )
+            except (KeyError, TypeError, ValueError):
+                failed.append(symbol)
+        return AssetCollectionBatch(tuple(observations), tuple(failed))
 
 
 class AsterLiquidationFeed:
@@ -326,21 +342,24 @@ class AsterCollector:
         self.feed, self.fetch_json = feed, fetch_json
         self.symbols = _registered_symbols(symbols)
 
-    def __call__(self, now: datetime) -> tuple[ExternalObservation, ...]:
-        observations = []
+    def __call__(self, now: datetime) -> AssetCollectionBatch:
+        observations, failed = [], []
         for symbol in self.symbols:
-            spec = asset_spec(symbol)
-            query = urlencode({"symbol": spec.aster_symbol})
-            premium = self.fetch_json(f"{ASTER_BASE_URL}/fapi/v3/premiumIndex?{query}")
-            book = self.fetch_json(f"{ASTER_BASE_URL}/fapi/v3/depth?{query}&limit=100")
-            observations.append(parse_aster_snapshot(
-                symbol=symbol,
-                premium=premium,
-                book=book,
-                liquidation=self.feed.latest(symbol) if self.feed else None,
-                received_at=now,
-            ))
-        return tuple(observations)
+            try:
+                spec = asset_spec(symbol)
+                query = urlencode({"symbol": spec.aster_symbol})
+                premium = self.fetch_json(f"{ASTER_BASE_URL}/fapi/v3/premiumIndex?{query}")
+                book = self.fetch_json(f"{ASTER_BASE_URL}/fapi/v3/depth?{query}&limit=100")
+                observations.append(parse_aster_snapshot(
+                    symbol=symbol,
+                    premium=premium,
+                    book=book,
+                    liquidation=self.feed.latest(symbol) if self.feed else None,
+                    received_at=now,
+                ))
+            except Exception:
+                failed.append(symbol)
+        return AssetCollectionBatch(tuple(observations), tuple(failed))
 
 
 class LighterCollector:
@@ -367,30 +386,46 @@ class LighterCollector:
                 )
         raise ValueError(f"Lighter {spec.base_asset} market stats were not received")
 
-    def __call__(self, now: datetime) -> tuple[ExternalObservation, ...]:
+    def __call__(self, now: datetime) -> AssetCollectionBatch:
         from websockets.sync.client import connect
 
-        observations = []
+        observations, failed = [], []
         for symbol in self.symbols:
-            with connect(LIGHTER_WS_URL, open_timeout=10, close_timeout=2) as socket:
-                observations.append(self._collect_symbol(socket, symbol, now))
-        return tuple(observations)
+            try:
+                with connect(LIGHTER_WS_URL, open_timeout=10, close_timeout=2) as socket:
+                    observations.append(self._collect_symbol(socket, symbol, now))
+            except Exception:
+                failed.append(symbol)
+        return AssetCollectionBatch(tuple(observations), tuple(failed))
 
 
 def run_external_context_cycle(store, *, collectors: dict[str, Callable], now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
-    recorded, failed = [], []
+    recorded, failed, partial = [], [], {}
     for source, collector in collectors.items():
         try:
             result = collector(now)
-            observations = (result,) if isinstance(result, ExternalObservation) else tuple(result)
+            if isinstance(result, AssetCollectionBatch):
+                observations = result.observations
+                failed_symbols = result.failed_symbols
+            else:
+                observations = (result,) if isinstance(result, ExternalObservation) else tuple(result)
+                failed_symbols = ()
             if not observations:
-                raise ValueError("collector returned no observations")
+                failed.append(source)
+                if failed_symbols:
+                    partial[source] = list(failed_symbols)
+                continue
             for observation in observations:
                 if observation.source != source:
                     raise ValueError("collector returned the wrong source")
                 store.record_external_observation(observation)
             recorded.append(source)
+            if failed_symbols:
+                partial[source] = list(failed_symbols)
         except Exception:
             failed.append(source)
-    return {"recorded": recorded, "failed": failed}
+    outcome = {"recorded": recorded, "failed": failed}
+    if partial:
+        outcome["partial"] = partial
+    return outcome

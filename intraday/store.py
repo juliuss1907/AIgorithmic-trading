@@ -1019,7 +1019,8 @@ class IntradayStore:
     ) -> list[dict]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT s.id, s.timestamp, json_extract(s.jev_answers, '$.direction.choice') "
+                "SELECT s.id, s.timestamp, s.symbol, s.market, "
+                "json_extract(s.jev_answers, '$.direction.choice') "
                 "AS direction FROM signals s LEFT JOIN signal_outcomes o "
                 "ON o.signal_id=s.id AND o.horizon_sec=? "
                 "WHERE s.scope=? AND o.id IS NULL AND julianday(s.timestamp)<=julianday(?) "
@@ -1029,15 +1030,22 @@ class IntradayStore:
         return [dict(row) for row in rows]
 
     def list_snapshots_between(
-        self, start: datetime, end: datetime
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        symbol: str = "BTCUSDT",
+        market: str = "binance_usdm_perp",
     ) -> list[FeatureSnapshot]:
+        symbol = asset_spec(symbol).symbol
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM snapshots "
-                "WHERE julianday(event_time)>=julianday(?) "
+                "WHERE symbol=? AND market=? "
+                "AND julianday(event_time)>=julianday(?) "
                 "AND julianday(event_time)<=julianday(?) "
                 "ORDER BY event_time, id",
-                (start.isoformat(), end.isoformat()),
+                (symbol, market, start.isoformat(), end.isoformat()),
             ).fetchall()
         return [FeatureSnapshot.model_validate_json(row["payload_json"]) for row in rows]
 
@@ -1294,12 +1302,14 @@ class IntradayStore:
         with self._connect() as connection:
             connection.execute(
                 "INSERT OR IGNORE INTO snapshots "
-                "(id, event_time, payload_json, market) VALUES (?, ?, ?, ?)",
+                "(id, event_time, payload_json, market, symbol) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (
                     snapshot.snapshot_id,
                     snapshot.event_time.isoformat(),
                     _json(snapshot),
                     snapshot.market,
+                    snapshot.symbol,
                 ),
             )
 
@@ -1943,14 +1953,17 @@ class IntradayStore:
         limit: int = 100_000,
         *,
         market: str = "binance_usdm_perp",
+        symbol: str = "BTCUSDT",
     ) -> list[FeatureSnapshot]:
         if not 1 <= limit <= 2_000_000:
             raise ValueError("limit must be between 1 and 2000000")
+        symbol = asset_spec(symbol).symbol
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM snapshots "
-                "WHERE market=? ORDER BY event_time DESC, id DESC LIMIT ?",
-                (market, limit),
+                "WHERE market=? AND symbol=? "
+                "ORDER BY event_time DESC, id DESC LIMIT ?",
+                (market, symbol, limit),
             ).fetchall()
         return [
             FeatureSnapshot.model_validate_json(row["payload_json"])
@@ -1961,31 +1974,31 @@ class IntradayStore:
         self,
         *,
         market: str = "binance_usdm_perp",
-        symbol: str | None = None,
+        symbol: str = "BTCUSDT",
     ) -> FeatureSnapshot | None:
-        parameters: tuple = (market,)
-        symbol_filter = ""
-        if symbol is not None:
-            symbol = asset_spec(symbol).symbol
-            symbol_filter = " AND symbol=?"
-            parameters += (symbol,)
+        symbol = asset_spec(symbol).symbol
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT payload_json FROM snapshots "
-                f"WHERE market=?{symbol_filter} "
+                "WHERE market=? AND symbol=? "
                 "ORDER BY event_time DESC, id DESC LIMIT 1",
-                parameters,
+                (market, symbol),
             ).fetchone()
         return None if row is None else FeatureSnapshot.model_validate_json(row["payload_json"])
 
     def snapshot_history_bounds(
-        self, *, market: str = "binance_usdm_perp"
+        self,
+        *,
+        market: str = "binance_usdm_perp",
+        symbol: str = "BTCUSDT",
     ) -> dict:
+        symbol = asset_spec(symbol).symbol
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT COUNT(*) AS snapshots, MIN(event_time) AS first_event_time, "
-                "MAX(event_time) AS last_event_time FROM snapshots WHERE market=?",
-                (market,),
+                "MAX(event_time) AS last_event_time FROM snapshots "
+                "WHERE market=? AND symbol=?",
+                (market, symbol),
             ).fetchone()
         return dict(row)
 
@@ -1995,17 +2008,20 @@ class IntradayStore:
         *,
         limit: int = 2_000_000,
         market: str = "binance_usdm_perp",
+        symbol: str = "BTCUSDT",
     ) -> list[FeatureSnapshot]:
         if since.tzinfo is None or since.utcoffset() is None:
             raise ValueError("snapshot boundary must be timezone-aware")
         if not 1 <= limit <= 2_000_000:
             raise ValueError("limit must be between 1 and 2000000")
+        symbol = asset_spec(symbol).symbol
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM snapshots "
-                "WHERE market=? AND julianday(event_time) >= julianday(?) "
+                "WHERE market=? AND symbol=? "
+                "AND julianday(event_time) >= julianday(?) "
                 "ORDER BY event_time DESC, id DESC LIMIT ?",
-                (market, since.isoformat(), limit),
+                (market, symbol, since.isoformat(), limit),
             ).fetchall()
         return [
             FeatureSnapshot.model_validate_json(row["payload_json"])

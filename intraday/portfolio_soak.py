@@ -109,6 +109,7 @@ def run_spot_soak_observation(
     observation = evaluate_donchian(candles, rule.parameters)
     if not observation.entry:
         store.record_portfolio_soak_tick(
+            symbol=snapshot.symbol,
             scope=DecisionScope.SPOT_DAILY,
             status="skipped_no_setup",
             created_at=now,
@@ -130,6 +131,8 @@ def run_asset_lifecycle_observation(
     *,
     scope: DecisionScope,
     now: datetime,
+    spot_rule=None,
+    spot_candles: list[list] | None = None,
 ) -> str:
     """Persist registered shadow data and cross the model boundary only in soak."""
     lifecycle = store.asset_lifecycle(snapshot.symbol, scope)
@@ -139,6 +142,15 @@ def run_asset_lifecycle_observation(
     if lifecycle.stage is AssetStage.SHADOW:
         return "shadow_recorded"
     if lifecycle.stage is AssetStage.SOAK:
+        if scope is DecisionScope.SPOT_DAILY:
+            return run_spot_soak_observation(
+                store,
+                provider,
+                snapshot,
+                now=now,
+                rule=spot_rule,
+                candles=spot_candles,
+            )
         return run_soak_cycle(
             store, provider, snapshot, now=now, scopes=(scope,)
         )[scope.value]
