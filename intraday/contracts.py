@@ -98,7 +98,7 @@ class StrictContract(BaseModel):
 
 class FeatureSnapshot(StrictContract):
     snapshot_id: str = Field(min_length=16, max_length=64)
-    symbol: Literal["BTCUSDT"] = "BTCUSDT"
+    symbol: str = "BTCUSDT"
     market: Literal["binance_usdm_perp", "binance_spot"] = "binance_usdm_perp"
     timeframe: Literal["1h", "1d"] = "1h"
     feature_schema_version: Literal["1", "2"] = "1"
@@ -113,6 +113,16 @@ class FeatureSnapshot(StrictContract):
 
     _event_time_is_aware = field_validator("event_time")(_aware)
     _built_at_is_aware = field_validator("built_at")(_aware)
+
+    @field_validator("symbol")
+    @classmethod
+    def registered_symbol(cls, value: str) -> str:
+        # Imported lazily because the asset registry uses DecisionScope from this
+        # contract module. Keeping the dependency here avoids broadening all symbol
+        # strings while the rollout remains explicitly registry-gated.
+        from intraday.assets import asset_spec
+
+        return asset_spec(value).symbol
 
     @model_validator(mode="after")
     def valid_market_state(self):
@@ -185,6 +195,9 @@ class FeatureSnapshot(StrictContract):
         freshness: dict[str, bool],
         quality_flags: tuple[str, ...] = (),
     ) -> "FeatureSnapshot":
+        from intraday.assets import asset_spec
+
+        symbol = asset_spec(symbol).symbol
         checksum = cls._checksum_for(
             symbol=symbol,
             market=market,

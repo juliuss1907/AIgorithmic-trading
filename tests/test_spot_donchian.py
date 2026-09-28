@@ -5,6 +5,7 @@ import pytest
 from intraday.contracts import SpotRuleParameters
 from intraday.market import StaleMarketData
 from intraday.spot_signal import (
+    BinanceSpotDailyClient,
     MultiCadenceSpotCache,
     build_spot_feature_snapshot,
     evaluate_donchian,
@@ -82,6 +83,22 @@ def test_spot_snapshot_uses_book_midpoint_and_closed_daily_candle():
     assert snapshot.bid == 140
     assert snapshot.ask == 140.2
     assert snapshot.features["volume_1d"] == 10
+
+
+def test_spot_client_accepts_registered_assets_only():
+    calls = []
+
+    def fetch(path, params):
+        calls.append((path, params))
+        return {"bids": [], "asks": []}
+
+    client = BinanceSpotDailyClient(fetch_json=fetch)
+
+    assert client.order_book(symbol="ethusdt") == {"bids": [], "asks": []}
+    assert calls == [("/api/v3/depth", {"symbol": "ETHUSDT", "limit": 20})]
+
+    with pytest.raises(ValueError, match="unsupported asset symbol"):
+        client.order_book(symbol="DOGEUSDT")
 
 
 def test_spot_cache_refreshes_quotes_without_refetching_daily_candles():

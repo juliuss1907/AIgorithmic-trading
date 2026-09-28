@@ -10,6 +10,7 @@ from typing import Callable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from intraday.assets import asset_spec
 from intraday.contracts import FeatureSnapshot, SpotRuleParameters
 from intraday.market import StaleMarketData, compute_indicators
 
@@ -130,7 +131,7 @@ def build_spot_feature_snapshot(
 
 
 class BinanceSpotDailyClient:
-    """Read-only public BTCUSDT daily candles; there is no order endpoint."""
+    """Read-only public daily candles and quotes for registered spot assets."""
 
     def __init__(
         self,
@@ -158,8 +159,7 @@ class BinanceSpotDailyClient:
         limit: int = 100,
         now: datetime | None = None,
     ) -> list[list]:
-        if symbol != "BTCUSDT":
-            raise ValueError("v1 only permits BTCUSDT")
+        symbol = asset_spec(symbol).binance_spot_symbol
         if not 35 <= limit <= 1000:
             raise ValueError("limit must be between 35 and 1000")
         now = now or datetime.now(timezone.utc)
@@ -171,8 +171,7 @@ class BinanceSpotDailyClient:
         return [row for row in rows if int(row[6]) <= cutoff]
 
     def order_book(self, *, symbol: str = "BTCUSDT", limit: int = 20) -> dict:
-        if symbol != "BTCUSDT":
-            raise ValueError("v1 only permits BTCUSDT")
+        symbol = asset_spec(symbol).binance_spot_symbol
         if limit not in {5, 10, 20, 50, 100, 500, 1000}:
             raise ValueError("unsupported depth limit")
         return self._fetch_json(
