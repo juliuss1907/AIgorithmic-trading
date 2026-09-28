@@ -9,6 +9,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from intraday.assets import ASSET_REGISTRY, AssetLifecycle, AssetStage, asset_spec
 from intraday.contracts import (
     AnalystReport,
     DecisionMode,
@@ -67,7 +68,8 @@ class IntradayStore:
                     id TEXT PRIMARY KEY,
                     event_time TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
-                    market TEXT NOT NULL DEFAULT 'binance_usdm_perp'
+                    market TEXT NOT NULL DEFAULT 'binance_usdm_perp',
+                    symbol TEXT NOT NULL DEFAULT 'BTCUSDT'
                 );
                 CREATE INDEX IF NOT EXISTS idx_snapshots_event_time
                     ON snapshots(event_time, id);
@@ -273,6 +275,7 @@ class IntradayStore:
                 );
                 CREATE TABLE IF NOT EXISTS portfolio_soak_ticks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL DEFAULT 'BTCUSDT',
                     scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
                     status TEXT NOT NULL CHECK (status IN (
                         'success', 'skipped_no_setup', 'provider_error', 'gate_error'
@@ -525,6 +528,16 @@ class IntradayStore:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS asset_scope_lifecycle (
+                    symbol TEXT NOT NULL,
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    stage TEXT NOT NULL CHECK (stage IN (
+                        'disabled', 'shadow', 'soak', 'paper'
+                    )),
+                    evaluation_id TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (symbol, scope)
+                );
                 INSERT OR IGNORE INTO schema_meta VALUES ('schema_version', '1');
                 """
             )
@@ -563,9 +576,18 @@ class IntradayStore:
                     "ALTER TABLE snapshots ADD COLUMN market TEXT NOT NULL "
                     "DEFAULT 'binance_usdm_perp'"
                 )
+            if "symbol" not in snapshot_columns:
+                connection.execute(
+                    "ALTER TABLE snapshots ADD COLUMN symbol TEXT NOT NULL "
+                    "DEFAULT 'BTCUSDT'"
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_snapshots_market_time "
                 "ON snapshots(market, event_time, id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_snapshots_symbol_market_time "
+                "ON snapshots(symbol, market, event_time, id)"
             )
             soak_columns = {
                 row[1]
@@ -576,13 +598,105 @@ class IntradayStore:
                     "ALTER TABLE portfolio_soak_ticks ADD COLUMN evidence_version "
                     "TEXT NOT NULL DEFAULT 'market-v1'"
                 )
+            if "symbol" not in soak_columns:
+                connection.execute(
+                    "ALTER TABLE portfolio_soak_ticks ADD COLUMN symbol TEXT NOT NULL "
+                    "DEFAULT 'BTCUSDT'"
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_portfolio_soak_evidence_time "
                 "ON portfolio_soak_ticks(evidence_version, created_at, scope)"
             )
             connection.execute(
-                "UPDATE schema_meta SET value='19' WHERE key='schema_version'"
+                "CREATE INDEX IF NOT EXISTS idx_portfolio_soak_asset_time "
+                "ON portfolio_soak_ticks(symbol, scope, evidence_version, created_at)"
             )
+            parent_row = connection.execute(
+                "SELECT payload_json FROM parent_portfolio_state WHERE singleton=1"
+            ).fetchone()
+            btc_stage = AssetStage.SOAK
+            if parent_row is not None:
+                try:
+                    if json.loads(parent_row["payload_json"]).get("paper_active"):
+                        btc_stage = AssetStage.PAPER
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    pass
+            seeded_at = datetime.now(timezone.utc).isoformat()
+            for spec in ASSET_REGISTRY.values():
+                stage = btc_stage if spec.symbol == "BTCUSDT" else AssetStage.SHADOW
+                for scope in spec.enabled_scopes:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO asset_scope_lifecycle "
+                        "(symbol, scope, stage, evaluation_id, updated_at) "
+                        "VALUES (?, ?, ?, NULL, ?)",
+                        (spec.symbol, scope.value, stage.value, seeded_at),
+                    )
+            connection.execute(
+                "UPDATE schema_meta SET value='20' WHERE key='schema_version'"
+            )
+
+    def asset_lifecycle(
+        self, symbol: str, scope: DecisionScope
+    ) -> AssetLifecycle:
+        normalized = asset_spec(symbol).symbol
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT symbol, scope, stage FROM asset_scope_lifecycle "
+                "WHERE symbol=? AND scope=?",
+                (normalized, scope.value),
+            ).fetchone()
+        if row is None:
+            raise ValueError("asset lifecycle is not registered")
+        return AssetLifecycle(
+            symbol=row["symbol"],
+            scope=DecisionScope(row["scope"]),
+            stage=AssetStage(row["stage"]),
+        )
+
+    def list_asset_lifecycles(self, symbol: str | None = None) -> list[AssetLifecycle]:
+        query = "SELECT symbol, scope, stage FROM asset_scope_lifecycle"
+        parameters: tuple[str, ...] = ()
+        if symbol is not None:
+            normalized = asset_spec(symbol).symbol
+            query += " WHERE symbol=?"
+            parameters = (normalized,)
+        query += " ORDER BY symbol, scope"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [
+            AssetLifecycle(
+                symbol=row["symbol"],
+                scope=DecisionScope(row["scope"]),
+                stage=AssetStage(row["stage"]),
+            )
+            for row in rows
+        ]
+
+    def save_asset_lifecycle(
+        self,
+        lifecycle: AssetLifecycle,
+        *,
+        updated_at: datetime,
+        evaluation_id: str | None = None,
+    ) -> AssetLifecycle:
+        if updated_at.tzinfo is None or updated_at.utcoffset() is None:
+            raise ValueError("asset lifecycle timestamp must be timezone-aware")
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO asset_scope_lifecycle "
+                "(symbol, scope, stage, evaluation_id, updated_at) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(symbol, scope) DO UPDATE SET "
+                "stage=excluded.stage, evaluation_id=excluded.evaluation_id, "
+                "updated_at=excluded.updated_at",
+                (
+                    lifecycle.symbol,
+                    lifecycle.scope.value,
+                    lifecycle.stage.value,
+                    evaluation_id,
+                    updated_at.astimezone(timezone.utc).isoformat(),
+                ),
+            )
+        return self.asset_lifecycle(lifecycle.symbol, lifecycle.scope)
 
     def load_scoped_rule(self, rule_id: str) -> ScopedRuleCandidate | None:
         with self._connect() as connection:
@@ -1113,12 +1227,14 @@ class IntradayStore:
                 return dict(existing)
             connection.execute(
                 "INSERT OR IGNORE INTO snapshots "
-                "(id, event_time, payload_json, market) VALUES (?, ?, ?, ?)",
+                "(id, event_time, payload_json, market, symbol) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (
                     snapshot.snapshot_id,
                     snapshot.event_time.isoformat(),
                     _json(snapshot),
                     snapshot.market,
+                    snapshot.symbol,
                 ),
             )
             connection.execute(

@@ -99,6 +99,11 @@ class AssetLifecycle:
         object.__setattr__(self, "symbol", spec.symbol)
         if self.scope not in spec.enabled_scopes:
             raise ValueError("scope is not enabled for this asset")
+        if (
+            spec.capability is AssetCapability.SHADOW_ONLY
+            and self.stage not in {AssetStage.DISABLED, AssetStage.SHADOW}
+        ):
+            raise ValueError(f"{spec.symbol} is shadow-only")
 
     @classmethod
     def initial(cls, spec: AssetSpec, scope: DecisionScope) -> "AssetLifecycle":

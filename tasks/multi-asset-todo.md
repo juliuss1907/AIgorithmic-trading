@@ -1,7 +1,7 @@
 # Multi-asset implementation checklist
 
-- [ ] Add typed registry for BTC, ETH, HYPE, NEAR, ZEC, and SOL.
-- [ ] Add per-symbol/per-scope shadow lifecycle and validation.
+- [x] Add typed registry for BTC, ETH, HYPE, NEAR, ZEC, and SOL.
+- [x] Add per-symbol/per-scope shadow lifecycle and validation.
 - [ ] Add additive schema v20 migration with BTC backfill.
 - [ ] Parameterize Binance Spot and USD-M clients.
 - [ ] Parameterize Hyperliquid, Aster, Variational, and Lighter collectors.

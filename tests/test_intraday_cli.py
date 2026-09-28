@@ -665,7 +665,7 @@ def test_doctor_reports_safe_defaults(monkeypatch, capsys, tmp_path):
     assert result["leverage"] == 3
     assert result["cross_venue_mode"] == "shadow"
     assert result["hyperliquid_enabled"] is True
-    assert result["schema_version"] == 19
+    assert result["schema_version"] == 20
     assert result["feature_schema_version"] == "2"
     assert result["soak_evidence_version"] == "scope-price-v2"
     assert result["markets"] == {
