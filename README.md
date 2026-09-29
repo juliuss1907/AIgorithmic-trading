@@ -152,6 +152,20 @@ SHA-256 đi kèm. Hãy copy cả file `.sqlite3` và `.manifest.json` sang máy/
 MVP này chưa tự lên lịch, retention hoặc restore. Dùng `--output-dir` để chọn nơi lưu khác,
 hoặc `--database` khi backup một database native ngoài deployment Docker đã đăng ký.
 
+Trước khi triển khai bản có schema v22, có thể diễn tập nâng cấp hoàn toàn offline trên
+backup đã xác minh (giữ cả file `.manifest.json` cùng thư mục):
+
+```bash
+aigt upgrade preflight \
+  --backup /absolute/path/to/intraday-TIMESTAMP.sqlite3 \
+  --output /absolute/path/to/upgrade-preflight.json
+```
+
+Lệnh chỉ tạo bản sao tạm và báo cáo JSON; không sửa backup gốc, database đang chạy,
+worker hoặc trạng thái kích hoạt giao dịch. `--work-dir /path/to/dir` chọn thư mục tạm
+có sẵn và đủ dung lượng. Report có quyền 0600, không ghi đè file cũ; exit code 0 chỉ
+khi mọi kiểm tra đều pass. Diễn tập restore trên bản sao không tự restore hệ thống thật.
+
 Mở `http://127.0.0.1:8081/` để xem trạng thái worker, tiến độ soak 72 giờ,
 heartbeat Spot/Perp, model calls và các Jev signal gần nhất. Trang
 `http://127.0.0.1:8081/portfolio` giữ phần chi tiết portfolio/rule/evaluation;

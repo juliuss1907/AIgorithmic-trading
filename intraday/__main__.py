@@ -146,6 +146,7 @@ from intraday.soak_report import (
     serialize_report,
     write_report,
 )
+from intraday.upgrade_preflight import preflight_upgrade_backup
 
 
 def _project_version() -> str:
@@ -231,6 +232,12 @@ def _parser() -> argparse.ArgumentParser:
     backup_create.add_argument("--owner-gid", type=int, default=None, help=argparse.SUPPRESS)
     backup_verify = backup_commands.add_parser("verify")
     backup_verify.add_argument("backup_path")
+    upgrade = commands.add_parser("upgrade")
+    upgrade_commands = upgrade.add_subparsers(dest="upgrade_command", required=True)
+    upgrade_preflight = upgrade_commands.add_parser("preflight")
+    upgrade_preflight.add_argument("--backup", required=True)
+    upgrade_preflight.add_argument("--output")
+    upgrade_preflight.add_argument("--work-dir")
     provider = commands.add_parser("provider")
     provider_commands = provider.add_subparsers(dest="provider_command", required=True)
     for name in ("add", "list", "show", "remove", "test"):
@@ -1746,6 +1753,21 @@ def main() -> None:
         except (ValueError, PermissionError, RuntimeError) as error:
             raise SystemExit(str(error)) from error
         print(json.dumps(result, indent=2))
+        return
+    if arguments.command == "upgrade":
+        try:
+            if arguments.output is not None:
+                prepare_report_output(arguments.output)
+            report = preflight_upgrade_backup(
+                arguments.backup, work_dir=arguments.work_dir,
+            )
+            if arguments.output is not None:
+                write_report(report, arguments.output)
+        except (FileExistsError, PermissionError, OSError, ValueError) as error:
+            raise SystemExit(str(error)) from error
+        sys.stdout.write(serialize_report(report))
+        if report["status"] != "pass":
+            raise SystemExit(1)
         return
     raw_arguments = sys.argv[1:]
     if (

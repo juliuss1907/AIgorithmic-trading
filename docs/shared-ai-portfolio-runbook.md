@@ -241,6 +241,24 @@ schedule backups, prune old artifacts, restore state, encrypt files, or upload o
 secrets are deliberately excluded. Use `--output-dir` for another host directory and
 `--database` only for a native database that is not inside the registered Docker deployment.
 
+For a schema-v22 release, rehearse the upgrade offline against the exact verified artifact:
+
+```bash
+aigt upgrade preflight \
+  --backup /absolute/path/to/intraday-TIMESTAMP.sqlite3 \
+  --output /absolute/path/to/upgrade-preflight.json
+```
+
+The command accepts schema v19–v22, needs the sibling manifest, and copies the backup into a
+private temporary workspace. It checks migration integrity, foreign keys, pre-existing data and
+schema objects, idempotence, and a restore from the original backup into a separate temporary
+copy. `--work-dir /existing/path` selects a temporary workspace with at least 256 MiB free or
+three times the backup size, whichever is greater. A failed check exits nonzero and still emits
+JSON with reason codes; `--output` writes a mode-0600 report without overwriting an existing
+file. This is a rehearsal only: it does not stop the worker, modify the live database, or perform
+an operational restore. A synthetic local pass is not a substitute for running it on a fresh VPS
+backup before the actual upgrade.
+
 ## 8. Ubuntu VPS with Docker Compose
 
 Install the global CLI from the clone, then let it register and manage the Docker deployment:
