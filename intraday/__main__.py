@@ -18,6 +18,32 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from intraday.assets import ASSET_REGISTRY, asset_spec
+from intraday.llm_pipeline import active_llm_client
+from intraday.asset_rule_lifecycle import (
+    activate_asset_spot_rule,
+    bootstrap_asset_spot_rule,
+    evaluate_asset_spot_soak,
+    propose_asset_spot_rule,
+    replay_asset_spot_rule,
+    start_asset_spot_soak,
+)
+from intraday.asset_auto_proposals import auto_propose_asset_rule
+from intraday.spot_4h_lifecycle import (
+    activate_spot_4h_rule,
+    bootstrap_spot_4h_rule,
+    evaluate_spot_4h_soak,
+    refresh_spot_4h_history,
+    replay_spot_4h_rule,
+    start_spot_4h_soak,
+)
+from intraday.perp_bootstrap_lifecycle import (
+    activate_perp_bootstrap,
+    bootstrap_perp_rule,
+    evaluate_perp_post_replay,
+    replay_perp_bootstrap,
+    start_perp_decision_soak,
+)
 from intraday.backups import create_backup, prepare_backup_directory, verify_backup
 from intraday.config import (
     IntradayConfig,
@@ -31,6 +57,7 @@ from intraday.contracts import (
     ProviderKind,
     ProviderProfile,
     ProviderRole,
+    SpotRuleParameters,
 )
 from intraday.cross_venue import (
     CrossVenuePolicy,
@@ -81,7 +108,8 @@ from intraday.positions import build_positions_snapshot
 from intraday.portfolio_soak import (
     CURRENT_SOAK_EVIDENCE_VERSION,
     evaluate_portfolio_soak,
-    load_soak_campaign_evidence,
+    load_parent_soak_campaign_evidence,
+    run_asset_lifecycle_observation,
     run_soak_cycle,
     run_spot_soak_observation,
 )
@@ -102,6 +130,7 @@ from intraday.store import IntradayStore
 from intraday.spot_signal import (
     BinanceSpotDailyClient,
     MultiCadenceSpotCache,
+    MultiTimeframeSpotCache,
     evaluate_donchian,
 )
 from intraday.scheduler import claim_cadence
@@ -118,6 +147,7 @@ from intraday.soak_report import (
     serialize_report,
     write_report,
 )
+from intraday.upgrade_preflight import preflight_upgrade_backup
 
 
 def _project_version() -> str:
@@ -150,6 +180,39 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--database", default=None)
     positions = commands.add_parser("positions")
     positions.add_argument("--database", default=None)
+    assets = commands.add_parser("assets")
+    asset_commands = assets.add_subparsers(dest="assets_command", required=True)
+    assets_list = asset_commands.add_parser("list")
+    assets_list.add_argument("--database", default=None)
+    assets_status = asset_commands.add_parser("status")
+    assets_status.add_argument("symbol", nargs="?")
+    assets_status.add_argument("--database", default=None)
+    assets_start_soak = asset_commands.add_parser("start-soak")
+    assets_start_soak.add_argument("symbol")
+    assets_start_soak.add_argument(
+        "--scope", required=True, choices=[scope.value for scope in DecisionScope]
+    )
+    assets_start_soak.add_argument("--database", default=None)
+    asset_rules = asset_commands.add_parser("rules")
+    asset_rule_commands = asset_rules.add_subparsers(dest="asset_rules_command", required=True)
+    asset_rule_status = asset_rule_commands.add_parser("status")
+    asset_rule_status.add_argument("symbol")
+    asset_rule_status.add_argument("--database", default=None)
+    asset_rule_bootstrap = asset_rule_commands.add_parser("bootstrap")
+    asset_rule_bootstrap.add_argument("symbol")
+    asset_rule_bootstrap.add_argument("--scope", required=True, choices=["spot_daily", "spot_4h", "perp_intraday"])
+    asset_rule_bootstrap.add_argument("--database", default=None)
+    asset_rule_propose = asset_rule_commands.add_parser("propose")
+    asset_rule_propose.add_argument("symbol")
+    asset_rule_propose.add_argument("--scope", required=True, choices=["spot_daily"])
+    asset_rule_propose.add_argument("--database", default=None)
+    asset_rule_propose.add_argument("--secrets-file", default=None)
+    for name in ("replay", "start-soak", "evaluate", "activate"):
+        command = asset_rule_commands.add_parser(name)
+        command.add_argument("candidate_id")
+        command.add_argument("--database", default=None)
+        if name in {"start-soak", "activate"}:
+            command.add_argument("--evaluation-id", required=name == "activate")
     setup = commands.add_parser("setup")
     setup.add_argument("--project-root", type=Path, default=Path.cwd())
     setup.add_argument("--with-hermes", action="store_true")
@@ -170,6 +233,12 @@ def _parser() -> argparse.ArgumentParser:
     backup_create.add_argument("--owner-gid", type=int, default=None, help=argparse.SUPPRESS)
     backup_verify = backup_commands.add_parser("verify")
     backup_verify.add_argument("backup_path")
+    upgrade = commands.add_parser("upgrade")
+    upgrade_commands = upgrade.add_subparsers(dest="upgrade_command", required=True)
+    upgrade_preflight = upgrade_commands.add_parser("preflight")
+    upgrade_preflight.add_argument("--backup", required=True)
+    upgrade_preflight.add_argument("--output")
+    upgrade_preflight.add_argument("--work-dir")
     provider = commands.add_parser("provider")
     provider_commands = provider.add_subparsers(dest="provider_command", required=True)
     for name in ("add", "list", "show", "remove", "test"):
@@ -291,6 +360,113 @@ def _parser() -> argparse.ArgumentParser:
 def _default_secrets_file() -> Path:
     configured = os.getenv("INTRADAY_PROVIDER_SECRETS_FILE")
     return Path(configured).expanduser() if configured else default_provider_secrets_path()
+
+
+def _asset_payload(store: IntradayStore, symbol: str) -> dict:
+    spec = asset_spec(symbol)
+    lifecycles = store.list_asset_lifecycles(spec.symbol)
+    return {
+        "symbol": spec.symbol,
+        "base_asset": spec.base_asset,
+        "quote_asset": spec.quote_asset,
+        "capability": spec.capability.value,
+        "stages": {item.scope.value: item.stage.value for item in lifecycles},
+        "venues": {
+            "binance_spot": spec.binance_spot_symbol,
+            "binance_perp": spec.binance_perp_symbol,
+            "hyperliquid": spec.hyperliquid_coin,
+            "aster": spec.aster_symbol,
+            "variational": spec.variational_ticker,
+            "lighter_market_id": spec.lighter_market_id,
+        },
+    }
+
+
+def _assets_cli(arguments) -> None:
+    store = IntradayStore(resolve_database_path(arguments.database))
+    if arguments.assets_command == "list":
+        result = [_asset_payload(store, symbol) for symbol in ASSET_REGISTRY]
+    elif arguments.assets_command == "status":
+        result = (
+            _asset_payload(store, arguments.symbol)
+            if arguments.symbol
+            else [_asset_payload(store, symbol) for symbol in ASSET_REGISTRY]
+        )
+    elif arguments.assets_command == "rules":
+        command = arguments.asset_rules_command
+        now = datetime.now(timezone.utc)
+        try:
+            if command == "status":
+                symbol = asset_spec(arguments.symbol).symbol
+                result = {
+                    scope.value: {
+                        "registry": store.scoped_rule_registry(scope, symbol=symbol),
+                        "rules": [
+                            {**row, "replay": (
+                                evaluation.model_dump(mode="json") if (evaluation := store.latest_scoped_rule_evaluation(row["id"], kind="replay")) else None
+                            ), "soak": (
+                                evaluation.model_dump(mode="json") if (evaluation := store.latest_scoped_rule_evaluation(row["id"], kind="soak")) else None
+                            )}
+                            for row in store.list_scoped_rules(scope, symbol=symbol)
+                        ],
+                        "lifecycle": store.asset_lifecycle_record(symbol, scope),
+                    }
+                    for scope in DecisionScope
+                }
+            elif command == "bootstrap":
+                bootstrap = {
+                    "spot_daily": bootstrap_asset_spot_rule,
+                    "spot_4h": bootstrap_spot_4h_rule,
+                    "perp_intraday": bootstrap_perp_rule,
+                }[arguments.scope]
+                result = bootstrap(store, arguments.symbol, now=now).model_dump(mode="json")
+            elif command == "propose":
+                client = active_llm_client(
+                    store, ProviderSecretStore(arguments.secrets_file or _default_secrets_file())
+                )
+                if client is None:
+                    raise ValueError("no active LLM provider")
+                result = propose_asset_spot_rule(store, arguments.symbol, client=client, now=now).model_dump(mode="json")
+            elif command == "replay":
+                candidate = store.load_scoped_rule(arguments.candidate_id)
+                replay = (
+                    replay_spot_4h_rule if candidate and candidate.scope is DecisionScope.SPOT_4H
+                    else replay_perp_bootstrap if candidate and candidate.scope is DecisionScope.PERP_INTRADAY
+                    else replay_asset_spot_rule
+                )
+                result = replay(store, arguments.candidate_id, now=now).model_dump(mode="json")
+            elif command == "start-soak":
+                candidate = store.load_scoped_rule(arguments.candidate_id)
+                if candidate and candidate.scope is DecisionScope.PERP_INTRADAY:
+                    result = start_perp_decision_soak(store, arguments.candidate_id, now=now)
+                else:
+                    if not arguments.evaluation_id:
+                        raise ValueError("Spot start-soak requires --evaluation-id")
+                    start = start_spot_4h_soak if candidate and candidate.scope is DecisionScope.SPOT_4H else start_asset_spot_soak
+                    result = start(store, arguments.candidate_id,
+                                   evaluation_id=arguments.evaluation_id, now=now)
+            elif command == "evaluate":
+                candidate = store.load_scoped_rule(arguments.candidate_id)
+                evaluate = (
+                    evaluate_spot_4h_soak if candidate and candidate.scope is DecisionScope.SPOT_4H
+                    else evaluate_perp_post_replay if candidate and candidate.scope is DecisionScope.PERP_INTRADAY
+                    else evaluate_asset_spot_soak
+                )
+                result = evaluate(store, arguments.candidate_id, now=now).model_dump(mode="json")
+            else:
+                candidate = store.load_scoped_rule(arguments.candidate_id)
+                activate = (
+                    activate_spot_4h_rule if candidate and candidate.scope is DecisionScope.SPOT_4H
+                    else activate_perp_bootstrap if candidate and candidate.scope is DecisionScope.PERP_INTRADAY
+                    else activate_asset_spot_rule
+                )
+                result = activate(store, arguments.candidate_id,
+                                  evaluation_id=arguments.evaluation_id, now=now)
+        except (ValueError, RuntimeError) as error:
+            raise SystemExit(str(error)) from error
+    else:
+        raise SystemExit("Use 'aigt assets rules start-soak CANDIDATE_ID --evaluation-id REPLAY_ID'")
+    print(json.dumps(result, indent=2))
 
 
 def _provider_cli(arguments) -> None:
@@ -541,7 +717,7 @@ def _portfolio_cli(arguments) -> None:
     if command == "experiment":
         if arguments.experiment_command == "status":
             result = {}
-            for scope in DecisionScope:
+            for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY):
                 latest = store.latest_decision_experiment_evaluation(scope)
                 result[scope.value] = {
                     "summary": store.decision_experiment_pair_summary(scope),
@@ -553,7 +729,7 @@ def _portfolio_cli(arguments) -> None:
             print(json.dumps(result, indent=2))
             return
         scopes = (
-            tuple(DecisionScope)
+            (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY)
             if arguments.scope == "all"
             else (DecisionScope(arguments.scope),)
         )
@@ -651,6 +827,11 @@ def _portfolio_cli(arguments) -> None:
                 BinanceSpotDailyClient(),
                 quote_interval_seconds=config.order_book_interval_seconds,
             )
+            btc_spot_4h_market = MultiTimeframeSpotCache(
+                BinanceSpotDailyClient(),
+                quote_interval_seconds=config.order_book_interval_seconds,
+            )
+            asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config)
             interval = config.risk_interval_seconds
             background_started = False
             hyperliquid = (
@@ -760,6 +941,61 @@ def _portfolio_cli(arguments) -> None:
                         store.finish_scheduler_run(
                             "portfolio_soak_perp", slot, status="success", finished_at=now
                         )
+                result["assets"] = _run_registered_asset_cycles(
+                    store,
+                    provider,
+                    perp_markets=asset_perp_markets,
+                    spot_markets=asset_spot_markets,
+                    config=config,
+                    now=now,
+                )
+                btc_4h_slot = claim_cadence(
+                    store, "asset_spot_4h_btcusdt", now, 14_400,
+                )
+                if btc_4h_slot is not None:
+                    try:
+                        btc_4h_snapshot = btc_spot_4h_market.snapshot("BTCUSDT", now=now)
+                        for candle_interval in ("4h", "8h", "1d"):
+                            store.record_asset_candles(
+                                "BTCUSDT", candle_interval,
+                                btc_spot_4h_market.closed_candles(candle_interval),
+                            )
+                        candidate = (
+                            store.load_scoped_challenger(DecisionScope.SPOT_4H)
+                            or store.load_active_scoped_rule(DecisionScope.SPOT_4H)
+                        )
+                        result["btc_spot_4h"] = run_asset_lifecycle_observation(
+                            store, provider, btc_4h_snapshot,
+                            scope=DecisionScope.SPOT_4H, now=now,
+                            spot_rule=candidate,
+                            spot_candles=btc_spot_4h_market.closed_candles("4h"),
+                        )
+                    except Exception as error:
+                        result["btc_spot_4h"] = f"error:{type(error).__name__}"
+                        store.finish_scheduler_run(
+                            "asset_spot_4h_btcusdt", btc_4h_slot,
+                            status="error", error_code=type(error).__name__,
+                            finished_at=datetime.now(timezone.utc),
+                        )
+                    else:
+                        store.finish_scheduler_run(
+                            "asset_spot_4h_btcusdt", btc_4h_slot,
+                            status="success", finished_at=datetime.now(timezone.utc),
+                        )
+                outcome_slot = claim_cadence(store, "signal_outcomes", now, 60)
+                if outcome_slot is not None:
+                    try:
+                        result["outcomes"] = evaluate_pending_outcomes(store, now=now)
+                    except Exception as error:
+                        store.finish_scheduler_run(
+                            "signal_outcomes", outcome_slot, status="error",
+                            error_code=type(error).__name__, finished_at=now,
+                        )
+                    else:
+                        store.finish_scheduler_run(
+                            "signal_outcomes", outcome_slot, status="success",
+                            finished_at=now,
+                        )
                 print(json.dumps(result), flush=True)
                 if arguments.once:
                     return
@@ -775,6 +1011,9 @@ def _portfolio_cli(arguments) -> None:
                         threading.Thread(
                             target=_external_context_loop, args=(config,), daemon=True
                         ).start()
+                    threading.Thread(
+                        target=_asset_rule_bootstrap_loop, args=(config,), daemon=True
+                    ).start()
                     background_started = True
                 time.sleep(max(1, interval))
         evaluated_at = (
@@ -782,7 +1021,7 @@ def _portfolio_cli(arguments) -> None:
             if arguments.at
             else datetime.now(timezone.utc)
         )
-        _, ticks = load_soak_campaign_evidence(store)
+        _, ticks = load_parent_soak_campaign_evidence(store)
         evaluation = evaluate_portfolio_soak(ticks, evaluated_at=evaluated_at)
         store.record_portfolio_soak_evaluation(evaluation)
         print(evaluation.model_dump_json(indent=2))
@@ -791,10 +1030,13 @@ def _portfolio_cli(arguments) -> None:
         state = store.load_parent_portfolio_state()
         if state is None or not state.paper_active:
             raise SystemExit("paper worker requires a promoted parent portfolio")
-        spot_rule = store.load_active_scoped_rule(DecisionScope.SPOT_DAILY)
+        legacy_spot_rule = store.load_active_scoped_rule(DecisionScope.SPOT_DAILY)
         perp_rule = store.load_active_scoped_rule(DecisionScope.PERP_INTRADAY)
-        if spot_rule is None or perp_rule is None:
-            raise SystemExit("paper worker requires both scoped champion rules")
+        if perp_rule is None:
+            raise SystemExit("paper worker requires a Perp champion rule")
+        legacy_spot_parameters = (
+            legacy_spot_rule.parameters if legacy_spot_rule else SpotRuleParameters()
+        )
         secret_store = ProviderSecretStore(
             arguments.secrets_file or _default_secrets_file()
         )
@@ -809,6 +1051,11 @@ def _portfolio_cli(arguments) -> None:
             BinanceSpotDailyClient(),
             quote_interval_seconds=config.order_book_interval_seconds,
         )
+        spot_4h_market = MultiTimeframeSpotCache(
+            BinanceSpotDailyClient(),
+            quote_interval_seconds=config.order_book_interval_seconds,
+        )
+        asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config)
         interval = config.risk_interval_seconds
         hyperliquid = (
             _start_portfolio_hyperliquid(config) if not arguments.once else None
@@ -825,9 +1072,14 @@ def _portfolio_cli(arguments) -> None:
                 threading.Thread(
                     target=_external_context_loop, args=(config,), daemon=True
                 ).start()
+            threading.Thread(
+                target=_asset_rule_bootstrap_loop, args=(config,), daemon=True
+            ).start()
         cached_daily_close = None
         last_spot_check_day = None
-        spot_observation = None
+        legacy_spot_observation = None
+        cached_4h_close = None
+        spot_4h_observation = None
         while True:
             now = datetime.now(timezone.utc)
             try:
@@ -840,19 +1092,50 @@ def _portfolio_cli(arguments) -> None:
                 time.sleep(max(1, interval))
                 continue
             _record_portfolio_hyperliquid(store, hyperliquid, now=now)
+            asset_results = _run_registered_asset_cycles(
+                store,
+                provider,
+                perp_markets=asset_perp_markets,
+                spot_markets=asset_spot_markets,
+                config=config,
+                now=now,
+            )
             process_pending_commands(
                 store,
                 now=now,
                 snapshot=snapshot,
                 spot_snapshot=spot_snapshot,
             )
-            spot_event = False
+            spot_4h_rule = store.load_active_scoped_rule(DecisionScope.SPOT_4H)
+            spot_4h_snapshot = None
+            spot_4h_event = False
+            try:
+                spot_4h_snapshot = spot_4h_market.snapshot("BTCUSDT", now=now)
+                closed_4h = spot_4h_market.closed_candles("4h")
+                if closed_4h:
+                    close_at = int(closed_4h[-1][6])
+                    if cached_4h_close != close_at:
+                        for candle_interval in ("4h", "8h", "1d"):
+                            store.record_asset_candles(
+                                "BTCUSDT", candle_interval,
+                                spot_4h_market.closed_candles(candle_interval),
+                            )
+                        if spot_4h_rule is not None:
+                            spot_4h_observation = evaluate_donchian(
+                                closed_4h, spot_4h_rule.parameters
+                            )
+                            spot_4h_event = True
+                        cached_4h_close = close_at
+                store.record_snapshot(spot_4h_snapshot)
+            except (StaleMarketData, ValueError):
+                # Context gaps block only new Spot entries; Perp and hard exits continue.
+                spot_4h_snapshot = None
             utc_day = now.astimezone(timezone.utc).date()
             if last_spot_check_day != utc_day:
                 limit = max(
-                    spot_rule.parameters.entry_window,
-                    spot_rule.parameters.exit_window,
-                    spot_rule.parameters.atr_period,
+                    legacy_spot_parameters.entry_window,
+                    legacy_spot_parameters.exit_window,
+                    legacy_spot_parameters.atr_period,
                 ) + 2
                 spot_snapshot = spot_market.snapshot(
                     "BTCUSDT", now=now, candle_limit=max(35, limit)
@@ -863,18 +1146,25 @@ def _portfolio_cli(arguments) -> None:
                         int(daily[-1][6]) / 1000, tz=timezone.utc
                     )
                     if cached_daily_close != closed_at:
-                        spot_observation = evaluate_donchian(
-                            daily, spot_rule.parameters
+                        legacy_spot_observation = evaluate_donchian(
+                            daily, legacy_spot_parameters
                         )
                         cached_daily_close = closed_at
-                        spot_event = True
                 last_spot_check_day = utc_day
-            if spot_observation is None:
-                raise RuntimeError("no closed daily candle is available")
+            selected_spot_rule = spot_4h_rule or legacy_spot_rule or legacy_spot_parameters
+            selected_spot_observation = (
+                spot_4h_observation if spot_4h_rule else legacy_spot_observation
+            )
+            selected_spot_snapshot = (
+                spot_4h_snapshot if spot_4h_rule and spot_4h_snapshot
+                else spot_snapshot
+            )
             risk_result = run_parent_risk_cycle(
-                store, snapshot, spot_observation,
-                spot_snapshot=spot_snapshot,
-                spot_rule=spot_rule, perp_rule=perp_rule, now=now,
+                store, snapshot, selected_spot_observation,
+                spot_snapshot=selected_spot_snapshot,
+                spot_rule=selected_spot_rule, perp_rule=perp_rule,
+                legacy_spot_observation=legacy_spot_observation,
+                now=now,
             )
             slots = {}
             experiment_pairs = {}
@@ -898,27 +1188,27 @@ def _portfolio_cli(arguments) -> None:
                         )
                     )
                     compact_jobs[DecisionScope.PERP_INTRADAY] = compact_slot
-            if spot_event and spot_observation.entry:
+            if (spot_4h_rule is not None and spot_4h_snapshot is not None
+                    and spot_4h_event and spot_4h_observation
+                    and spot_4h_observation.entry):
                 if store.claim_scheduler_run(
-                    "paper_spot_daily", cached_daily_close, started_at=now
+                    "paper_spot_4h", datetime.fromtimestamp(
+                        cached_4h_close / 1000, timezone.utc
+                    ), started_at=now
                 ):
-                    slots[DecisionScope.SPOT_DAILY] = (
-                        "paper_spot_daily", cached_daily_close
-                    )
-                    experiment_pairs[DecisionScope.SPOT_DAILY] = (
-                        make_experiment_pair_id(
-                            DecisionScope.SPOT_DAILY,
-                            spot_snapshot,
-                            cached_daily_close,
+                    slots[DecisionScope.SPOT_4H] = (
+                        "paper_spot_4h", datetime.fromtimestamp(
+                            cached_4h_close / 1000, timezone.utc
                         )
                     )
             result = risk_result
             if slots:
                 try:
                     result = run_parent_paper_cycle(
-                        store, provider, snapshot, spot_observation,
-                        spot_snapshot=spot_snapshot,
-                        spot_rule=spot_rule, perp_rule=perp_rule,
+                        store, provider, snapshot, selected_spot_observation,
+                        spot_snapshot=selected_spot_snapshot,
+                        spot_rule=selected_spot_rule, perp_rule=perp_rule,
+                        legacy_spot_observation=legacy_spot_observation,
                         decision_scopes=tuple(slots),
                         experiment_pair_ids=experiment_pairs,
                         now=now,
@@ -937,12 +1227,8 @@ def _portfolio_cli(arguments) -> None:
                         )
                 shadow_errors = []
                 for scope, pair_id in experiment_pairs.items():
-                    rule = spot_rule if scope == DecisionScope.SPOT_DAILY else perp_rule
-                    scoped_snapshot = (
-                        spot_snapshot
-                        if scope == DecisionScope.SPOT_DAILY
-                        else snapshot
-                    )
+                    rule = perp_rule
+                    scoped_snapshot = snapshot
                     try:
                         record_compact_shadow(
                             store, provider, scoped_snapshot, scope=scope,
@@ -964,6 +1250,7 @@ def _portfolio_cli(arguments) -> None:
                             )
                 result["shadow_errors"] = shadow_errors
             result["risk_fills"] = risk_result["fills"]
+            result["assets"] = asset_results
             result["decision_scopes"] = [scope.value for scope in slots]
             outcome_slot = claim_cadence(store, "signal_outcomes", now, 60)
             if outcome_slot is not None:
@@ -994,7 +1281,7 @@ def _portfolio_cli(arguments) -> None:
                             report_date=vietnam_now.date() - timedelta(days=1),
                             generated_at=now,
                         )["report_id"]
-                        for scope in DecisionScope:
+                        for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY):
                             evaluate_compact_experiment(
                                 store, scope=scope, evaluated_at=now
                             )
@@ -1144,36 +1431,269 @@ def _external_context_loop(config: IntradayConfig) -> None:
                 store, collectors={source: collector}, now=now
             )
             failed = bool(result["failed"])
+            partial = bool(result.get("partial"))
             store.finish_scheduler_run(
                 f"external_{source}", slot,
-                status="error" if failed else "success",
-                error_code="CollectorError" if failed else None,
+                status="error" if failed or partial else "success",
+                error_code=(
+                    "CollectorError"
+                    if failed
+                    else "PartialCollectorError"
+                    if partial
+                    else None
+                ),
                 finished_at=datetime.now(timezone.utc),
             )
-            results[source] = "error" if failed else "recorded"
+            results[source] = (
+                "error" if failed else "partial" if partial else "recorded"
+            )
         if results:
             print(json.dumps({"external_context": results}), flush=True)
         time.sleep(config.external_context_interval_seconds)
 
 
-def _start_portfolio_hyperliquid(config: IntradayConfig) -> HyperliquidFeed | None:
+def _start_portfolio_hyperliquid(
+    config: IntradayConfig,
+) -> dict[str, HyperliquidFeed] | None:
     if not config.hyperliquid_enabled:
         return None
-    feed = HyperliquidFeed(
-        metadata_interval_seconds=config.hyperliquid_metadata_interval_seconds
-    )
-    feed.start()
-    return feed
+    feeds = {
+        symbol: HyperliquidFeed(
+            symbol=symbol,
+            metadata_interval_seconds=config.hyperliquid_metadata_interval_seconds,
+        )
+        for symbol in ASSET_REGISTRY
+    }
+    for feed in feeds.values():
+        feed.start()
+    return feeds
 
 
 def _record_portfolio_hyperliquid(
-    store: IntradayStore, feed: HyperliquidFeed | None, *, now: datetime
+    store: IntradayStore,
+    feed: HyperliquidFeed | dict[str, HyperliquidFeed] | None,
+    *,
+    now: datetime,
 ) -> None:
     if feed is None:
         return
-    frame = feed.latest_frame(now=now)
-    if frame is not None:
-        store.record_venue_frame(frame)
+    feeds = feed.values() if isinstance(feed, dict) else (feed,)
+    for current in feeds:
+        frame = current.latest_frame(now=now)
+        if frame is not None:
+            store.record_venue_frame(frame)
+
+
+def _new_asset_market_caches(config: IntradayConfig) -> tuple[dict, dict]:
+    symbols = tuple(symbol for symbol in ASSET_REGISTRY if symbol != "BTCUSDT")
+    perp = {
+        symbol: MultiCadenceMarketCache(BinanceUsdMClient())
+        for symbol in symbols
+    }
+    spot = {
+        symbol: MultiTimeframeSpotCache(
+            BinanceSpotDailyClient(),
+            quote_interval_seconds=config.order_book_interval_seconds,
+        )
+        for symbol in symbols
+    }
+    return perp, spot
+
+
+def _run_registered_asset_cycles(
+    store: IntradayStore,
+    provider,
+    *,
+    perp_markets: dict,
+    spot_markets: dict,
+    config: IntradayConfig,
+    now: datetime,
+) -> dict[str, str]:
+    """Collect every registered asset with per-symbol failure isolation."""
+    results = {}
+    for symbol in perp_markets:
+        for scope, markets, interval in (
+            (
+                DecisionScope.PERP_INTRADAY,
+                perp_markets,
+                config.perp_decision_interval_seconds,
+            ),
+            (DecisionScope.SPOT_4H, spot_markets, 14_400),
+        ):
+            job = f"asset_{scope.value}_{symbol.lower()}"
+            slot = claim_cadence(store, job, now, interval)
+            if slot is None:
+                continue
+            try:
+                snapshot = markets[symbol].snapshot(symbol, now=now)
+                spot_candles = None
+                if scope is DecisionScope.SPOT_4H:
+                    for candle_interval in ("4h", "8h", "1d"):
+                        rows = markets[symbol].closed_candles(candle_interval)
+                        if rows:
+                            store.record_asset_candles(symbol, candle_interval, rows)
+                    spot_candles = markets[symbol].closed_candles("4h")
+                result = run_asset_lifecycle_observation(
+                    store,
+                    provider,
+                    snapshot,
+                    scope=scope,
+                    now=now,
+                    spot_rule=(
+                        store.load_scoped_challenger(scope, symbol=symbol)
+                        or store.load_active_scoped_rule(scope, symbol=symbol)
+                    ) if scope is DecisionScope.SPOT_4H else None,
+                    spot_candles=spot_candles,
+                )
+            except Exception as error:
+                results[f"{symbol}:{scope.value}"] = f"error:{type(error).__name__}"
+                store.finish_scheduler_run(
+                    job,
+                    slot,
+                    status="error",
+                    error_code=type(error).__name__,
+                    finished_at=datetime.now(timezone.utc),
+                )
+            else:
+                results[f"{symbol}:{scope.value}"] = result
+                store.finish_scheduler_run(
+                    job,
+                    slot,
+                    status="success",
+                    finished_at=datetime.now(timezone.utc),
+                )
+    return results
+
+
+def _run_asset_rule_bootstrap_tick(
+    store: IntradayStore, *, now: datetime,
+    spot_client: BinanceSpotDailyClient | None = None,
+) -> dict[str, str]:
+    """Idempotent daily baseline work; never promotes a rule or enables paper."""
+    spot_client = spot_client or BinanceSpotDailyClient()
+    results = {}
+    for symbol in ASSET_REGISTRY:
+        for scope in (DecisionScope.SPOT_4H, DecisionScope.PERP_INTRADAY):
+            if scope is DecisionScope.PERP_INTRADAY and symbol == "BTCUSDT":
+                continue  # Existing BTC Perp champion remains on its legacy lifecycle.
+            if store.load_active_scoped_rule(scope, symbol=symbol):
+                continue
+            job = f"asset_baseline_{scope.value}_{symbol.lower()}"
+            slot = claim_cadence(store, job, now, 86_400)
+            if slot is None:
+                continue
+            key = f"{symbol}:{scope.value}"
+            try:
+                rules = store.list_scoped_rules(scope, symbol=symbol)
+                if not rules:
+                    if scope is DecisionScope.SPOT_4H:
+                        candidate = bootstrap_spot_4h_rule(
+                            store, symbol, now=now, client=spot_client,
+                        )
+                        evaluation = replay_spot_4h_rule(
+                            store, candidate.rule_id, now=now,
+                        )
+                        status = f"replay_{evaluation.status}"
+                    else:
+                        candidate = bootstrap_perp_rule(store, symbol, now=now)
+                        start_perp_decision_soak(store, candidate.rule_id, now=now)
+                        status = "decision_soak_started"
+                else:
+                    candidate = store.load_scoped_rule(rules[0]["id"])
+                    rule_status = rules[0]["status"]
+                    if scope is DecisionScope.SPOT_4H and rule_status == "queued":
+                        refresh_spot_4h_history(
+                            store, symbol, now=now, client=spot_client,
+                        )
+                        evaluation = replay_spot_4h_rule(
+                            store, candidate.rule_id, now=now,
+                        )
+                        status = f"replay_{evaluation.status}"
+                    elif scope is DecisionScope.PERP_INTRADAY and rule_status == "queued":
+                        start_perp_decision_soak(store, candidate.rule_id, now=now)
+                        status = "decision_soak_started"
+                    elif (scope is DecisionScope.PERP_INTRADAY
+                          and rule_status == "challenger"):
+                        replay = store.latest_scoped_rule_evaluation(
+                            candidate.rule_id, kind="replay"
+                        )
+                        if replay is None or replay.status != "pass":
+                            replay = replay_perp_bootstrap(
+                                store, candidate.rule_id, now=now,
+                            )
+                        if replay.status == "pass":
+                            validation = evaluate_perp_post_replay(
+                                store, candidate.rule_id, now=now,
+                            )
+                            status = f"post_replay_{validation.status}"
+                        else:
+                            status = f"replay_{replay.status}"
+                    else:
+                        status = "awaiting_operator_or_proposal"
+                results[key] = status
+            except Exception as error:
+                results[key] = f"error:{type(error).__name__}"
+                store.finish_scheduler_run(
+                    job, slot, status="error", error_code=type(error).__name__,
+                    finished_at=datetime.now(timezone.utc),
+                )
+            else:
+                store.finish_scheduler_run(
+                    job, slot, status="success",
+                    finished_at=datetime.now(timezone.utc),
+                )
+    return results
+
+
+def _asset_rule_bootstrap_loop(config: IntradayConfig) -> None:
+    store = IntradayStore(config.database)
+    while True:
+        results = _run_asset_rule_bootstrap_tick(store, now=datetime.now(timezone.utc))
+        if results:
+            print(json.dumps({"asset_baselines": results}), flush=True)
+        try:
+            client = active_llm_client(
+                store, ProviderSecretStore(config.provider_secrets_file),
+            )
+        except RuntimeError:
+            client = None
+        if client is not None:
+            proposals = _run_asset_auto_proposal_tick(
+                store, client=client, now=datetime.now(timezone.utc),
+            )
+            if proposals:
+                print(json.dumps({"asset_auto_proposals": proposals}), flush=True)
+        time.sleep(3600)
+
+
+def _run_asset_auto_proposal_tick(
+    store: IntradayStore, *, client, now: datetime,
+) -> dict[str, str]:
+    results = {}
+    for symbol in ASSET_REGISTRY:
+        for scope in (DecisionScope.SPOT_4H, DecisionScope.PERP_INTRADAY):
+            job = f"asset_proposal_{scope.value}_{symbol.lower()}"
+            slot = claim_cadence(store, job, now, 86_400)
+            if slot is None:
+                continue
+            key = f"{symbol}:{scope.value}"
+            try:
+                candidate = auto_propose_asset_rule(
+                    store, symbol, scope, client=client, now=now,
+                )
+                results[key] = candidate.rule_id if candidate else "not_eligible"
+            except Exception as error:
+                results[key] = f"error:{type(error).__name__}"
+                store.finish_scheduler_run(
+                    job, slot, status="error", error_code=type(error).__name__,
+                    finished_at=datetime.now(timezone.utc),
+                )
+            else:
+                store.finish_scheduler_run(
+                    job, slot, status="success",
+                    finished_at=datetime.now(timezone.utc),
+                )
+    return results
 
 
 def _analysis_loop(config: IntradayConfig) -> None:
@@ -1233,6 +1753,21 @@ def main() -> None:
         except (ValueError, PermissionError, RuntimeError) as error:
             raise SystemExit(str(error)) from error
         print(json.dumps(result, indent=2))
+        return
+    if arguments.command == "upgrade":
+        try:
+            if arguments.output is not None:
+                prepare_report_output(arguments.output)
+            report = preflight_upgrade_backup(
+                arguments.backup, work_dir=arguments.work_dir,
+            )
+            if arguments.output is not None:
+                write_report(report, arguments.output)
+        except (FileExistsError, PermissionError, OSError, ValueError) as error:
+            raise SystemExit(str(error)) from error
+        sys.stdout.write(serialize_report(report))
+        if report["status"] != "pass":
+            raise SystemExit(1)
         return
     raw_arguments = sys.argv[1:]
     if (
@@ -1308,6 +1843,16 @@ def main() -> None:
             if code:
                 raise SystemExit(code)
             return
+    if arguments.command == "assets" and arguments.database is None:
+        deployment = deployment_cli.load_deployment()
+        if deployment is not None:
+            code = deployment_cli.execute(
+                deployment_cli.admin_command(deployment, raw_arguments),
+                cwd=deployment.project_root,
+            )
+            if code:
+                raise SystemExit(code)
+            return
     if arguments.command in {"start", "stop", "restart", "logs"}:
         deployment = deployment_cli.load_deployment()
         if deployment is None:
@@ -1366,6 +1911,9 @@ def main() -> None:
                 indent=2,
             )
         )
+        return
+    if arguments.command == "assets":
+        _assets_cli(arguments)
         return
     if arguments.command == "provider":
         _provider_cli(arguments)

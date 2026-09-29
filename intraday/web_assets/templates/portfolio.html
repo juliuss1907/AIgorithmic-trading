@@ -32,7 +32,7 @@
           <small>Drawdown {{ "%+.2f"|format(portfolio.drawdown * 100) }}%</small>
         </article>
         <article>
-          <h2>Spot daily</h2>
+          <h2>Spot 4h / legacy exit</h2>
           <strong>{{ "%.0f"|format(portfolio.spot_notional) }} USDT</strong>
           <small>Spot reference {{ "%.2f"|format(portfolio.spot_price) }} · 30% parent cap</small>
         </article>
@@ -101,7 +101,8 @@
           <table>
             <thead><tr><th>Scope</th><th>Champion</th><th>Challenger</th><th>Rollback</th></tr></thead>
             <tbody>
-              <tr><td>Spot daily</td><td><code>{{ spot_registry.champion_id or "Not initialized" }}</code></td><td>{{ spot_registry.challenger_id or "—" }}</td><td>{{ spot_registry.rollback_id or "—" }}</td></tr>
+              <tr><td>Spot 4h</td><td><code>{{ spot_4h_registry.champion_id or "Not initialized" }}</code></td><td>{{ spot_4h_registry.challenger_id or "—" }}</td><td>{{ spot_4h_registry.rollback_id or "—" }}</td></tr>
+              <tr><td>Spot 1d legacy (exit only)</td><td><code>{{ spot_registry.champion_id or "Not initialized" }}</code></td><td>{{ spot_registry.challenger_id or "—" }}</td><td>{{ spot_registry.rollback_id or "—" }}</td></tr>
               <tr><td>Perp intraday</td><td><code>{{ perp_registry.champion_id or "Not initialized" }}</code></td><td>{{ perp_registry.challenger_id or "—" }}</td><td>{{ perp_registry.rollback_id or "—" }}</td></tr>
             </tbody>
           </table>
@@ -119,10 +120,10 @@
         {% if events %}
         <div class="table-wrap" tabindex="0" aria-label="Portfolio event log">
           <table>
-            <thead><tr><th>Time (UTC)</th><th>Action</th><th>Actor</th></tr></thead>
+            <thead><tr><th>Time (UTC+7)</th><th>Action</th><th>Actor</th></tr></thead>
             <tbody>
               {% for event in events %}
-              <tr><td>{{ event.created_at }}</td><td>{{ event.kind }}</td><td>{{ event.actor }}</td></tr>
+              <tr><td><time datetime="{{ event.created_at }}" title="{{ event.created_at }} UTC">{{ event.created_at|vn_time }}</time></td><td>{{ event.kind }}</td><td>{{ event.actor }}</td></tr>
               {% endfor %}
             </tbody>
           </table>
@@ -147,14 +148,14 @@
         {% if operations.scheduler %}
         <div class="table-wrap" tabindex="0" aria-label="Cadence health table">
           <table>
-            <thead><tr><th>Job</th><th>Status</th><th>Scheduled (UTC)</th><th>Finished (UTC)</th><th>Error</th></tr></thead>
+            <thead><tr><th>Job</th><th>Status</th><th>Scheduled (UTC+7)</th><th>Finished (UTC+7)</th><th>Error</th></tr></thead>
             <tbody>
               {% for run in operations.scheduler %}
               <tr>
                 <td><code>{{ run.job_name }}</code></td>
                 <td>{{ run.status|upper }}</td>
-                <td>{{ run.scheduled_for }}</td>
-                <td>{{ run.finished_at or "—" }}</td>
+                <td><time datetime="{{ run.scheduled_for }}" title="{{ run.scheduled_for }} UTC">{{ run.scheduled_for|vn_time }}</time></td>
+                <td>{% if run.finished_at %}<time datetime="{{ run.finished_at }}" title="{{ run.finished_at }} UTC">{{ run.finished_at|vn_time }}</time>{% else %}—{% endif %}</td>
                 <td>{{ run.error_code or "—" }}</td>
               </tr>
               {% endfor %}
@@ -250,11 +251,11 @@
         {% if operations.recent_model_calls %}
         <div class="table-wrap" tabindex="0" aria-label="Recent model calls">
           <table>
-            <thead><tr><th>Started (UTC)</th><th>Workflow</th><th>Role</th><th>Status</th><th>Latency</th><th>Input tokens</th><th>Cost</th></tr></thead>
+            <thead><tr><th>Started (UTC+7)</th><th>Workflow</th><th>Role</th><th>Status</th><th>Latency</th><th>Input tokens</th><th>Cost</th></tr></thead>
             <tbody>
               {% for call in operations.recent_model_calls %}
               <tr>
-                <td>{{ call.started_at }}</td><td><code>{{ call.workflow }}</code></td><td>{{ call.role }}</td><td>{{ call.status|upper }}</td>
+                <td><time datetime="{{ call.started_at }}" title="{{ call.started_at }} UTC">{{ call.started_at|vn_time }}</time></td><td><code>{{ call.workflow }}</code></td><td>{{ call.role }}</td><td>{{ call.status|upper }}</td>
                 <td>{{ call.latency_ms }}ms</td><td>{{ call.input_tokens if call.input_tokens is not none else "—" }}</td>
                 <td>{% if call.cost_usd is not none %}${{ "%.6f"|format(call.cost_usd) }}{% else %}—{% endif %}</td>
               </tr>

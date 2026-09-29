@@ -167,9 +167,16 @@ class JevDecisionProvider:
         )
 
     @staticmethod
-    def _questions(scope: DecisionScope | None = None) -> dict:
-        market = "BTC spot" if scope == DecisionScope.SPOT_DAILY else "BTC perpetual"
-        horizon = "daily/swing" if scope == DecisionScope.SPOT_DAILY else "intraday"
+    def _questions(
+        scope: DecisionScope | None = None, symbol: str = "BTCUSDT"
+    ) -> dict:
+        market_type = "spot" if scope in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H} else "perpetual"
+        market = f"{symbol} {market_type}"
+        horizon = (
+            "daily/swing" if scope == DecisionScope.SPOT_DAILY else
+            "4h with native 8h/1d context" if scope == DecisionScope.SPOT_4H else
+            "intraday"
+        )
         return {
             "direction": {
                 "type": "choice",
@@ -404,7 +411,7 @@ class JevDecisionProvider:
         payload = {
             "model": self.credential.profile.model,
             "state": state,
-            "questions": self._questions(scope),
+            "questions": self._questions(scope, snapshot.symbol),
         }
         body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         request_hash = hashlib.sha256(body).hexdigest()
@@ -535,6 +542,7 @@ class JevDecisionProvider:
     ) -> ScopedJevDecision:
         workflow = {
             DecisionScope.SPOT_DAILY: "spot_daily_entry",
+            DecisionScope.SPOT_4H: "spot_4h_entry",
             DecisionScope.PERP_INTRADAY: "perp_intraday_entry",
         }[scope]
         decision, trace = self._decide(

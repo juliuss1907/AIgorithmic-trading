@@ -95,7 +95,7 @@ aigt portfolio soak evaluate
 The result passes only with recent evidence from both scopes, at least 100 perp samples,
 at least three spot samples, at least 95% availability per scope, and zero recorded hard-risk
 violations. Chỉ `soak evaluate` mới persist evaluation; một pass vẫn không activate fills.
-Both `soak report` and `soak evaluate` use evidence after the first schema-v2 primary
+Both `soak report` and `soak evaluate` use BTC evidence after its first schema-v2 primary
 model-backed signal. With a registered Docker deployment, `soak evaluate` runs in an isolated
 admin container against the worker's volume; use `--database` only for an explicit native DB.
 
@@ -169,6 +169,34 @@ aigt portfolio rules activate CANDIDATE_ID --evaluation-id PASSING_EVALUATION_ID
 Activation accepts only the exact latest passing evaluation ID. A challenger never creates a
 fill while it is soaking.
 
+The new symbol-owned Spot scope is `spot_4h`. The worker can bootstrap BTC, ETH, HYPE,
+NEAR, ZEC, and SOL automatically. An operator may also run `aigt assets rules bootstrap
+ETHUSDT --scope spot_4h`, then `replay CANDIDATE_ID`, then `start-soak CANDIDATE_ID
+--evaluation-id REPLAY_ID`. The baseline is deterministic Donchian 20/10 ATR14. Native
+UTC 4h Binance candles trigger decisions; native 8h and 1d candles are context only.
+Backfill is paginated at no more than 1000 closed candles per request. Replay needs at
+least 365 days, 99% coverage, six closed OOS trades, positive after-cost return,
+drawdown below 8%, and no hard risk violations.
+
+Spot 4h soak calls Jev only on a setup, records no fills, and derives 12h outcomes
+from three closed 4h candles. After at least 14 days, 95% distinct 4h heartbeat
+coverage, six distinct matured setups, positive mean outcome after 30 bps round-trip
+cost, and no hard risk violation, run `aigt assets rules evaluate CANDIDATE_ID`.
+Activate with `aigt assets rules activate CANDIDATE_ID --evaluation-id SOAK_ID` using
+the exact latest passing evaluation. BTC Spot 1d remains exit-only for open positions.
+
+Perp baseline starts decision-only soak before replay. It needs at least 14 days,
+100 matured 15m outcomes and 95% outcome/30s heartbeat coverage. Replay uses only
+pre-cutoff evidence; a separate post-replay validation needs at least 72 hours, 100
+outcomes, 95% coverage, positive after-cost score, and no hard risk violation. The
+worker may automatically ask for a bounded LLM challenger after rejection or champion
+deterioration with fresh evidence, at most three calls per asset/scope in 90 days and
+one open candidate. It never auto-promotes. BTC/ETH have `full` capability, but this
+worker still creates BTC paper fills only; ETH paper execution is not enabled here.
+HYPE/NEAR/ZEC/SOL are decision-soak-only. UI timestamps are UTC+7, while
+SQLite/API timestamps and trading candles remain UTC. This code has not been deployed
+to the VPS by this change.
+
 ## 6. Export the immutable trade journal
 
 The SQLite journal stores every returned Jev evaluation, including rejected gates. Each
@@ -215,6 +243,24 @@ Copy both the database and its sibling `.manifest.json` to separate storage. Thi
 schedule backups, prune old artifacts, restore state, encrypt files, or upload off-host. Provider
 secrets are deliberately excluded. Use `--output-dir` for another host directory and
 `--database` only for a native database that is not inside the registered Docker deployment.
+
+For a schema-v22 release, rehearse the upgrade offline against the exact verified artifact:
+
+```bash
+aigt upgrade preflight \
+  --backup /absolute/path/to/intraday-TIMESTAMP.sqlite3 \
+  --output /absolute/path/to/upgrade-preflight.json
+```
+
+The command accepts schema v19–v22, needs the sibling manifest, and copies the backup into a
+private temporary workspace. It checks migration integrity, foreign keys, pre-existing data and
+schema objects, idempotence, and a restore from the original backup into a separate temporary
+copy. `--work-dir /existing/path` selects a temporary workspace with at least 256 MiB free or
+three times the backup size, whichever is greater. A failed check exits nonzero and still emits
+JSON with reason codes; `--output` writes a mode-0600 report without overwriting an existing
+file. This is a rehearsal only: it does not stop the worker, modify the live database, or perform
+an operational restore. A synthetic local pass is not a substitute for running it on a fresh VPS
+backup before the actual upgrade.
 
 ## 8. Ubuntu VPS with Docker Compose
 

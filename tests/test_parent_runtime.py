@@ -15,6 +15,7 @@ from intraday.contracts import (
     Regime,
     RiskLevel,
     ScopedJevDecision,
+    ScopedRuleCandidate,
     SpotRuleParameters,
     StateVariant,
 )
@@ -45,7 +46,7 @@ def snapshot(price=100_000):
 
 
 def scoped_snapshot(scope, price):
-    is_spot = scope == DecisionScope.SPOT_DAILY
+    is_spot = scope in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}
     features = {
         "price": price - 100,
         "candle_close_price": price - 100,
@@ -53,17 +54,22 @@ def scoped_snapshot(scope, price):
     }
     if not is_spot:
         features["mark_price"] = price
+    if scope is DecisionScope.SPOT_4H:
+        features["closed_candle_age_seconds"] = 1.0
     return FeatureSnapshot.create(
         symbol="BTCUSDT",
         market="binance_spot" if is_spot else "binance_usdm_perp",
-        timeframe="1d" if is_spot else "1h",
-        feature_schema_version="2",
+        timeframe="4h" if scope is DecisionScope.SPOT_4H else "1d" if is_spot else "1h",
+        feature_schema_version="3" if scope is DecisionScope.SPOT_4H else "2",
         event_time=NOW,
         built_at=NOW,
         bid=price - 10,
         ask=price + 10,
         features=features,
-        freshness={"candles": True, "order_book": True},
+        freshness={"candles": True, "order_book": True, **(
+            {"candles_4h": True, "candles_8h": True, "candles_1d": True}
+            if scope is DecisionScope.SPOT_4H else {}
+        )},
     )
 
 
@@ -88,7 +94,7 @@ class Provider:
     def decide_scoped(self, market, tick_id, scope, now):
         direction = (
             Direction.BUY
-            if scope == DecisionScope.SPOT_DAILY
+            if scope in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}
             else self.perp_direction
         )
         decision = JevDecision(
@@ -109,6 +115,7 @@ class Provider:
             workflow=(
                 "spot_daily_entry"
                 if scope == DecisionScope.SPOT_DAILY
+                else "spot_4h_entry" if scope == DecisionScope.SPOT_4H
                 else "perp_intraday_entry"
             ),
             decision=decision,
@@ -163,6 +170,7 @@ def test_parent_cycle_opens_attributed_spot_and_perp_paper_positions(tmp_path):
         observation(),
         spot_rule=SpotRuleParameters(),
         perp_rule=PerpRuleParameters(),
+        legacy_spot_entries_enabled=True,
         now=NOW,
     )
 
@@ -177,6 +185,91 @@ def test_parent_cycle_opens_attributed_spot_and_perp_paper_positions(tmp_path):
             "SELECT COUNT(*) FROM open_trade_context"
         ).fetchone()[0] == 2
         assert connection.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
+
+
+def test_daily_spot_is_exit_only_after_cutover_by_default(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    store.save_parent_portfolio_state(active_state(), event_kind="activated", actor="test")
+    result = run_parent_paper_cycle(
+        store, Provider(), snapshot(), observation(),
+        spot_rule=SpotRuleParameters(), perp_rule=PerpRuleParameters(), now=NOW,
+    )
+    assert result["fills"] == 1
+    assert store.load_parent_portfolio_state().spot_quantity == 0
+    assert {fill.scope for fill in store.list_parent_paper_fills()} == {
+        DecisionScope.PERP_INTRADAY,
+    }
+
+
+def test_spot_4h_paper_entry_is_separate_from_legacy_daily_scope(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    store.save_parent_portfolio_state(active_state(), event_kind="activated", actor="test")
+    rule = ScopedRuleCandidate.create(
+        rule_id="btc-spot-4h-baseline", parent_rule_id="bootstrap",
+        thesis_id="baseline", symbol="BTCUSDT", scope=DecisionScope.SPOT_4H,
+        parameters=SpotRuleParameters(), created_at=NOW,
+        model_ref="deterministic/baseline", prompt_version="test-v1",
+    )
+    store.register_scoped_rule(rule, status="champion")
+    store.activate_scoped_champion(DecisionScope.SPOT_4H, rule.rule_id, now=NOW)
+
+    result = run_parent_paper_cycle(
+        store, Provider(), scoped_snapshot(DecisionScope.PERP_INTRADAY, 100_000),
+        observation(), spot_snapshot=scoped_snapshot(DecisionScope.SPOT_4H, 90_000),
+        spot_rule=rule, perp_rule=PerpRuleParameters(),
+        decision_scopes=(DecisionScope.SPOT_4H,), now=NOW,
+    )
+
+    assert result["fills"] == 1
+    assert store.list_parent_paper_fills()[0].scope is DecisionScope.SPOT_4H
+    assert store.load_parent_portfolio_state().spot_entry_scope is DecisionScope.SPOT_4H
+
+
+def test_spot_4h_paper_rejects_stale_snapshot_even_with_true_flags(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    store.save_parent_portfolio_state(active_state(), event_kind="activated", actor="test")
+    rule = ScopedRuleCandidate.create(
+        rule_id="btc-spot-4h-stale", parent_rule_id="bootstrap",
+        thesis_id="baseline", symbol="BTCUSDT", scope=DecisionScope.SPOT_4H,
+        parameters=SpotRuleParameters(), created_at=NOW,
+        model_ref="deterministic/baseline", prompt_version="test-v1",
+    )
+    store.register_scoped_rule(rule, status="champion")
+    store.activate_scoped_champion(DecisionScope.SPOT_4H, rule.rule_id, now=NOW)
+    stale = scoped_snapshot(DecisionScope.SPOT_4H, 90_000).model_copy(
+        update={"event_time": NOW - timedelta(minutes=5)}
+    )
+    with pytest.raises(ValueError, match="fresh native context"):
+        run_parent_paper_cycle(
+            store, Provider(), scoped_snapshot(DecisionScope.PERP_INTRADAY, 100_000),
+            observation(), spot_snapshot=stale,
+            spot_rule=rule, perp_rule=PerpRuleParameters(),
+            decision_scopes=(DecisionScope.SPOT_4H,), now=NOW,
+        )
+    assert store.list_parent_paper_fills() == []
+
+
+def test_legacy_daily_spot_position_exits_under_1d_rule_after_4h_cutover(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    store.save_parent_portfolio_state(active_state(
+        spot_quantity=10, spot_entry_price=100,
+    ), event_kind="activated", actor="test")
+    new_rule = ScopedRuleCandidate.create(
+        rule_id="btc-4h-active", parent_rule_id="bootstrap",
+        thesis_id="baseline", symbol="BTCUSDT", scope=DecisionScope.SPOT_4H,
+        parameters=SpotRuleParameters(), created_at=NOW,
+        model_ref="deterministic/baseline", prompt_version="test-v1",
+    )
+    result = run_parent_risk_cycle(
+        store, scoped_snapshot(DecisionScope.PERP_INTRADAY, 100_000),
+        observation(entry=True, exit=False),
+        spot_snapshot=scoped_snapshot(DecisionScope.SPOT_4H, 90_000),
+        spot_rule=new_rule, perp_rule=PerpRuleParameters(),
+        legacy_spot_observation=observation(entry=False, exit=True), now=NOW,
+    )
+    assert result["fills"] == 1
+    assert store.list_parent_paper_fills()[0].scope is DecisionScope.SPOT_DAILY
+    assert store.load_parent_portfolio_state().spot_quantity == 0
 
 
 def test_parent_cycle_routes_scope_specific_snapshots_to_provider_and_ledger(tmp_path):
@@ -203,6 +296,7 @@ def test_parent_cycle_routes_scope_specific_snapshots_to_provider_and_ledger(tmp
         spot_snapshot=scoped_snapshot(DecisionScope.SPOT_DAILY, 90_000),
         spot_rule=SpotRuleParameters(),
         perp_rule=PerpRuleParameters(),
+        legacy_spot_entries_enabled=True,
         now=NOW,
     )
 
@@ -227,6 +321,7 @@ def test_parent_cycle_closes_both_scopes_into_immutable_completed_trades(tmp_pat
         observation(),
         spot_rule=SpotRuleParameters(),
         perp_rule=PerpRuleParameters(),
+        legacy_spot_entries_enabled=True,
         now=NOW,
     )
 
@@ -271,6 +366,7 @@ def test_rejected_scoped_decisions_are_journaled_without_opening_trades(tmp_path
         observation(),
         spot_rule=SpotRuleParameters(),
         perp_rule=PerpRuleParameters(),
+        legacy_spot_entries_enabled=True,
         now=NOW,
     )
 

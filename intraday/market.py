@@ -10,6 +10,7 @@ from typing import Callable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from intraday.assets import asset_spec
 from intraday.contracts import FeatureSnapshot
 
 
@@ -186,9 +187,7 @@ class BinanceUsdMClient:
 
     @staticmethod
     def _symbol(symbol: str) -> str:
-        if symbol != "BTCUSDT":
-            raise ValueError("v1 only permits BTCUSDT")
-        return symbol
+        return asset_spec(symbol).binance_perp_symbol
 
     def candles(self, symbol: str = "BTCUSDT", *, interval: str = "1m", limit: int = 100):
         if interval not in {"1m", "5m", "15m", "1h"}:

@@ -76,7 +76,7 @@ def record_scoped_signal(
     if thesis_bundle is not None:
         horizon = (
             thesis_bundle.daily_swing
-            if scoped.scope == DecisionScope.SPOT_DAILY
+            if scoped.scope in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}
             else thesis_bundle.intraday
         )
         thesis = json.dumps(

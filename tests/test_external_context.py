@@ -4,6 +4,7 @@ import pytest
 
 from intraday.contracts import ExternalObservation
 from intraday.external_context import (
+    VariationalCollector,
     parse_aster_snapshot,
     parse_cryptorank_context,
     parse_lighter_market_stats,
@@ -53,6 +54,24 @@ def test_store_round_trips_observations_idempotently(tmp_path):
     health = store.external_source_health("variational", now=NOW)
     assert health["total_observations"] == 1
     assert health["age_seconds"] == 0
+
+
+def test_source_health_can_be_scoped_to_one_asset(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    for symbol in ("BTCUSDT", "ETHUSDT"):
+        store.record_external_observation(ExternalObservation.create(
+            source="variational", dataset="perp_market", symbol=symbol,
+            source_timestamp=NOW, received_at=NOW,
+            metrics={"mark_price": 1.0}, labels={},
+        ))
+
+    health = store.external_source_health(
+        "variational", symbol="ETHUSDT", now=NOW
+    )
+
+    assert health["symbol"] == "ETHUSDT"
+    assert health["total_observations"] == 1
+    assert health["latest"]["symbol"] == "ETHUSDT"
 
 
 def test_external_observation_retention_removes_only_expired_rows(tmp_path):
@@ -106,6 +125,22 @@ def test_variational_parser_preserves_size_dependent_liquidity():
     assert result.source_timestamp.isoformat() == "2026-09-27T05:59:00+00:00"
 
 
+def test_variational_parser_selects_registered_asset():
+    result = parse_variational_stats({
+        "tvl": "100000000",
+        "listings": [{
+            "ticker": "ETH", "mark_price": "4000", "volume_24h": "123",
+            "open_interest": {"long_open_interest": "110", "short_open_interest": "90"},
+            "funding_rate": "0.0002", "funding_interval_s": 28800,
+            "base_spread_bps": "0.5",
+            "quotes": {"updated_at": "2026-09-27T05:59:00Z", "size_1k": {"bid": "3999", "ask": "4001"}},
+        }],
+    }, symbol="ETHUSDT", received_at=NOW)
+
+    assert result.symbol == "ETHUSDT"
+    assert result.metrics["mark_price"] == 4000
+
+
 def test_aster_parser_normalizes_basis_funding_book_and_liquidation():
     result = parse_aster_snapshot(
         premium={"markPrice": "100100", "indexPrice": "100000", "lastFundingRate": "0.0008", "time": 1790488740000},
@@ -118,6 +153,18 @@ def test_aster_parser_normalizes_basis_funding_book_and_liquidation():
     assert result.metrics["funding_rate"] == pytest.approx(0.0008)
     assert result.metrics["liquidation_notional_usd"] == 50_000
     assert result.labels["liquidation_side"] == "SELL"
+
+
+def test_aster_parser_preserves_registered_asset_identity():
+    result = parse_aster_snapshot(
+        symbol="SOLUSDT",
+        premium={"symbol": "SOLUSDT", "markPrice": "200", "indexPrice": "199", "lastFundingRate": "0.0001"},
+        book={"bids": [["199.9", "2"]], "asks": [["200.1", "3"]]},
+        liquidation=None,
+        received_at=NOW,
+    )
+
+    assert result.symbol == "SOLUSDT"
 
 
 def test_aster_parser_drops_stale_liquidation_from_current_snapshot():
@@ -150,6 +197,21 @@ def test_lighter_parser_normalizes_public_market_stats():
     assert result.metrics["spread_bps"] == pytest.approx(1.99960008)
 
 
+def test_lighter_parser_checks_registry_market_mapping():
+    result = parse_lighter_market_stats({
+        "market_stats": {
+            "symbol": "HYPE", "market_id": 24, "index_price": "50",
+            "mark_price": "50", "best_bid_price": "49.9", "best_ask_price": "50.1",
+            "open_interest": "10", "current_funding_rate": "0.0003",
+            "funding_rate": "0.0002", "daily_quote_token_volume": 1000,
+            "premium": "0.01",
+        },
+    }, symbol="HYPEUSDT", received_at=NOW)
+
+    assert result.symbol == "HYPEUSDT"
+    assert result.metrics["market_id"] == 24
+
+
 def test_cycle_isolates_provider_failures_and_persists_success(tmp_path):
     store = IntradayStore(tmp_path / "intraday.sqlite")
     successful = ExternalObservation.create(
@@ -165,3 +227,56 @@ def test_cycle_isolates_provider_failures_and_persists_success(tmp_path):
 
     assert result == {"recorded": ["variational"], "failed": ["aster"]}
     assert store.list_external_observations(source="variational") == [successful]
+
+
+def test_cycle_records_batch_results_per_asset(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    observations = tuple(
+        ExternalObservation.create(
+            source="variational", dataset="perp_market", symbol=symbol,
+            source_timestamp=NOW, received_at=NOW,
+            metrics={"mark_price": price}, labels={},
+        )
+        for symbol, price in (("BTCUSDT", 100000.0), ("ETHUSDT", 4000.0))
+    )
+
+    result = run_external_context_cycle(
+        store, collectors={"variational": lambda now: observations}, now=NOW
+    )
+
+    assert result == {"recorded": ["variational"], "failed": []}
+    assert sorted(item.symbol for item in store.list_external_observations(
+        source="variational"
+    )) == ["BTCUSDT", "ETHUSDT"]
+
+
+def test_variational_batch_isolates_one_missing_asset(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    collector = VariationalCollector(
+        fetch_json=lambda url: {
+            "tvl": "100000000",
+            "listings": [{
+                "ticker": "BTC", "mark_price": "100000", "volume_24h": "123",
+                "open_interest": {"long_open_interest": "110", "short_open_interest": "90"},
+                "funding_rate": "0.0002", "funding_interval_s": 28800,
+                "base_spread_bps": "0.5", "quotes": {
+                    "updated_at": "2026-09-27T05:59:00Z",
+                    "size_1k": {"bid": "99995", "ask": "100005"},
+                },
+            }],
+        },
+        symbols=("BTCUSDT", "ETHUSDT"),
+    )
+
+    result = run_external_context_cycle(
+        store, collectors={"variational": collector}, now=NOW
+    )
+
+    assert result == {
+        "recorded": ["variational"],
+        "failed": [],
+        "partial": {"variational": ["ETHUSDT"]},
+    }
+    assert [item.symbol for item in store.list_external_observations(
+        source="variational"
+    )] == ["BTCUSDT"]

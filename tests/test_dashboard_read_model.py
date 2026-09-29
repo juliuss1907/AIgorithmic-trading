@@ -13,6 +13,8 @@ from intraday.contracts import (
     ProviderRole,
     StateVariant,
     ExternalObservation,
+    ScopedRuleCandidate,
+    SpotRuleParameters,
 )
 from intraday.store import IntradayStore
 from intraday.__main__ import main
@@ -57,11 +59,14 @@ def _activate_provider(
     return profile
 
 
-def _record_signal(store: IntradayStore, *, now: datetime) -> int:
+def _record_signal(
+    store: IntradayStore, *, now: datetime, symbol: str = "BTCUSDT",
+    decision_id: str = "dashboard-decision-1",
+) -> int:
     return store.record_journal_signal(
-        decision_id="dashboard-decision-1",
+        decision_id=decision_id,
         timestamp=now,
-        symbol="BTCUSDT",
+        symbol=symbol,
         scope=DecisionScope.PERP_INTRADAY,
         state_snapshot=json.dumps(
             {"decision_scope": "perp_intraday", "secret_marker": "never-return"},
@@ -128,6 +133,38 @@ def test_dashboard_api_reports_waiting_when_no_model_backed_soak_exists(tmp_path
     assert payload["soak"]["started_at"] is None
     assert payload["soak"]["progress_pct"] == 0
     assert payload["signals"]["total"] == 0
+    assert [item["symbol"] for item in payload["assets"]] == [
+        "BTCUSDT", "ETHUSDT", "HYPEUSDT", "NEARUSDT", "ZECUSDT", "SOLUSDT"
+    ]
+    assert payload["assets"][1]["stages"] == {
+        "perp_intraday": "shadow", "spot_daily": "shadow", "spot_4h": "shadow"
+    }
+    assert payload["assets"][1]["rules"]["spot_daily"]["champion_id"] is None
+
+
+def test_dashboard_reports_asset_owned_champion(tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime.now(timezone.utc)
+    rule = ScopedRuleCandidate.create(
+        rule_id="eth-spot-champion", parent_rule_id="bootstrap",
+        thesis_id="baseline", symbol="ETHUSDT", scope=DecisionScope.SPOT_DAILY,
+        parameters=SpotRuleParameters(), created_at=now,
+        model_ref="deterministic/baseline", prompt_version="spot-baseline-v1",
+    )
+    store.register_scoped_rule(rule, status="champion")
+    store.activate_scoped_champion(rule.scope, rule.rule_id, now=now, symbol=rule.symbol)
+
+    response = TestClient(create_app(database=database)).get("/api/dashboard")
+
+    eth = next(item for item in response.json()["assets"] if item["symbol"] == "ETHUSDT")
+    btc = next(item for item in response.json()["assets"] if item["symbol"] == "BTCUSDT")
+    assert eth["rules"]["spot_daily"]["champion_id"] == rule.rule_id
+    assert btc["rules"]["spot_daily"]["champion_id"] is None
+    page = TestClient(create_app(database=database)).get("/")
+    assert page.status_code == 200
+    assert "Rules / evidence" in page.text
+    assert "eth-spot-champion" in page.text
 
 
 def test_dashboard_exposes_shadow_source_health_and_latest_metrics(tmp_path):
@@ -139,16 +176,26 @@ def test_dashboard_exposes_shadow_source_health_and_latest_metrics(tmp_path):
         source_timestamp=now, received_at=now,
         metrics={"basis_bps": 4.2, "funding_rate": 0.0001}, labels={},
     ))
+    store.record_external_observation(ExternalObservation.create(
+        source="aster", dataset="perp_market", symbol="ETHUSDT",
+        source_timestamp=now, received_at=now,
+        metrics={"basis_bps": 2.1, "funding_rate": 0.0002}, labels={},
+    ))
 
     client = TestClient(create_app(database=database))
     payload = client.get("/api/dashboard").json()
 
     aster = payload["external_sources"]["aster"]
     assert aster["status"] == "healthy"
-    assert aster["latest"]["metrics"]["basis_bps"] == 4.2
+    assert aster["total_observations"] == 2
     assert payload["external_sources"]["variational"]["status"] == "missing"
+    eth = next(item for item in payload["assets"] if item["symbol"] == "ETHUSDT")
+    assert eth["sources"]["aster"]["status"] == "healthy"
+    assert eth["sources"]["aster"]["latest"]["metrics"]["basis_bps"] == 2.1
     page = client.get("/")
     assert "Shadow data sources" in page.text
+    assert "Asset rollout" in page.text
+    assert "ETHUSDT" in page.text
     assert "Aster" in page.text
 
 
@@ -197,39 +244,78 @@ def test_dashboard_api_projects_live_soak_without_persisting_an_evaluation(tmp_p
     assert store.latest_portfolio_soak_evaluation() is None
 
 
-def test_soak_evaluate_persists_the_same_campaign_evidence_as_dashboard(
+def test_parent_soak_evaluation_and_preview_use_only_anchored_btc_evidence(
+    tmp_path, monkeypatch, capsys,
+):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime(2026, 9, 29, 12, tzinfo=timezone.utc)
+    eth_anchor = now - timedelta(hours=80)
+    btc_anchor = now - timedelta(hours=73)
+    _record_signal(
+        store, now=eth_anchor, symbol="ETHUSDT", decision_id="eth-anchor",
+    )
+    _record_signal(store, now=btc_anchor)
+    store.record_portfolio_soak_tick(
+        symbol="ETHUSDT", scope=DecisionScope.SPOT_DAILY,
+        status="success", created_at=eth_anchor,
+    )
+    store.record_portfolio_soak_tick(
+        symbol="ETHUSDT", scope=DecisionScope.PERP_INTRADAY,
+        status="success", created_at=now - timedelta(minutes=5),
+    )
+    store.record_portfolio_soak_tick(
+        symbol="BTCUSDT", scope=DecisionScope.SPOT_DAILY,
+        status="provider_error", hard_risk_violation=True,
+        created_at=btc_anchor - timedelta(minutes=7),
+    )
+    for scope, status in (
+        (DecisionScope.SPOT_DAILY, "skipped_no_setup"),
+        (DecisionScope.PERP_INTRADAY, "success"),
+    ):
+        store.record_portfolio_soak_tick(
+            symbol="BTCUSDT", scope=scope, status=status,
+            created_at=btc_anchor,
+        )
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "portfolio", "soak", "evaluate", "--database", str(database),
+        "--at", now.isoformat(),
+    ])
+
+    main()
+
+    persisted = json.loads(capsys.readouterr().out)
+    snapshot = build_dashboard_snapshot(store, now=now)
+    preview = snapshot["soak"]["preview"]
+    assert snapshot["soak"]["started_at"] == btc_anchor.isoformat()
+    assert persisted["started_at"] == preview["started_at"]
+    assert persisted["sample_counts"] == preview["sample_counts"] == {
+        "spot_daily": 1, "perp_intraday": 1,
+    }
+    assert persisted["hard_risk_violations"] == preview["hard_risk_violations"] == 0
+
+
+def test_passing_btc_soak_evaluation_matches_dashboard_preview(
     tmp_path, monkeypatch, capsys,
 ):
     database = tmp_path / "intraday.sqlite"
     store = IntradayStore(database)
     now = datetime(2026, 9, 29, 12, tzinfo=timezone.utc)
     anchor = now - timedelta(hours=73)
+    _record_signal(store, now=anchor)
     store.record_portfolio_soak_tick(
         scope=DecisionScope.SPOT_DAILY, status="provider_error",
         hard_risk_violation=True, created_at=anchor - timedelta(minutes=7),
     )
-    store.record_portfolio_soak_tick(
-        scope=DecisionScope.PERP_INTRADAY, status="provider_error",
-        created_at=anchor - timedelta(minutes=7),
-    )
-    _record_signal(store, now=anchor)
-    store.record_portfolio_soak_tick(
-        scope=DecisionScope.SPOT_DAILY, status="skipped_no_setup",
-        created_at=anchor,
-    )
-    store.record_portfolio_soak_tick(
-        scope=DecisionScope.PERP_INTRADAY, status="success",
-        created_at=anchor,
-    )
-    for hours_ago in (2, 1):
+    for hours_ago in (73, 2, 1):
         store.record_portfolio_soak_tick(
             scope=DecisionScope.SPOT_DAILY, status="skipped_no_setup",
             created_at=now - timedelta(hours=hours_ago),
         )
-    for minutes_ago in range(99, 0, -1):
+    for minutes_ago in range(99, -1, -1):
         store.record_portfolio_soak_tick(
             scope=DecisionScope.PERP_INTRADAY, status="success",
-            created_at=now - timedelta(minutes=minutes_ago),
+            created_at=anchor if minutes_ago == 99 else now - timedelta(minutes=minutes_ago),
         )
     monkeypatch.setattr(sys, "argv", [
         "aigt", "portfolio", "soak", "evaluate", "--database", str(database),
@@ -246,15 +332,19 @@ def test_soak_evaluate_persists_the_same_campaign_evidence_as_dashboard(
     assert persisted["status"] == preview["status"] == "pass"
 
 
-def test_soak_evaluate_without_model_backed_anchor_uses_no_ticks(
+def test_parent_soak_without_btc_anchor_does_not_use_other_asset_ticks(
     tmp_path, monkeypatch, capsys,
 ):
     database = tmp_path / "intraday.sqlite"
     store = IntradayStore(database)
     now = datetime(2026, 9, 29, 12, tzinfo=timezone.utc)
+    _record_signal(
+        store, now=now - timedelta(hours=73), symbol="ETHUSDT",
+        decision_id="eth-only-anchor",
+    )
     store.record_portfolio_soak_tick(
-        scope=DecisionScope.PERP_INTRADAY, status="success",
-        created_at=now - timedelta(hours=73),
+        symbol="ETHUSDT", scope=DecisionScope.PERP_INTRADAY,
+        status="success", created_at=now - timedelta(hours=73),
     )
     monkeypatch.setattr(sys, "argv", [
         "aigt", "portfolio", "soak", "evaluate", "--database", str(database),
@@ -264,8 +354,8 @@ def test_soak_evaluate_without_model_backed_anchor_uses_no_ticks(
     main()
 
     persisted = json.loads(capsys.readouterr().out)
-    assert persisted["status"] == "deferred"
     assert persisted["started_at"] is None
+    assert persisted["status"] == "deferred"
     assert persisted["sample_counts"] == {"spot_daily": 0, "perp_intraday": 0}
 
 

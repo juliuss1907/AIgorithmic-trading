@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from intraday.assets import asset_spec
 from intraday.contracts import (
     CrossVenueAssessment,
     Direction,
@@ -100,10 +101,14 @@ def build_hyperliquid_frame(
     book: dict,
     asset_context: dict,
     *,
+    symbol: str = "BTCUSDT",
     received_at: datetime,
     metadata_received_at: datetime | None = None,
 ) -> VenueMarketFrame:
-    """Normalize one Hyperliquid BTC book plus current perpetual context."""
+    """Normalize one registered Hyperliquid book plus perpetual context."""
+    spec = asset_spec(symbol)
+    if book.get("coin") != spec.hyperliquid_coin:
+        raise ValueError("Hyperliquid book does not match requested asset")
     if received_at.tzinfo is None or received_at.utcoffset() is None:
         raise ValueError("received_at must be timezone-aware")
     levels = book.get("levels") or []
@@ -131,7 +136,7 @@ def build_hyperliquid_frame(
     event_time = datetime.fromtimestamp(float(book["time"]) / 1000, tz=timezone.utc)
     return VenueMarketFrame.create(
         venue="hyperliquid",
-        symbol="BTCUSDT",
+        symbol=spec.symbol,
         event_time=event_time,
         received_at=received_at,
         metadata_received_at=metadata_received_at or received_at,

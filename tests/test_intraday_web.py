@@ -328,6 +328,8 @@ def test_combined_portfolio_page_api_and_control_inbox(tmp_path):
     assert "90000.00" in page.text
     assert "110000.00" in page.text
     assert "Cadence health" in page.text
+    assert "23/09/2026 07:00:00 ICT" in page.text
+    assert "Time (UTC+7)" in page.text
     assert "Decision experiment" in page.text
     assert "Outcome coverage" in page.text
     assert "Latest retrospective" in page.text
@@ -336,7 +338,7 @@ def test_combined_portfolio_page_api_and_control_inbox(tmp_path):
     assert api.json()["portfolio"]["perp_mark_price"] == 110_000
     assert api.json()["limits"]["leverage"] == 3
     assert operations.status_code == 200
-    assert operations.json()["schema_version"] == 19
+    assert operations.json()["schema_version"] == 22
     assert operations.json()["scheduler"] == []
     assert set(operations.json()["experiments"]) == {"spot_daily", "perp_intraday"}
     assert operations.json()["daily_model_cost_usd"] == 0.0

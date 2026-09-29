@@ -62,7 +62,7 @@ def build_positions_snapshot(store, *, now: datetime) -> dict:
     if marked.spot_quantity:
         positions.append(
             _position(
-                scope=DecisionScope.SPOT_DAILY,
+                scope=marked.spot_entry_scope,
                 market="binance_spot",
                 quantity=marked.spot_quantity,
                 entry_price=marked.spot_entry_price,

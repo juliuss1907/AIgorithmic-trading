@@ -217,7 +217,7 @@ def generate_retrospective(
     store, *, report_date: date, generated_at: datetime
 ) -> dict:
     scopes = {}
-    for scope in DecisionScope:
+    for scope in EVALUATION_HORIZONS:
         horizon = EVALUATION_HORIZONS[scope]
         deadband = DEADBAND_PCT[scope]
         examples = []

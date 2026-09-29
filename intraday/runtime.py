@@ -342,7 +342,7 @@ def run_rule_proposal_cycle(
     if bundle is None or retrospective is None:
         return {"status": "skipped", "reason": "missing_thesis_or_retrospective"}
     scopes = {
-        scope for scope in DecisionScope
+        scope for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY)
         if should_generate_scoped_rule(store, scope=scope, now=now)
     }
     if not scopes:

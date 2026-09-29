@@ -4,7 +4,7 @@
 
 ## BTC shared-AI portfolio — paper only
 
-Package `intraday/` chạy một parent portfolio 10.000 USDT gồm spot daily 60% budget và
+Package `intraday/` chạy một parent portfolio 10.000 USDT gồm spot 60% budget và
 perp intraday 40% budget. Spot dùng Donchian + ATR volatility sizing rồi mới hỏi Jev;
 perp dùng rule intraday + Jev. Một LLM profile tạo market thesis hai horizon và rule
 candidate có schema riêng cho từng sleeve. Hard-risk coordinator vẫn là lớp có quyền cuối:
@@ -17,8 +17,9 @@ Hyperliquid được thu thập như evidence liên thị trường ở chế đ
 L2 book, REST 30 giây cho funding/OI/mark/oracle. Mất dữ liệu DEX không chặn Binance.
 
 Giá tham chiếu được tách theo scope: Spot dùng midpoint của best bid/ask Binance Spot;
-Perp dùng Binance USD-M mark price. Indicator vẫn chỉ dùng nến đã đóng (Spot `1d`,
-Perp `1h`), vì vậy `reference_price` và `candle_close_price` là hai trường có chủ đích
+Perp dùng Binance USD-M mark price. Indicator vẫn chỉ dùng nến đã đóng (Spot trigger
+`4h` UTC, context native `8h`/`1d`; Perp `1h`), vì vậy `reference_price` và
+`candle_close_price` là hai trường có chủ đích
 khác nhau. Jev, paper ledger, journal và LLM market context đều nhận đúng snapshot của
 từng scope; LLM vẫn chạy một cycle chung với hai context được gắn nhãn rõ ràng.
 
@@ -50,6 +51,8 @@ Kiểm tra cấu hình và trạng thái:
 aigt doctor
 aigt status
 aigt positions
+aigt assets list
+aigt assets status ETHUSDT
 aigt cross-venue-status
 ```
 
@@ -57,6 +60,48 @@ aigt cross-venue-status
 paper position đang mở, cùng entry price, latest mark, mark timestamp, notional và
 unrealized P&L. Lệnh tự route tới deployment Docker đã đăng ký, không tạo fill và
 không thay đổi portfolio state.
+
+Registry theo dõi BTC, ETH, HYPE, NEAR, ZEC và SOL trên cả Spot/Perp. BTC/ETH có
+capability `full`; HYPE/NEAR/ZEC/SOL chỉ được decision soak. Paper worker hiện vẫn
+chỉ giao dịch BTC và chưa bật paper cho ETH hay bốn coin còn lại. Worker tự tạo
+baseline riêng theo `(symbol, scope)`; không tự activate.
+Spot 4h backfill nến native UTC 4h/8h/1d tối đa 1000 nến mỗi trang. Có thể kiểm tra
+và chạy thủ công từng bước:
+
+```bash
+aigt assets rules bootstrap ETHUSDT --scope spot_4h
+aigt assets rules replay ethusdt-spot-4h-baseline-v1
+aigt assets rules start-soak ethusdt-spot-4h-baseline-v1 --evaluation-id REPLAY_ID
+aigt assets rules status ETHUSDT
+```
+
+Spot 4h replay cần ≥365 ngày, ≥99% coverage, ≥6 giao dịch OOS đã đóng, lợi nhuận sau
+phí dương và drawdown <8%. Soak chỉ bắt đầu khi operator dùng đúng replay ID; sau ≥14
+ngày, ≥95% heartbeat 4h, ≥6 setup riêng biệt có outcome sau 12h, điểm sau phí dương
+và không vi phạm hard risk, operator mới evaluate/activate bằng đúng ID:
+
+```bash
+aigt assets rules evaluate ethusdt-spot-4h-baseline-v1
+aigt assets rules activate ethusdt-spot-4h-baseline-v1 --evaluation-id SOAK_ID
+```
+
+Perp đi theo thứ tự decision soak ≥14 ngày/100 outcome 15m/95% coverage, replay trên
+evidence trước mốc đó, rồi validation độc lập ≥72 giờ/100 outcome/95% coverage:
+
+```bash
+aigt assets rules bootstrap ETHUSDT --scope perp_intraday
+aigt assets rules replay ethusdt-perp-baseline-v1
+aigt assets rules evaluate ethusdt-perp-baseline-v1
+aigt assets rules activate ethusdt-perp-baseline-v1 --evaluation-id SOAK_ID
+```
+
+Worker tự khởi động Perp decision soak; `start-soak CANDIDATE_ID` cũng dùng được nếu
+bootstrap thủ công. LLM chỉ tự đề xuất challenger khi baseline/candidate bị reject
+hoặc champion xuống cấp và có evidence mới; tối đa 3 lời gọi/90 ngày mỗi coin/scope,
+không tự promote. Các ID lấy từ output hoặc `aigt assets rules status ETHUSDT`.
+BTC Spot 1d cũ chỉ được đóng vị thế đang mở, không mở lệnh mới. `activate` chỉ chọn
+champion, không tự bật paper/fill. UI lịch sử hiển thị UTC+7; API/SQLite và logic nến
+vẫn dùng UTC. Lệnh `aigt assets start-soak` cũ đã đóng để tránh vượt gate.
 
 Luồng cũ `aigt run` vẫn được giữ để replay intraday tương thích. Luồng portfolio mới bắt
 đầu bằng decision-only soak, chưa tạo fill:
@@ -106,6 +151,20 @@ Mặc định backup nằm ngoài Docker volume tại
 SHA-256 đi kèm. Hãy copy cả file `.sqlite3` và `.manifest.json` sang máy/storage khác;
 MVP này chưa tự lên lịch, retention hoặc restore. Dùng `--output-dir` để chọn nơi lưu khác,
 hoặc `--database` khi backup một database native ngoài deployment Docker đã đăng ký.
+
+Trước khi triển khai bản có schema v22, có thể diễn tập nâng cấp hoàn toàn offline trên
+backup đã xác minh (giữ cả file `.manifest.json` cùng thư mục):
+
+```bash
+aigt upgrade preflight \
+  --backup /absolute/path/to/intraday-TIMESTAMP.sqlite3 \
+  --output /absolute/path/to/upgrade-preflight.json
+```
+
+Lệnh chỉ tạo bản sao tạm và báo cáo JSON; không sửa backup gốc, database đang chạy,
+worker hoặc trạng thái kích hoạt giao dịch. `--work-dir /path/to/dir` chọn thư mục tạm
+có sẵn và đủ dung lượng. Report có quyền 0600, không ghi đè file cũ; exit code 0 chỉ
+khi mọi kiểm tra đều pass. Diễn tập restore trên bản sao không tự restore hệ thống thật.
 
 Mở `http://127.0.0.1:8081/` để xem trạng thái worker, tiến độ soak 72 giờ,
 heartbeat Spot/Perp, model calls và các Jev signal gần nhất. Trang

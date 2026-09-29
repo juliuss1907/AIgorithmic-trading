@@ -128,10 +128,40 @@ def test_binance_client_uses_only_allowlisted_public_futures_endpoints():
 
     client = BinanceUsdMClient(fetch_json=fetch)
     assert client.open_interest("BTCUSDT") == {"openInterest": "1"}
-    assert calls == [("/fapi/v1/openInterest", {"symbol": "BTCUSDT"})]
+    assert client.open_interest("ethusdt") == {"openInterest": "1"}
+    assert calls == [
+        ("/fapi/v1/openInterest", {"symbol": "BTCUSDT"}),
+        ("/fapi/v1/openInterest", {"symbol": "ETHUSDT"}),
+    ]
 
-    with pytest.raises(ValueError, match="BTCUSDT"):
-        client.open_interest("ETHUSDT")
+    with pytest.raises(ValueError, match="unsupported asset symbol"):
+        client.open_interest("DOGEUSDT")
+
+
+def test_feature_snapshot_accepts_registered_assets_only():
+    now = datetime(2026, 9, 21, 2, 0, tzinfo=timezone.utc)
+    snapshot = FeatureSnapshot.create(
+        symbol="ethusdt",
+        event_time=now,
+        built_at=now,
+        bid=100,
+        ask=101,
+        features={"price": 100.5},
+        freshness={"candles": True},
+    )
+
+    assert snapshot.symbol == "ETHUSDT"
+
+    with pytest.raises(ValueError, match="unsupported asset symbol"):
+        FeatureSnapshot.create(
+            symbol="DOGEUSDT",
+            event_time=now,
+            built_at=now,
+            bid=100,
+            ask=101,
+            features={"price": 100.5},
+            freshness={"candles": True},
+        )
 
 
 def test_snapshot_checksum_rejects_tampered_persisted_payload():

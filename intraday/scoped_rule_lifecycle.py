@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from statistics import fmean
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from intraday.contracts import DecisionScope, Direction, Regime, RiskLevel
 
@@ -19,6 +19,7 @@ class ScopedRuleEvaluation(BaseModel):
     evaluation_id: str = Field(min_length=16, max_length=64)
     candidate_id: str
     scope: DecisionScope
+    symbol: str = "BTCUSDT"
     kind: Literal["replay", "soak"]
     status: Literal["deferred", "reject", "pass"]
     evaluated_at: datetime
@@ -28,9 +29,18 @@ class ScopedRuleEvaluation(BaseModel):
     champion_score: float
     challenger_score: float
     reason_codes: tuple[str, ...] = ()
+    metrics: dict[str, float | int] = Field(default_factory=dict)
+
+    @field_validator("symbol")
+    @classmethod
+    def symbol_is_registered(cls, value: str) -> str:
+        from intraday.assets import asset_spec
+        return asset_spec(value).symbol
 
     @classmethod
     def create(cls, **values):
+        from intraday.assets import asset_spec
+        values["symbol"] = asset_spec(values.get("symbol", "BTCUSDT")).symbol
         identity = hashlib.sha256(
             json.dumps(values, sort_keys=True, default=str, separators=(",", ":")).encode()
         ).hexdigest()[:32]
@@ -45,7 +55,7 @@ def rule_allows_answers(rule, answers: dict) -> bool:
     regime = Regime(answers["regime"]["choice"])
     risk = RiskLevel(answers["risk_level"]["choice"])
     toxic = float(answers["toxic_flow"]["noul"])
-    if rule.scope == DecisionScope.SPOT_DAILY:
+    if rule.scope in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}:
         return (
             direction in {Direction.BUY, Direction.STRONG_BUY}
             and confidence >= rule.parameters.jev_confidence_threshold
@@ -79,10 +89,10 @@ def evaluate_scoped_replay(store, candidate_id: str, *, now: datetime) -> Scoped
     candidate = store.load_scoped_rule(candidate_id)
     if candidate is None:
         raise ValueError("unknown scoped rule candidate")
-    champion = store.load_active_scoped_rule(candidate.scope)
+    champion = store.load_active_scoped_rule(candidate.scope, symbol=candidate.symbol)
     if champion is None or candidate.parent_rule_id != champion.rule_id:
         raise ValueError("candidate does not descend from the active champion")
-    rows, summary = store.scoped_rule_replay_evidence(candidate.scope)
+    rows, summary = store.scoped_rule_replay_evidence(candidate.scope, symbol=candidate.symbol)
     champion_score, champion_count = _score(champion, rows)
     challenger_score, challenger_count = _score(candidate, rows)
     reasons = []
@@ -101,7 +111,7 @@ def evaluate_scoped_replay(store, candidate_id: str, *, now: datetime) -> Scoped
     else:
         status, reasons = "pass", []
     evaluation = ScopedRuleEvaluation.create(
-        candidate_id=candidate.rule_id, scope=candidate.scope, kind="replay",
+        candidate_id=candidate.rule_id, scope=candidate.scope, symbol=candidate.symbol, kind="replay",
         status=status, evaluated_at=now, started_at=None,
         sample_count=min(champion_count, challenger_count),
         coverage=summary["coverage"], champion_score=champion_score,
@@ -132,7 +142,7 @@ def start_scoped_rule_soak(store, candidate_id: str, *, now: datetime) -> dict:
 
 def evaluate_scoped_soak(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
     candidate = store.load_scoped_rule(candidate_id)
-    registry = store.scoped_rule_registry(candidate.scope) if candidate else {}
+    registry = store.scoped_rule_registry(candidate.scope, symbol=candidate.symbol) if candidate else {}
     if candidate is None or registry.get("challenger_id") != candidate_id:
         raise ValueError("candidate is not the active scoped challenger")
     started_at = datetime.fromisoformat(registry["updated_at"])
@@ -164,7 +174,7 @@ def evaluate_scoped_soak(store, candidate_id: str, *, now: datetime) -> ScopedRu
     else:
         status, reasons = "pass", []
     evaluation = ScopedRuleEvaluation.create(
-        candidate_id=candidate_id, scope=candidate.scope, kind="soak",
+        candidate_id=candidate_id, scope=candidate.scope, symbol=candidate.symbol, kind="soak",
         status=status, evaluated_at=now, started_at=started_at,
         sample_count=len(completed), coverage=coverage,
         champion_score=champion_score, challenger_score=challenger_score,

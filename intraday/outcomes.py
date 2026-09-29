@@ -74,7 +74,10 @@ def evaluate_pending_outcomes(
                 started_at = datetime.fromisoformat(signal["timestamp"])
                 target = started_at + timedelta(seconds=horizon)
                 snapshots = store.list_snapshots_between(
-                    started_at, target + timedelta(seconds=90)
+                    started_at,
+                    target + timedelta(seconds=90),
+                    symbol=signal["symbol"],
+                    market=signal["market"],
                 )
                 entry = next(
                     (

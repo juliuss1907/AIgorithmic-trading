@@ -187,12 +187,18 @@ def test_cli_evaluates_soak_then_requires_exact_pass_id_for_activation(
     database = tmp_path / "intraday.sqlite"
     store = IntradayStore(database)
     store.record_journal_signal(
-        decision_id="soak-anchor", timestamp=START, symbol="BTCUSDT",
-        scope=DecisionScope.PERP_INTRADAY, state_snapshot="{}",
+        decision_id="btc-soak-anchor",
+        timestamp=START,
+        symbol="BTCUSDT",
+        scope=DecisionScope.PERP_INTRADAY,
+        state_snapshot="{}",
         raw_signals={"price": 100_000.0},
         jev_answers={"direction": {"choice": "Hold"}},
-        gate_passed=False, gate_reason="soak_observation_only",
-        rules_version="perp-test", llm_thesis=None,
+        gate_passed=False,
+        gate_reason="soak_observation_only",
+        rules_version="soak_no_active_rule",
+        llm_thesis=None,
+        market="binance_usdm_perp",
         feature_schema_version="2",
     )
     for item in records():

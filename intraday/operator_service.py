@@ -78,7 +78,7 @@ def build_operator_snapshot(
     )
     experiments = {}
     rules = {}
-    for scope in DecisionScope:
+    for scope in EVALUATION_HORIZONS:
         evaluation = store.latest_decision_experiment_evaluation(scope)
         experiments[scope.value] = {
             "pairs": store.decision_experiment_pair_summary(scope),

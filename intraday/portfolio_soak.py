@@ -9,8 +9,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from intraday.assets import AssetStage
 from intraday.contracts import DecisionScope, FeatureSnapshot
-from intraday.journal import record_scoped_signal
+from intraday.journal import _fallback_trace, record_scoped_signal
+from intraday.scoped_rule_lifecycle import rule_allows_answers
 from intraday.spot_signal import evaluate_donchian
 
 
@@ -18,13 +20,15 @@ CURRENT_SOAK_EVIDENCE_VERSION = "scope-price-v2"
 LEGACY_SOAK_EVIDENCE_VERSION = "market-v1"
 
 
-def load_soak_campaign_evidence(store) -> tuple[datetime | None, list[dict]]:
-    """Use the same model-backed campaign window for reporting and promotion."""
-    started_at = store.first_model_backed_signal_at(feature_schema_version="2")
+def load_parent_soak_campaign_evidence(store) -> tuple[datetime | None, list[dict]]:
+    """Select only BTC evidence after the parent campaign's model-backed start."""
+    started_at = store.first_model_backed_signal_at(
+        feature_schema_version="2", symbol="BTCUSDT",
+    )
     if started_at is None:
         return None, []
     ticks = store.list_portfolio_soak_ticks(
-        evidence_version=CURRENT_SOAK_EVIDENCE_VERSION
+        evidence_version=CURRENT_SOAK_EVIDENCE_VERSION, symbol="BTCUSDT",
     )
     return started_at, [
         item for item in ticks
@@ -75,7 +79,7 @@ def run_soak_cycle(
         except RuntimeError:
             status = "provider_error"
         else:
-            rule = store.load_active_scoped_rule(scope)
+            rule = store.load_active_scoped_rule(scope, symbol=snapshot.symbol)
             try:
                 record_scoped_signal(
                     store,
@@ -92,6 +96,7 @@ def run_soak_cycle(
             else:
                 status = "success"
         store.record_portfolio_soak_tick(
+            symbol=snapshot.symbol,
             scope=scope,
             status=status,
             created_at=now,
@@ -108,30 +113,107 @@ def run_spot_soak_observation(
     now: datetime,
     rule,
     candles: list[list] | None,
+    scope: DecisionScope = DecisionScope.SPOT_DAILY,
 ) -> str:
-    """Record the daily Spot heartbeat and call Jev only for a valid setup."""
+    """Record a Spot heartbeat and call Jev only for a valid 1d/4h setup."""
+    if scope not in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}:
+        raise ValueError("spot soak requires a Spot scope")
     if rule is None or not candles:
         store.record_portfolio_soak_tick(
-            scope=DecisionScope.SPOT_DAILY,
+            symbol=snapshot.symbol,
+            scope=scope,
             status="skipped_no_setup",
             created_at=now,
         )
         return "skipped_no_setup"
-    observation = evaluate_donchian(candles, rule.parameters)
-    if not observation.entry:
+    challenger = (
+        store.load_scoped_challenger(scope, symbol=snapshot.symbol)
+        if snapshot.symbol != "BTCUSDT" or scope is DecisionScope.SPOT_4H else None
+    )
+    champion = (
+        store.load_active_scoped_rule(scope, symbol=snapshot.symbol)
+        if snapshot.symbol != "BTCUSDT" or scope is DecisionScope.SPOT_4H else None
+    )
+    candidate_setup = evaluate_donchian(candles, rule.parameters).entry
+    champion_setup = (
+        evaluate_donchian(candles, champion.parameters).entry
+        if champion is not None and champion.rule_id != rule.rule_id else False
+    )
+    if not (candidate_setup or champion_setup):
         store.record_portfolio_soak_tick(
-            scope=DecisionScope.SPOT_DAILY,
+            symbol=snapshot.symbol,
+            scope=scope,
             status="skipped_no_setup",
             created_at=now,
         )
         return "skipped_no_setup"
-    return run_soak_cycle(
-        store,
-        provider,
-        snapshot,
-        now=now,
-        scopes=(DecisionScope.SPOT_DAILY,),
-    )[DecisionScope.SPOT_DAILY.value]
+    if snapshot.symbol == "BTCUSDT" and scope is DecisionScope.SPOT_DAILY:
+        return run_soak_cycle(
+            store, provider, snapshot, now=now,
+            scopes=(DecisionScope.SPOT_DAILY,),
+        )[DecisionScope.SPOT_DAILY.value]
+    tick_id = f"{snapshot.symbol}:{scope.value}:{int(now.timestamp() * 1000)}"
+    try:
+        scoped = provider.decide_scoped(snapshot, tick_id, scope, now)
+        signal_id = record_scoped_signal(
+            store, snapshot, scoped, gate_passed=False,
+            gate_reason="asset_soak_observation_only", rule_id=rule.rule_id,
+        )
+        answers = (scoped.trace or _fallback_trace(snapshot, scoped)).jev_answers
+        if challenger and challenger.rule_id == rule.rule_id:
+            store.record_scoped_rule_soak_tick(
+                candidate_id=rule.rule_id, signal_id=signal_id,
+                champion_allowed=(champion_setup and rule_allows_answers(champion, answers)) if champion else False,
+                challenger_allowed=candidate_setup and rule_allows_answers(rule, answers),
+                champion_score=0, challenger_score=0, created_at=now,
+            )
+    except RuntimeError:
+        status = "provider_error"
+    except (ValueError, sqlite3.Error):
+        status = "gate_error"
+    else:
+        status = "success"
+    store.record_portfolio_soak_tick(
+        symbol=snapshot.symbol, scope=scope,
+        status=status, created_at=now,
+    )
+    return status
+
+
+def run_asset_lifecycle_observation(
+    store,
+    provider,
+    snapshot: FeatureSnapshot,
+    *,
+    scope: DecisionScope,
+    now: datetime,
+    spot_rule=None,
+    spot_candles: list[list] | None = None,
+) -> str:
+    """Persist registered shadow data and cross the model boundary only in soak."""
+    lifecycle = store.asset_lifecycle(snapshot.symbol, scope)
+    store.record_snapshot(snapshot)
+    if lifecycle.stage is AssetStage.DISABLED:
+        return "disabled"
+    if lifecycle.stage is AssetStage.SHADOW:
+        return "shadow_recorded"
+    if lifecycle.stage is AssetStage.SOAK:
+        if scope in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}:
+            return run_spot_soak_observation(
+                store,
+                provider,
+                snapshot,
+                now=now,
+                rule=spot_rule,
+                candles=spot_candles,
+                scope=scope,
+            )
+        return run_soak_cycle(
+            store, provider, snapshot, now=now, scopes=(scope,)
+        )[scope.value]
+    raise ValueError(
+        f"{snapshot.symbol} {scope.value} paper runtime is not enabled"
+    )
 
 
 def evaluate_portfolio_soak(
@@ -159,13 +241,16 @@ def evaluate_portfolio_soak(
         if started_at
         else 0.0
     )
-    counts = {scope.value: 0 for scope in DecisionScope}
-    healthy = {scope.value: 0 for scope in DecisionScope}
-    latest = {scope.value: None for scope in DecisionScope}
+    legacy_scopes = (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY)
+    counts = {scope.value: 0 for scope in legacy_scopes}
+    healthy = {scope.value: 0 for scope in legacy_scopes}
+    latest = {scope.value: None for scope in legacy_scopes}
     violations = 0
     good_statuses = {"success", "skipped_no_setup"}
     for item in ordered:
         scope = DecisionScope(item["scope"]).value
+        if scope not in counts:
+            continue
         counts[scope] += 1
         healthy[scope] += item["status"] in good_statuses
         created_at = datetime.fromisoformat(item["created_at"])

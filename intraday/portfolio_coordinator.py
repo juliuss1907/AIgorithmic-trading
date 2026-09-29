@@ -10,6 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from intraday.contracts import DecisionScope
 
 
+SPOT_SCOPES = {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}
+
+
 class ParentPortfolioState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -19,6 +22,7 @@ class ParentPortfolioState(BaseModel):
     funding: float = 0
     spot_quantity: float = Field(default=0, ge=0)
     spot_entry_price: float | None = Field(default=None, gt=0)
+    spot_entry_scope: DecisionScope = DecisionScope.SPOT_DAILY
     perp_quantity: float = 0
     perp_entry_price: float | None = Field(default=None, gt=0)
     mark_price: float = Field(gt=0)
@@ -54,6 +58,8 @@ class ParentPortfolioState(BaseModel):
 
     @model_validator(mode="after")
     def positions_have_entry_prices(self):
+        if self.spot_entry_scope not in SPOT_SCOPES:
+            raise ValueError("spot entry scope must be a Spot scope")
         if (self.spot_quantity == 0) != (self.spot_entry_price is None):
             raise ValueError("spot entry price must match position state")
         if (self.perp_quantity == 0) != (self.perp_entry_price is None):
@@ -143,11 +149,11 @@ class ParentPortfolioCoordinator:
         equity = state.equity
         current = (
             state.spot_notional
-            if scope == DecisionScope.SPOT_DAILY
+            if scope in SPOT_SCOPES
             else state.perp_notional
         )
         target = float(target_notional)
-        if scope == DecisionScope.SPOT_DAILY and target < 0:
+        if scope in SPOT_SCOPES and target < 0:
             target = 0
 
         if (
@@ -186,7 +192,7 @@ class ParentPortfolioCoordinator:
             if state.daily_return <= -self.policy.daily_loss_limit_pct:
                 entry_reasons.append("daily_loss_limit")
 
-        spot_target = target if scope == DecisionScope.SPOT_DAILY else state.spot_notional
+        spot_target = target if scope in SPOT_SCOPES else state.spot_notional
         perp_target = target if scope == DecisionScope.PERP_INTRADAY else state.perp_notional
         spot_limit = (
             equity
@@ -199,7 +205,7 @@ class ParentPortfolioCoordinator:
             * self.policy.perp_sleeve_notional_pct
         )
         if (
-            scope == DecisionScope.SPOT_DAILY
+            scope in SPOT_SCOPES
             and spot_target > spot_limit + 1e-9
         ):
             entry_reasons.append("spot_sleeve_limit")
@@ -242,7 +248,7 @@ class ParentPortfolioCoordinator:
         reasons: tuple[str, ...],
         flatten_required: bool = False,
     ) -> PortfolioAuthorization:
-        spot = target if scope == DecisionScope.SPOT_DAILY else state.spot_notional
+        spot = target if scope in SPOT_SCOPES else state.spot_notional
         perp = target if scope == DecisionScope.PERP_INTRADAY else state.perp_notional
         equity = state.equity
         return PortfolioAuthorization(
@@ -295,6 +301,7 @@ def apply_operator_command(
             "realized_pnl": realized,
             "spot_quantity": 0,
             "spot_entry_price": None,
+            "spot_entry_scope": DecisionScope.SPOT_DAILY,
             "perp_quantity": 0,
             "perp_entry_price": None,
             "entries_paused": True,

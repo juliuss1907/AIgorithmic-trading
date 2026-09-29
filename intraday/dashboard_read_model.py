@@ -6,11 +6,12 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from intraday.assets import ASSET_REGISTRY
 from intraday.contracts import DecisionScope, ProviderRole
 from intraday.portfolio_soak import (
     CURRENT_SOAK_EVIDENCE_VERSION,
     evaluate_portfolio_soak,
-    load_soak_campaign_evidence,
+    load_parent_soak_campaign_evidence,
 )
 from intraday.portfolio_view import latest_parent_market_view
 
@@ -127,14 +128,17 @@ def _public_call(call) -> dict:
     }
 
 
-def _market_snapshot(store, *, market: str) -> dict | None:
-    snapshot = store.latest_snapshot(market=market)
+def _market_snapshot(
+    store, *, market: str, symbol: str = "BTCUSDT"
+) -> dict | None:
+    snapshot = store.latest_snapshot(market=market, symbol=symbol)
     if snapshot is None:
         return None
     reference = snapshot.features.get("reference_price")
     if reference is None:
         reference = (snapshot.bid + snapshot.ask) / 2
     return {
+        "symbol": snapshot.symbol,
         "market": market,
         "timeframe": snapshot.timeframe,
         "reference_price": reference,
@@ -143,6 +147,73 @@ def _market_snapshot(store, *, market: str) -> dict | None:
         ),
         "event_time": snapshot.event_time.isoformat(),
         "quality_flags": list(snapshot.quality_flags),
+    }
+
+
+def _health_status(health: dict, ttl: timedelta) -> dict:
+    age = health["age_seconds"]
+    health["status"] = (
+        "missing"
+        if age is None
+        else "healthy"
+        if age <= ttl.total_seconds()
+        else "stale"
+    )
+    return health
+
+
+def _asset_projection(store, symbol: str, *, now: datetime) -> dict:
+    spec = ASSET_REGISTRY[symbol]
+    lifecycles = store.list_asset_lifecycles(symbol)
+    sources = {
+        source: _health_status(
+            store.external_source_health(source, symbol=symbol, now=now), ttl
+        )
+        for source, ttl in EXTERNAL_SOURCE_TTLS.items()
+        if source != "cryptorank"
+    }
+    sources["hyperliquid"] = _health_status(
+        store.venue_health("hyperliquid", symbol=symbol, now=now),
+        timedelta(seconds=60),
+    )
+    rules = {}
+    for scope in DecisionScope:
+        registry = store.scoped_rule_registry(scope, symbol=symbol)
+        candidate_id = registry["challenger_id"] or registry["champion_id"]
+        replay = store.latest_scoped_rule_evaluation(candidate_id, kind="replay") if candidate_id else None
+        soak = store.latest_scoped_rule_evaluation(candidate_id, kind="soak") if candidate_id else None
+        started = (
+            datetime.fromisoformat(registry["updated_at"])
+            if registry.get("challenger_id") and registry.get("updated_at") else None
+        )
+        rules[scope.value] = {
+            **registry,
+            "replay_evaluation_id": replay.evaluation_id if replay else None,
+            "replay_status": replay.status if replay else None,
+            "soak_evaluation_id": soak.evaluation_id if soak else None,
+            "soak_status": soak.status if soak else None,
+            "soak_progress_pct": (
+                min(100, max(0, int((now - started).total_seconds() / (
+                    (14 if scope is DecisionScope.SPOT_4H else 30) * 86_400
+                ) * 100)))
+                if started and scope in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}
+                else None
+            ),
+        }
+    return {
+        "symbol": symbol,
+        "capability": spec.capability.value,
+        "stages": {item.scope.value: item.stage.value for item in lifecycles},
+        "markets": {
+            "spot": _market_snapshot(
+                store, market="binance_spot", symbol=symbol
+            ),
+            "perp": _market_snapshot(
+                store, market="binance_usdm_perp", symbol=symbol
+            ),
+        },
+        "sources": sources,
+        "rules": rules,
     }
 
 
@@ -168,19 +239,20 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("dashboard time must be timezone-aware")
     now = now.astimezone(timezone.utc)
-    started_at, ticks = load_soak_campaign_evidence(store)
+    started_at, ticks = load_parent_soak_campaign_evidence(store)
     live_evaluation = evaluate_portfolio_soak(
         ticks,
         evaluated_at=now,
         evidence_version=CURRENT_SOAK_EVIDENCE_VERSION,
     )
     latest_tick: dict[str, dict | None] = {
-        scope.value: None for scope in DecisionScope
+        scope.value: None for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY)
     }
     for tick in ticks:
-        latest_tick[tick["scope"]] = tick
+        if tick["scope"] in latest_tick:
+            latest_tick[tick["scope"]] = tick
     scopes = {}
-    for scope in DecisionScope:
+    for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY):
         name = scope.value
         item = latest_tick[name]
         latest_at = datetime.fromisoformat(item["created_at"]) if item else None
@@ -259,18 +331,11 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
     external_sources = {}
     for source, ttl in EXTERNAL_SOURCE_TTLS.items():
         health = store.external_source_health(source, now=now)
-        age = health["age_seconds"]
-        health["status"] = (
-            "missing" if age is None else "healthy" if age <= ttl.total_seconds() else "stale"
-        )
-        external_sources[source] = health
+        external_sources[source] = _health_status(health, ttl)
     hyperliquid = store.venue_health("hyperliquid", now=now)
-    hyperliquid["status"] = (
-        "missing" if hyperliquid["age_seconds"] is None
-        else "healthy" if hyperliquid["age_seconds"] <= 60
-        else "stale"
+    external_sources["hyperliquid"] = _health_status(
+        hyperliquid, timedelta(seconds=60)
     )
-    external_sources["hyperliquid"] = hyperliquid
     return {
         "generated_at": now.isoformat(),
         "status": {
@@ -304,4 +369,8 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
         "thesis": bundle.model_dump(mode="json") if bundle else None,
         "scheduler": store.latest_scheduler_runs(),
         "external_sources": external_sources,
+        "assets": [
+            _asset_projection(store, symbol, now=now)
+            for symbol in ASSET_REGISTRY
+        ],
     }
