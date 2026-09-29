@@ -11,6 +11,7 @@ from intraday.contracts import DecisionScope, ProviderRole
 from intraday.portfolio_soak import (
     CURRENT_SOAK_EVIDENCE_VERSION,
     evaluate_portfolio_soak,
+    load_parent_soak_campaign_evidence,
 )
 from intraday.portfolio_view import latest_parent_market_view
 
@@ -238,17 +239,7 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("dashboard time must be timezone-aware")
     now = now.astimezone(timezone.utc)
-    started_at = store.first_model_backed_signal_at(feature_schema_version="2")
-    all_ticks = store.list_portfolio_soak_ticks(
-        evidence_version=CURRENT_SOAK_EVIDENCE_VERSION
-    )
-    ticks = []
-    if started_at is not None:
-        ticks = [
-            item
-            for item in all_ticks
-            if datetime.fromisoformat(item["created_at"]) >= started_at
-        ]
+    started_at, ticks = load_parent_soak_campaign_evidence(store)
     live_evaluation = evaluate_portfolio_soak(
         ticks,
         evaluated_at=now,

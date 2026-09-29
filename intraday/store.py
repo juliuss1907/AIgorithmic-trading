@@ -2095,14 +2095,21 @@ class IntradayStore:
         self,
         *,
         feature_schema_version: str = "2",
+        symbol: str | None = None,
     ) -> datetime | None:
         """Anchor a soak campaign to its first primary model-backed decision."""
+        parameters: tuple = (feature_schema_version,)
+        symbol_filter = ""
+        if symbol is not None:
+            symbol_filter = " AND symbol=?"
+            parameters += (asset_spec(symbol).symbol,)
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT timestamp FROM signals WHERE feature_schema_version=? "
                 "AND decision_mode='primary' AND state_variant='numeric_v1' "
+                f"{symbol_filter} "
                 "ORDER BY julianday(timestamp), id LIMIT 1",
-                (feature_schema_version,),
+                parameters,
             ).fetchone()
         return None if row is None else datetime.fromisoformat(row["timestamp"])
 

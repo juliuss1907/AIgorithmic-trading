@@ -352,6 +352,67 @@ def test_soak_report_refuses_missing_database_without_creating_it(
     assert not database.exists()
 
 
+def test_global_soak_evaluate_routes_to_existing_docker_volume(
+    monkeypatch, tmp_path,
+):
+    from intraday import deployment as deployment_module
+
+    root = tmp_path / "checkout"
+    (root / "deploy" / "intraday").mkdir(parents=True)
+    (root / "deploy" / "intraday" / "compose.yaml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
+    (root / ".env.intraday").write_text(
+        "INTRADAY_MODE=paper\n", encoding="utf-8"
+    )
+    registered = deployment_module.Deployment.for_project(root)
+    wrong_database = tmp_path / "host.sqlite3"
+    calls = []
+    monkeypatch.setenv("INTRADAY_DATABASE", str(wrong_database))
+    monkeypatch.setattr(deployment_module, "load_deployment", lambda: registered)
+    monkeypatch.setattr(
+        deployment_module,
+        "execute",
+        lambda command, *, cwd: calls.append((command, cwd)) or 0,
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "portfolio", "soak", "evaluate", "--at", NOW.isoformat(),
+    ])
+
+    main()
+
+    assert calls == [(
+        deployment_module.compose_command(
+            registered,
+            "--profile", "admin", "run", "--rm", "--no-deps",
+            "admin", "portfolio", "soak", "evaluate", "--database",
+            "/app/state/intraday/intraday.sqlite3", "--at", NOW.isoformat(),
+        ),
+        root,
+    )]
+    assert not wrong_database.exists()
+
+
+def test_soak_evaluate_explicit_database_stays_native(monkeypatch, tmp_path, capsys):
+    from intraday import deployment as deployment_module
+
+    database = tmp_path / "native.sqlite3"
+    IntradayStore(database)
+    monkeypatch.setattr(
+        deployment_module,
+        "load_deployment",
+        lambda: pytest.fail("explicit database must not load deployment"),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "portfolio", "soak", "evaluate", "--database", str(database),
+        "--at", NOW.isoformat(),
+    ])
+
+    main()
+
+    assert json.loads(capsys.readouterr().out)["status"] == "deferred"
+
+
 def test_positions_cli_returns_empty_list_from_explicit_database(
     monkeypatch, capsys, tmp_path
 ):

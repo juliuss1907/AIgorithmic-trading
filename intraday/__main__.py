@@ -108,6 +108,7 @@ from intraday.positions import build_positions_snapshot
 from intraday.portfolio_soak import (
     CURRENT_SOAK_EVIDENCE_VERSION,
     evaluate_portfolio_soak,
+    load_parent_soak_campaign_evidence,
     run_asset_lifecycle_observation,
     run_soak_cycle,
     run_spot_soak_observation,
@@ -1020,9 +1021,8 @@ def _portfolio_cli(arguments) -> None:
             if arguments.at
             else datetime.now(timezone.utc)
         )
-        evaluation = evaluate_portfolio_soak(
-            store.list_portfolio_soak_ticks(), evaluated_at=evaluated_at
-        )
+        _, ticks = load_parent_soak_campaign_evidence(store)
+        evaluation = evaluate_portfolio_soak(ticks, evaluated_at=evaluated_at)
         store.record_portfolio_soak_evaluation(evaluation)
         print(evaluation.model_dump_json(indent=2))
         return
@@ -1787,6 +1787,23 @@ def main() -> None:
                 owner_gid=os.getgid(),
             )
             code = deployment_cli.execute(command, cwd=deployment.project_root)
+            if code:
+                raise SystemExit(code)
+            return
+    if (
+        arguments.command == "portfolio"
+        and arguments.portfolio_command == "soak"
+        and arguments.soak_command == "evaluate"
+        and arguments.database is None
+    ):
+        deployment = deployment_cli.load_deployment()
+        if deployment is not None:
+            code = deployment_cli.execute(
+                deployment_cli.soak_evaluate_command(
+                    deployment, at=arguments.at,
+                ),
+                cwd=deployment.project_root,
+            )
             if code:
                 raise SystemExit(code)
             return

@@ -1,4 +1,5 @@
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
@@ -16,6 +17,8 @@ from intraday.contracts import (
     SpotRuleParameters,
 )
 from intraday.store import IntradayStore
+from intraday.__main__ import main
+from intraday.dashboard_read_model import build_dashboard_snapshot
 from intraday.web import create_app
 
 
@@ -56,11 +59,14 @@ def _activate_provider(
     return profile
 
 
-def _record_signal(store: IntradayStore, *, now: datetime) -> int:
+def _record_signal(
+    store: IntradayStore, *, now: datetime, symbol: str = "BTCUSDT",
+    decision_id: str = "dashboard-decision-1",
+) -> int:
     return store.record_journal_signal(
-        decision_id="dashboard-decision-1",
+        decision_id=decision_id,
         timestamp=now,
-        symbol="BTCUSDT",
+        symbol=symbol,
         scope=DecisionScope.PERP_INTRADAY,
         state_snapshot=json.dumps(
             {"decision_scope": "perp_intraday", "secret_marker": "never-return"},
@@ -236,6 +242,84 @@ def test_dashboard_api_projects_live_soak_without_persisting_an_evaluation(tmp_p
     assert payload["providers"]["jev"]["active"] is True
     assert payload["providers"]["llm"]["active"] is True
     assert store.latest_portfolio_soak_evaluation() is None
+
+
+def test_parent_soak_evaluation_and_preview_use_only_anchored_btc_evidence(
+    tmp_path, monkeypatch, capsys,
+):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime(2026, 9, 29, 12, tzinfo=timezone.utc)
+    eth_anchor = now - timedelta(hours=80)
+    btc_anchor = now - timedelta(hours=73)
+    _record_signal(
+        store, now=eth_anchor, symbol="ETHUSDT", decision_id="eth-anchor",
+    )
+    _record_signal(store, now=btc_anchor)
+    store.record_portfolio_soak_tick(
+        symbol="ETHUSDT", scope=DecisionScope.SPOT_DAILY,
+        status="success", created_at=eth_anchor,
+    )
+    store.record_portfolio_soak_tick(
+        symbol="ETHUSDT", scope=DecisionScope.PERP_INTRADAY,
+        status="success", created_at=now - timedelta(minutes=5),
+    )
+    store.record_portfolio_soak_tick(
+        symbol="BTCUSDT", scope=DecisionScope.SPOT_DAILY,
+        status="provider_error", hard_risk_violation=True,
+        created_at=btc_anchor - timedelta(minutes=7),
+    )
+    for scope, status in (
+        (DecisionScope.SPOT_DAILY, "skipped_no_setup"),
+        (DecisionScope.PERP_INTRADAY, "success"),
+    ):
+        store.record_portfolio_soak_tick(
+            symbol="BTCUSDT", scope=scope, status=status,
+            created_at=btc_anchor,
+        )
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "portfolio", "soak", "evaluate", "--database", str(database),
+        "--at", now.isoformat(),
+    ])
+
+    main()
+
+    persisted = json.loads(capsys.readouterr().out)
+    snapshot = build_dashboard_snapshot(store, now=now)
+    preview = snapshot["soak"]["preview"]
+    assert snapshot["soak"]["started_at"] == btc_anchor.isoformat()
+    assert persisted["started_at"] == preview["started_at"]
+    assert persisted["sample_counts"] == preview["sample_counts"] == {
+        "spot_daily": 1, "perp_intraday": 1,
+    }
+    assert persisted["hard_risk_violations"] == preview["hard_risk_violations"] == 0
+
+
+def test_parent_soak_without_btc_anchor_does_not_use_other_asset_ticks(
+    tmp_path, monkeypatch, capsys,
+):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime(2026, 9, 29, 12, tzinfo=timezone.utc)
+    _record_signal(
+        store, now=now - timedelta(hours=73), symbol="ETHUSDT",
+        decision_id="eth-only-anchor",
+    )
+    store.record_portfolio_soak_tick(
+        symbol="ETHUSDT", scope=DecisionScope.PERP_INTRADAY,
+        status="success", created_at=now - timedelta(hours=73),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "portfolio", "soak", "evaluate", "--database", str(database),
+        "--at", now.isoformat(),
+    ])
+
+    main()
+
+    persisted = json.loads(capsys.readouterr().out)
+    assert persisted["started_at"] is None
+    assert persisted["status"] == "deferred"
+    assert persisted["sample_counts"] == {"spot_daily": 0, "perp_intraday": 0}
 
 
 def test_signal_api_is_bounded_scoped_and_never_leaks_model_context(tmp_path):

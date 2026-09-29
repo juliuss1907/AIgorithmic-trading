@@ -218,6 +218,19 @@ def soak_report_command(
     return compose_command(deployment, *arguments, *report_arguments)
 
 
+def soak_evaluate_command(
+    deployment: Deployment, *, at: str | None = None,
+) -> list[str]:
+    arguments = [
+        "--profile", "admin", "run", "--rm", "--no-deps",
+        "admin", "portfolio", "soak", "evaluate",
+        "--database", "/app/state/intraday/intraday.sqlite3",
+    ]
+    if at is not None:
+        arguments.extend(("--at", at))
+    return compose_command(deployment, *arguments)
+
+
 def positions_command(deployment: Deployment) -> list[str]:
     return compose_command(
         deployment,
