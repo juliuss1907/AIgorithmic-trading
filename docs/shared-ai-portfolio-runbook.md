@@ -95,6 +95,9 @@ aigt portfolio soak evaluate
 The result passes only with recent evidence from both scopes, at least 100 perp samples,
 at least three spot samples, at least 95% availability per scope, and zero recorded hard-risk
 violations. Chỉ `soak evaluate` mới persist evaluation; một pass vẫn không activate fills.
+Both `soak report` and `soak evaluate` use evidence after the first schema-v2 primary
+model-backed signal. With a registered Docker deployment, `soak evaluate` runs in an isolated
+admin container against the worker's volume; use `--database` only for an explicit native DB.
 
 ## 4. Manually activate paper fills
 

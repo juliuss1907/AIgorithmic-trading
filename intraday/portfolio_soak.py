@@ -18,6 +18,20 @@ CURRENT_SOAK_EVIDENCE_VERSION = "scope-price-v2"
 LEGACY_SOAK_EVIDENCE_VERSION = "market-v1"
 
 
+def load_soak_campaign_evidence(store) -> tuple[datetime | None, list[dict]]:
+    """Use the same model-backed campaign window for reporting and promotion."""
+    started_at = store.first_model_backed_signal_at(feature_schema_version="2")
+    if started_at is None:
+        return None, []
+    ticks = store.list_portfolio_soak_ticks(
+        evidence_version=CURRENT_SOAK_EVIDENCE_VERSION
+    )
+    return started_at, [
+        item for item in ticks
+        if datetime.fromisoformat(item["created_at"]) >= started_at
+    ]
+
+
 class PortfolioSoakEvaluation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

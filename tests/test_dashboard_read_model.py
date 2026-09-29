@@ -1,4 +1,5 @@
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
@@ -14,6 +15,8 @@ from intraday.contracts import (
     ExternalObservation,
 )
 from intraday.store import IntradayStore
+from intraday.__main__ import main
+from intraday.dashboard_read_model import build_dashboard_snapshot
 from intraday.web import create_app
 
 
@@ -192,6 +195,78 @@ def test_dashboard_api_projects_live_soak_without_persisting_an_evaluation(tmp_p
     assert payload["providers"]["jev"]["active"] is True
     assert payload["providers"]["llm"]["active"] is True
     assert store.latest_portfolio_soak_evaluation() is None
+
+
+def test_soak_evaluate_persists_the_same_campaign_evidence_as_dashboard(
+    tmp_path, monkeypatch, capsys,
+):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime(2026, 9, 29, 12, tzinfo=timezone.utc)
+    anchor = now - timedelta(hours=73)
+    store.record_portfolio_soak_tick(
+        scope=DecisionScope.SPOT_DAILY, status="provider_error",
+        hard_risk_violation=True, created_at=anchor - timedelta(minutes=7),
+    )
+    store.record_portfolio_soak_tick(
+        scope=DecisionScope.PERP_INTRADAY, status="provider_error",
+        created_at=anchor - timedelta(minutes=7),
+    )
+    _record_signal(store, now=anchor)
+    store.record_portfolio_soak_tick(
+        scope=DecisionScope.SPOT_DAILY, status="skipped_no_setup",
+        created_at=anchor,
+    )
+    store.record_portfolio_soak_tick(
+        scope=DecisionScope.PERP_INTRADAY, status="success",
+        created_at=anchor,
+    )
+    for hours_ago in (2, 1):
+        store.record_portfolio_soak_tick(
+            scope=DecisionScope.SPOT_DAILY, status="skipped_no_setup",
+            created_at=now - timedelta(hours=hours_ago),
+        )
+    for minutes_ago in range(99, 0, -1):
+        store.record_portfolio_soak_tick(
+            scope=DecisionScope.PERP_INTRADAY, status="success",
+            created_at=now - timedelta(minutes=minutes_ago),
+        )
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "portfolio", "soak", "evaluate", "--database", str(database),
+        "--at", now.isoformat(),
+    ])
+
+    main()
+
+    persisted = json.loads(capsys.readouterr().out)
+    preview = build_dashboard_snapshot(store, now=now)["soak"]["preview"]
+    assert persisted["started_at"] == preview["started_at"]
+    assert persisted["sample_counts"] == preview["sample_counts"]
+    assert persisted["hard_risk_violations"] == preview["hard_risk_violations"] == 0
+    assert persisted["status"] == preview["status"] == "pass"
+
+
+def test_soak_evaluate_without_model_backed_anchor_uses_no_ticks(
+    tmp_path, monkeypatch, capsys,
+):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime(2026, 9, 29, 12, tzinfo=timezone.utc)
+    store.record_portfolio_soak_tick(
+        scope=DecisionScope.PERP_INTRADAY, status="success",
+        created_at=now - timedelta(hours=73),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "portfolio", "soak", "evaluate", "--database", str(database),
+        "--at", now.isoformat(),
+    ])
+
+    main()
+
+    persisted = json.loads(capsys.readouterr().out)
+    assert persisted["status"] == "deferred"
+    assert persisted["started_at"] is None
+    assert persisted["sample_counts"] == {"spot_daily": 0, "perp_intraday": 0}
 
 
 def test_signal_api_is_bounded_scoped_and_never_leaks_model_context(tmp_path):
