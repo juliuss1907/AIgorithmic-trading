@@ -11,6 +11,7 @@ from intraday.contracts import DecisionScope
 class AssetCapability(str, Enum):
     FULL = "full"
     SHADOW_ONLY = "shadow_only"
+    SOAK_ONLY = "soak_only"
 
 
 class AssetStage(str, Enum):
@@ -72,10 +73,10 @@ ASSET_REGISTRY: dict[str, AssetSpec] = {
     for spec in (
         _spec("BTC", 1, AssetCapability.FULL),
         _spec("ETH", 0, AssetCapability.FULL),
-        _spec("HYPE", 24, AssetCapability.SHADOW_ONLY),
-        _spec("NEAR", 10, AssetCapability.SHADOW_ONLY),
-        _spec("ZEC", 90, AssetCapability.SHADOW_ONLY),
-        _spec("SOL", 2, AssetCapability.SHADOW_ONLY),
+        _spec("HYPE", 24, AssetCapability.SOAK_ONLY),
+        _spec("NEAR", 10, AssetCapability.SOAK_ONLY),
+        _spec("ZEC", 90, AssetCapability.SOAK_ONLY),
+        _spec("SOL", 2, AssetCapability.SOAK_ONLY),
     )
 }
 
@@ -104,6 +105,8 @@ class AssetLifecycle:
             and self.stage not in {AssetStage.DISABLED, AssetStage.SHADOW}
         ):
             raise ValueError(f"{spec.symbol} is shadow-only")
+        if spec.capability is AssetCapability.SOAK_ONLY and self.stage is AssetStage.PAPER:
+            raise ValueError(f"{spec.symbol} is decision-soak-only")
 
     @classmethod
     def initial(cls, spec: AssetSpec, scope: DecisionScope) -> "AssetLifecycle":
@@ -113,12 +116,16 @@ class AssetLifecycle:
     def can_start_soak(self) -> bool:
         return (
             self.stage is AssetStage.SHADOW
-            and asset_spec(self.symbol).capability is AssetCapability.FULL
+            and asset_spec(self.symbol).capability in {
+                AssetCapability.FULL, AssetCapability.SOAK_ONLY
+            }
         )
 
     def start_soak(self) -> "AssetLifecycle":
         if asset_spec(self.symbol).capability is AssetCapability.SHADOW_ONLY:
             raise ValueError(f"{self.symbol} is shadow-only")
+        if self.stage is AssetStage.SOAK:
+            return self
         if self.stage is not AssetStage.SHADOW:
             raise ValueError("only a shadow asset can start soak")
         return replace(self, stage=AssetStage.SOAK)

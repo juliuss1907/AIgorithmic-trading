@@ -12,6 +12,8 @@ from intraday.contracts import (
     ProviderRole,
     StateVariant,
     ExternalObservation,
+    ScopedRuleCandidate,
+    SpotRuleParameters,
 )
 from intraday.store import IntradayStore
 from intraday.web import create_app
@@ -129,8 +131,34 @@ def test_dashboard_api_reports_waiting_when_no_model_backed_soak_exists(tmp_path
         "BTCUSDT", "ETHUSDT", "HYPEUSDT", "NEARUSDT", "ZECUSDT", "SOLUSDT"
     ]
     assert payload["assets"][1]["stages"] == {
-        "perp_intraday": "shadow", "spot_daily": "shadow"
+        "perp_intraday": "shadow", "spot_daily": "shadow", "spot_4h": "shadow"
     }
+    assert payload["assets"][1]["rules"]["spot_daily"]["champion_id"] is None
+
+
+def test_dashboard_reports_asset_owned_champion(tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime.now(timezone.utc)
+    rule = ScopedRuleCandidate.create(
+        rule_id="eth-spot-champion", parent_rule_id="bootstrap",
+        thesis_id="baseline", symbol="ETHUSDT", scope=DecisionScope.SPOT_DAILY,
+        parameters=SpotRuleParameters(), created_at=now,
+        model_ref="deterministic/baseline", prompt_version="spot-baseline-v1",
+    )
+    store.register_scoped_rule(rule, status="champion")
+    store.activate_scoped_champion(rule.scope, rule.rule_id, now=now, symbol=rule.symbol)
+
+    response = TestClient(create_app(database=database)).get("/api/dashboard")
+
+    eth = next(item for item in response.json()["assets"] if item["symbol"] == "ETHUSDT")
+    btc = next(item for item in response.json()["assets"] if item["symbol"] == "BTCUSDT")
+    assert eth["rules"]["spot_daily"]["champion_id"] == rule.rule_id
+    assert btc["rules"]["spot_daily"]["champion_id"] is None
+    page = TestClient(create_app(database=database)).get("/")
+    assert page.status_code == 200
+    assert "Rules / evidence" in page.text
+    assert "eth-spot-champion" in page.text
 
 
 def test_dashboard_exposes_shadow_source_health_and_latest_metrics(tmp_path):

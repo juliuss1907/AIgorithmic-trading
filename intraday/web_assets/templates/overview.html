@@ -144,18 +144,27 @@
       <section class="ledger" aria-labelledby="assets-heading">
         <div class="section-head">
           <div><p class="eyebrow">Registry-gated rollout</p><h2 id="assets-heading">Asset rollout</h2></div>
-          <small>HYPE / NEAR / ZEC / SOL luôn data-only</small>
+          <small>HYPE / NEAR / ZEC / SOL: decision-soak, không paper</small>
         </div>
         <div class="table-wrap" tabindex="0" aria-label="Lifecycle của từng tài sản">
           <table>
-            <thead><tr><th>Asset</th><th>Capability</th><th>Spot</th><th>Perp</th><th>Venue coverage</th></tr></thead>
+            <thead><tr><th>Asset</th><th>Capability</th><th>Spot 4h</th><th>Perp</th><th>Spot 1d legacy</th><th>Rules / evidence</th><th>Venue coverage</th></tr></thead>
             <tbody>
               {% for asset in dashboard.assets %}
               <tr>
                 <td><strong>{{ asset.symbol }}</strong></td>
                 <td>{{ asset.capability }}</td>
-                <td><span class="outcome outcome-{{ asset.stages.spot_daily }}">{{ asset.stages.spot_daily }}</span></td>
+                <td><span class="outcome outcome-{{ asset.stages.spot_4h }}">{{ asset.stages.spot_4h }}</span></td>
                 <td><span class="outcome outcome-{{ asset.stages.perp_intraday }}">{{ asset.stages.perp_intraday }}</span></td>
+                <td><span class="outcome outcome-{{ asset.stages.spot_daily }}">{{ asset.stages.spot_daily }}</span></td>
+                <td>
+                  {% for scope, rule in asset.rules.items() %}
+                    <div><strong>{{ scope }}</strong>: champion {{ rule.champion_id or '—' }} · challenger {{ rule.challenger_id or '—' }} · rollback {{ rule.rollback_id or '—' }}</div>
+                    {% if rule.replay_evaluation_id %}<div>Replay {{ rule.replay_status }} · {{ rule.replay_evaluation_id }}</div>{% endif %}
+                    {% if rule.soak_evaluation_id %}<div>Soak {{ rule.soak_status }} · {{ rule.soak_evaluation_id }}</div>{% endif %}
+                    {% if rule.soak_progress_pct is not none %}<div>Soak {{ rule.soak_progress_pct }}% of {{ 14 if scope == 'spot_4h' else 30 }} days</div>{% endif %}
+                  {% endfor %}
+                </td>
                 <td>
                   {% for source, health in asset.sources.items() %}
                     {{ source|capitalize }}: {{ health.status }}{% if not loop.last %} · {% endif %}

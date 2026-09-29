@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -244,6 +245,7 @@ class IntradayStore:
                 CREATE TABLE IF NOT EXISTS scoped_rules (
                     id TEXT PRIMARY KEY,
                     scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    symbol TEXT NOT NULL DEFAULT 'BTCUSDT',
                     parent_id TEXT NOT NULL,
                     status TEXT NOT NULL CHECK (status IN (
                         'queued', 'replay_passed', 'challenger', 'champion',
@@ -260,6 +262,23 @@ class IntradayStore:
                     challenger_id TEXT REFERENCES scoped_rules(id),
                     rollback_id TEXT REFERENCES scoped_rules(id),
                     updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS asset_scoped_rule_registry (
+                    symbol TEXT NOT NULL,
+                    scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    champion_id TEXT REFERENCES scoped_rules(id),
+                    challenger_id TEXT REFERENCES scoped_rules(id),
+                    rollback_id TEXT REFERENCES scoped_rules(id),
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (symbol, scope)
+                );
+                CREATE TABLE IF NOT EXISTS asset_daily_candles (
+                    symbol TEXT NOT NULL,
+                    interval TEXT NOT NULL CHECK (interval='1d'),
+                    open_time INTEGER NOT NULL,
+                    close_time INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    PRIMARY KEY (symbol, interval, open_time)
                 );
                 CREATE TABLE IF NOT EXISTS parent_portfolio_state (
                     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -433,6 +452,7 @@ class IntradayStore:
                     id TEXT PRIMARY KEY,
                     candidate_id TEXT NOT NULL REFERENCES scoped_rules(id),
                     scope TEXT NOT NULL CHECK (scope IN ('spot_daily', 'perp_intraday')),
+                    symbol TEXT NOT NULL DEFAULT 'BTCUSDT',
                     kind TEXT NOT NULL CHECK (kind IN ('replay', 'soak')),
                     status TEXT NOT NULL CHECK (status IN ('deferred', 'reject', 'pass')),
                     evaluated_at TEXT NOT NULL,
@@ -443,6 +463,7 @@ class IntradayStore:
                 CREATE TABLE IF NOT EXISTS scoped_rule_soak_ticks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     candidate_id TEXT NOT NULL REFERENCES scoped_rules(id),
+                    symbol TEXT NOT NULL DEFAULT 'BTCUSDT',
                     signal_id INTEGER NOT NULL REFERENCES signals(id),
                     champion_allowed INTEGER NOT NULL CHECK (champion_allowed IN (0, 1)),
                     challenger_allowed INTEGER NOT NULL CHECK (challenger_allowed IN (0, 1)),
@@ -539,7 +560,16 @@ class IntradayStore:
                     PRIMARY KEY (symbol, scope)
                 );
                 INSERT OR IGNORE INTO schema_meta VALUES ('schema_version', '1');
-                """
+                """.replace(
+                    "CHECK (scope IN ('spot_daily', 'perp_intraday'))",
+                    "CHECK (scope IN ('spot_daily', 'spot_4h', 'perp_intraday'))",
+                ).replace(
+                    "CHECK (interval='1d')",
+                    "CHECK (interval IN ('4h', '8h', '1d'))",
+                ).replace(
+                    "CHECK (feature_schema_version IN ('1', '2'))",
+                    "CHECK (feature_schema_version IN ('1', '2', '3'))",
+                )
             )
             command_columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(commands)")
@@ -624,16 +654,107 @@ class IntradayStore:
             seeded_at = datetime.now(timezone.utc).isoformat()
             for spec in ASSET_REGISTRY.values():
                 stage = btc_stage if spec.symbol == "BTCUSDT" else AssetStage.SHADOW
-                for scope in spec.enabled_scopes:
+                for scope in spec.enabled_scopes - {DecisionScope.SPOT_4H}:
                     connection.execute(
                         "INSERT OR IGNORE INTO asset_scope_lifecycle "
                         "(symbol, scope, stage, evaluation_id, updated_at) "
                         "VALUES (?, ?, ?, NULL, ?)",
                         (spec.symbol, scope.value, stage.value, seeded_at),
                     )
+            for table in ("scoped_rules", "scoped_rule_evaluations", "scoped_rule_soak_ticks"):
+                columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+                if "symbol" not in columns:
+                    connection.execute(
+                        f"ALTER TABLE {table} ADD COLUMN symbol TEXT NOT NULL DEFAULT 'BTCUSDT'"
+                    )
             connection.execute(
-                "UPDATE schema_meta SET value='20' WHERE key='schema_version'"
+                "CREATE INDEX IF NOT EXISTS idx_scoped_rules_asset_status "
+                "ON scoped_rules(symbol, scope, status, created_at, id)"
             )
+            connection.execute(
+                "INSERT OR IGNORE INTO asset_scoped_rule_registry "
+                "(symbol, scope, champion_id, challenger_id, rollback_id, updated_at) "
+                "SELECT 'BTCUSDT', scope, champion_id, challenger_id, rollback_id, updated_at "
+                "FROM scoped_rule_registry"
+            )
+            connection.execute(
+                "UPDATE schema_meta SET value='21' WHERE key='schema_version'"
+            )
+        self._migrate_v22()
+
+    def _migrate_v22(self) -> None:
+        """Expand old CHECK constraints while retaining BTC daily data and lineage."""
+        old_scope = "CHECK (scope IN ('spot_daily', 'perp_intraday'))"
+        new_scope = "CHECK (scope IN ('spot_daily', 'spot_4h', 'perp_intraday'))"
+        with self._connect() as connection:
+            connection.execute("PRAGMA foreign_keys = OFF")
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                tables = (
+                    "scoped_rules", "scoped_rule_registry", "asset_scoped_rule_registry",
+                    "asset_daily_candles", "portfolio_soak_ticks", "parent_paper_fills",
+                    "signals", "trades", "open_trade_context",
+                    "decision_experiment_evaluations", "scoped_rule_evaluations",
+                    "asset_scope_lifecycle",
+                )
+                for table in tables:
+                    row = connection.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                        (table,),
+                    ).fetchone()
+                    if row is None:
+                        continue
+                    original = row["sql"]
+                    expanded = original.replace(old_scope, new_scope).replace(
+                        "CHECK (interval='1d')",
+                        "CHECK (interval IN ('4h', '8h', '1d'))",
+                    ).replace(
+                        "CHECK (feature_schema_version IN ('1', '2'))",
+                        "CHECK (feature_schema_version IN ('1', '2', '3'))",
+                    )
+                    if expanded == original:
+                        continue
+                    attachments = [item["sql"] for item in connection.execute(
+                        "SELECT sql FROM sqlite_master WHERE tbl_name=? "
+                        "AND type IN ('index', 'trigger') AND sql IS NOT NULL",
+                        (table,),
+                    )]
+                    temporary = f"__v22_{table}"
+                    create = re.sub(
+                        rf"^CREATE TABLE(?: IF NOT EXISTS)?\s+{re.escape(table)}\b",
+                        f"CREATE TABLE {temporary}", expanded, count=1,
+                        flags=re.IGNORECASE,
+                    )
+                    if create == expanded:
+                        raise RuntimeError(f"cannot migrate table {table}")
+                    connection.execute(create)
+                    columns = [item[1] for item in connection.execute(
+                        f"PRAGMA table_info({table})"
+                    )]
+                    quoted = ", ".join(f'"{name}"' for name in columns)
+                    connection.execute(
+                        f"INSERT INTO {temporary} ({quoted}) SELECT {quoted} FROM {table}"
+                    )
+                    connection.execute(f"DROP TABLE {table}")
+                    connection.execute(f"ALTER TABLE {temporary} RENAME TO {table}")
+                    for statement in attachments:
+                        connection.execute(statement)
+                if list(connection.execute("PRAGMA foreign_key_check")):
+                    raise RuntimeError("v22 migration foreign key check failed")
+                seeded_at = datetime.now(timezone.utc).isoformat()
+                for spec in ASSET_REGISTRY.values():
+                    connection.execute(
+                        "INSERT OR IGNORE INTO asset_scope_lifecycle "
+                        "(symbol, scope, stage, evaluation_id, updated_at) "
+                        "VALUES (?, ?, 'shadow', NULL, ?)",
+                        (spec.symbol, DecisionScope.SPOT_4H.value, seeded_at),
+                    )
+                connection.execute(
+                    "UPDATE schema_meta SET value='22' WHERE key='schema_version'"
+                )
+            except Exception:
+                connection.rollback()
+                raise
 
     def asset_lifecycle(
         self, symbol: str, scope: DecisionScope
@@ -712,12 +833,12 @@ class IntradayStore:
             ).fetchone()
         return None if row is None else row["status"]
 
-    def list_scoped_rules(self, scope: DecisionScope | None = None) -> list[dict]:
-        query = "SELECT id, scope, parent_id, status, created_at FROM scoped_rules"
-        parameters: tuple = ()
+    def list_scoped_rules(self, scope: DecisionScope | None = None, *, symbol: str = "BTCUSDT") -> list[dict]:
+        query = "SELECT id, scope, symbol, parent_id, status, created_at FROM scoped_rules WHERE symbol=?"
+        parameters: tuple = (asset_spec(symbol).symbol,)
         if scope is not None:
-            query += " WHERE scope=?"
-            parameters = (scope.value,)
+            query += " AND scope=?"
+            parameters += (scope.value,)
         query += " ORDER BY created_at DESC, id DESC"
         with self._connect() as connection:
             return [dict(row) for row in connection.execute(query, parameters).fetchall()]
@@ -745,26 +866,98 @@ class IntradayStore:
             raise ValueError("unknown scoped rule")
         with self._connect() as connection:
             registry = connection.execute(
-                "SELECT champion_id, challenger_id FROM scoped_rule_registry WHERE scope=?",
-                (candidate.scope.value,),
+                "SELECT champion_id, challenger_id FROM asset_scoped_rule_registry "
+                "WHERE scope=? AND symbol=?",
+                (candidate.scope.value, candidate.symbol),
             ).fetchone()
             status = connection.execute(
                 "SELECT status FROM scoped_rules WHERE id=?", (rule_id,)
             ).fetchone()
-            if registry is None or registry["challenger_id"] is not None:
+            if registry is not None and registry["challenger_id"] is not None:
                 raise ValueError("scoped challenger slot is unavailable")
             if status is None or status["status"] != "replay_passed":
                 raise ValueError("scoped challenger must pass replay first")
-            if candidate.parent_rule_id != registry["champion_id"]:
+            if candidate.parent_rule_id != ((registry["champion_id"] if registry else None) or "bootstrap"):
                 raise ValueError("scoped challenger lineage mismatch")
             connection.execute(
                 "UPDATE scoped_rules SET status='challenger' WHERE id=?", (rule_id,)
             )
             connection.execute(
-                "UPDATE scoped_rule_registry SET challenger_id=?, updated_at=? WHERE scope=?",
-                (rule_id, now.isoformat(), candidate.scope.value),
+                "INSERT INTO asset_scoped_rule_registry "
+                "(symbol, scope, champion_id, challenger_id, rollback_id, updated_at) "
+                "VALUES (?, ?, ?, ?, NULL, ?) "
+                "ON CONFLICT(symbol, scope) DO UPDATE SET "
+                "challenger_id=excluded.challenger_id, updated_at=excluded.updated_at",
+                (candidate.symbol, candidate.scope.value,
+                 registry["champion_id"] if registry else None, rule_id, now.isoformat()),
             )
-        return self.scoped_rule_registry(candidate.scope)
+            if candidate.symbol == "BTCUSDT":
+                connection.execute(
+                    "UPDATE scoped_rule_registry SET challenger_id=?, updated_at=? WHERE scope=?",
+                    (rule_id, now.isoformat(), candidate.scope.value),
+                )
+        return self.scoped_rule_registry(candidate.scope, symbol=candidate.symbol)
+
+    def start_perp_decision_challenger(self, rule_id: str, *, now: datetime) -> dict:
+        """Start Perp decision-soak before replay for the current lineage."""
+        candidate = self.load_scoped_rule(rule_id)
+        if candidate is None or candidate.scope is not DecisionScope.PERP_INTRADAY:
+            raise ValueError("decision-first soak requires a Perp candidate")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT champion_id, challenger_id FROM asset_scoped_rule_registry "
+                "WHERE symbol=? AND scope=?",
+                (candidate.symbol, candidate.scope.value),
+            ).fetchone()
+            if row is not None and row["challenger_id"]:
+                raise ValueError("Perp registry slot is unavailable")
+            if candidate.parent_rule_id != ((row["champion_id"] if row else None) or "bootstrap"):
+                raise ValueError("Perp challenger lineage mismatch")
+            updated = connection.execute(
+                "UPDATE scoped_rules SET status='challenger' "
+                "WHERE id=? AND status='queued'", (rule_id,),
+            )
+            if updated.rowcount != 1:
+                raise ValueError("Perp candidate is not queued")
+            connection.execute(
+                "INSERT INTO asset_scoped_rule_registry "
+                "(symbol, scope, champion_id, challenger_id, rollback_id, updated_at) "
+                "VALUES (?, ?, ?, ?, NULL, ?) "
+                "ON CONFLICT(symbol, scope) DO UPDATE SET "
+                "challenger_id=excluded.challenger_id, updated_at=excluded.updated_at",
+                (candidate.symbol, candidate.scope.value,
+                 row["champion_id"] if row else None, rule_id, now.isoformat()),
+            )
+            if candidate.symbol == "BTCUSDT":
+                connection.execute(
+                    "UPDATE scoped_rule_registry SET challenger_id=?, updated_at=? WHERE scope=?",
+                    (rule_id, now.isoformat(), candidate.scope.value),
+                )
+        return self.scoped_rule_registry(candidate.scope, symbol=candidate.symbol)
+
+    def reject_scoped_challenger(self, rule_id: str, *, now: datetime) -> dict:
+        candidate = self.load_scoped_rule(rule_id)
+        if candidate is None:
+            raise ValueError("unknown scoped rule")
+        with self._connect() as connection:
+            updated = connection.execute(
+                "UPDATE scoped_rules SET status='rejected' "
+                "WHERE id=? AND status='challenger'", (rule_id,),
+            )
+            cleared = connection.execute(
+                "UPDATE asset_scoped_rule_registry SET challenger_id=NULL, updated_at=? "
+                "WHERE symbol=? AND scope=? AND challenger_id=?",
+                (now.isoformat(), candidate.symbol, candidate.scope.value, rule_id),
+            )
+            if updated.rowcount != 1 or cleared.rowcount != 1:
+                raise ValueError("candidate is not the active scoped challenger")
+            if candidate.symbol == "BTCUSDT":
+                connection.execute(
+                    "UPDATE scoped_rule_registry SET challenger_id=NULL, updated_at=? "
+                    "WHERE scope=? AND challenger_id=?",
+                    (now.isoformat(), candidate.scope.value, rule_id),
+                )
+        return self.scoped_rule_registry(candidate.scope, symbol=candidate.symbol)
 
     def promote_scoped_challenger(self, rule_id: str, *, now: datetime) -> dict:
         candidate = self.load_scoped_rule(rule_id)
@@ -772,32 +965,42 @@ class IntradayStore:
             raise ValueError("unknown scoped rule")
         with self._connect() as connection:
             registry = connection.execute(
-                "SELECT champion_id, challenger_id FROM scoped_rule_registry WHERE scope=?",
-                (candidate.scope.value,),
+                "SELECT champion_id, challenger_id FROM asset_scoped_rule_registry "
+                "WHERE scope=? AND symbol=?",
+                (candidate.scope.value, candidate.symbol),
             ).fetchone()
             if registry is None or registry["challenger_id"] != rule_id:
                 raise ValueError("candidate is not the active scoped challenger")
             old = registry["champion_id"]
-            connection.execute(
-                "UPDATE scoped_rules SET status='hall_of_fame' WHERE id=?", (old,)
-            )
+            if old is not None:
+                connection.execute(
+                    "UPDATE scoped_rules SET status='hall_of_fame' WHERE id=?", (old,)
+                )
             connection.execute(
                 "UPDATE scoped_rules SET status='champion' WHERE id=?", (rule_id,)
             )
             connection.execute(
-                "UPDATE scoped_rule_registry SET champion_id=?, challenger_id=NULL, "
-                "rollback_id=?, updated_at=? WHERE scope=?",
-                (rule_id, old, now.isoformat(), candidate.scope.value),
+                "UPDATE asset_scoped_rule_registry SET champion_id=?, challenger_id=NULL, "
+                "rollback_id=?, updated_at=? WHERE scope=? AND symbol=?",
+                (rule_id, old, now.isoformat(), candidate.scope.value, candidate.symbol),
             )
-        return self.scoped_rule_registry(candidate.scope)
+            if candidate.symbol == "BTCUSDT":
+                connection.execute(
+                    "UPDATE scoped_rule_registry SET champion_id=?, challenger_id=NULL, "
+                    "rollback_id=?, updated_at=? WHERE scope=?",
+                    (rule_id, old, now.isoformat(), candidate.scope.value),
+                )
+        return self.scoped_rule_registry(candidate.scope, symbol=candidate.symbol)
 
     def record_scoped_rule_evaluation(self, evaluation: ScopedRuleEvaluation) -> None:
         with self._connect() as connection:
             connection.execute(
-                "INSERT OR IGNORE INTO scoped_rule_evaluations VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO scoped_rule_evaluations "
+                "(id, candidate_id, scope, symbol, kind, status, evaluated_at, payload_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     evaluation.evaluation_id, evaluation.candidate_id,
-                    evaluation.scope.value, evaluation.kind, evaluation.status,
+                    evaluation.scope.value, evaluation.symbol, evaluation.kind, evaluation.status,
                     evaluation.evaluated_at.isoformat(), _json(evaluation),
                 ),
             )
@@ -821,21 +1024,107 @@ class IntradayStore:
             ).fetchone()
         return None if row is None else ScopedRuleEvaluation.model_validate_json(row["payload_json"])
 
-    def scoped_rule_replay_evidence(self, scope: DecisionScope) -> tuple[list[dict], dict]:
+    def record_asset_daily_candles(self, symbol: str, candles: list[list]) -> int:
+        return self.record_asset_candles(symbol, "1d", candles)
+
+    def record_asset_candles(
+        self, symbol: str, interval: str, candles: list[list]
+    ) -> int:
+        """Append native closed Binance bars, immutable per symbol and interval."""
+        symbol = asset_spec(symbol).symbol
+        lengths = {"4h": 14_400_000, "8h": 28_800_000, "1d": 86_400_000}
+        if interval not in lengths:
+            raise ValueError("unsupported spot candle interval")
+        length_ms = lengths[interval]
+        inserted = 0
+        with self._connect() as connection:
+            for row in candles:
+                if (len(row) < 7 or int(row[0]) % length_ms != 0
+                        or int(row[6]) != int(row[0]) + length_ms - 1):
+                    raise ValueError(f"invalid {interval} candle")
+                opening_price, high, low, close = (float(row[index]) for index in range(1, 5))
+                if (not all(math.isfinite(value) and value > 0
+                            for value in (opening_price, high, low, close))
+                        or high < max(opening_price, close)
+                        or low > min(opening_price, close)
+                        or low > high):
+                    raise ValueError(f"invalid {interval} candle prices")
+                opening = int(row[0])
+                payload = json.dumps(row, separators=(",", ":"))
+                existing = connection.execute(
+                    "SELECT payload_json FROM asset_daily_candles "
+                    "WHERE symbol=? AND interval=? AND open_time=?",
+                    (symbol, interval, opening),
+                ).fetchone()
+                if existing is not None:
+                    if existing["payload_json"] != payload:
+                        raise ValueError(f"historical {interval} candle changed")
+                    continue
+                connection.execute(
+                    "INSERT INTO asset_daily_candles VALUES (?, ?, ?, ?, ?)",
+                    (symbol, interval, opening, int(row[6]), payload),
+                )
+                inserted += 1
+        return inserted
+
+    def list_asset_daily_candles(
+        self, symbol: str, *, as_of: datetime | None = None
+    ) -> list[list]:
+        return self.list_asset_candles(symbol, "1d", as_of=as_of)
+
+    def list_asset_candles(
+        self, symbol: str, interval: str, *, as_of: datetime | None = None
+    ) -> list[list]:
+        if interval not in {"4h", "8h", "1d"}:
+            raise ValueError("unsupported spot candle interval")
+        cutoff = int(as_of.timestamp() * 1000) if as_of else None
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM asset_daily_candles "
+                "WHERE symbol=? AND interval=? "
+                "AND (? IS NULL OR close_time<=?) ORDER BY open_time",
+                (asset_spec(symbol).symbol, interval, cutoff, cutoff),
+            ).fetchall()
+        return [json.loads(row["payload_json"]) for row in rows]
+
+    def asset_lifecycle_record(self, symbol: str, scope: DecisionScope) -> dict:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT symbol, scope, stage, evaluation_id, updated_at "
+                "FROM asset_scope_lifecycle WHERE symbol=? AND scope=?",
+                (asset_spec(symbol).symbol, scope.value),
+            ).fetchone()
+        if row is None:
+            raise ValueError("asset lifecycle is not registered")
+        return dict(row)
+
+    def scoped_rule_replay_evidence(
+        self, scope: DecisionScope, *, symbol: str = "BTCUSDT",
+        after: datetime | None = None, before: datetime | None = None,
+    ) -> tuple[list[dict], dict]:
         horizon = 900 if scope == DecisionScope.PERP_INTRADAY else 259_200
+        symbol = asset_spec(symbol).symbol
         with self._connect() as connection:
             total = connection.execute(
                 "SELECT COUNT(*) AS count, MIN(timestamp) AS first_at, MAX(timestamp) AS last_at "
-                "FROM signals WHERE scope=? AND state_variant='numeric_v1' "
-                "AND decision_mode='primary'",
-                (scope.value,),
+                "FROM signals WHERE scope=? AND symbol=? AND state_variant='numeric_v1' "
+                "AND decision_mode='primary' "
+                "AND (? IS NULL OR timestamp>=?) AND (? IS NULL OR timestamp<?)",
+                (scope.value, symbol,
+                 after.isoformat() if after else None, after.isoformat() if after else None,
+                 before.isoformat() if before else None, before.isoformat() if before else None),
             ).fetchone()
             rows = connection.execute(
                 "SELECT s.id, s.jev_answers, o.directional_return_pct "
                 "FROM signals s JOIN signal_outcomes o ON o.signal_id=s.id "
-                "AND o.horizon_sec=? WHERE s.scope=? AND s.state_variant='numeric_v1' "
-                "AND s.decision_mode='primary' ORDER BY s.timestamp, s.id",
-                (horizon, scope.value),
+                "AND o.horizon_sec=? WHERE s.scope=? AND s.symbol=? AND s.state_variant='numeric_v1' "
+                "AND s.decision_mode='primary' "
+                "AND (? IS NULL OR s.timestamp>=?) AND (? IS NULL OR s.timestamp<?) "
+                "AND (? IS NULL OR o.observed_at<=?) ORDER BY s.timestamp, s.id",
+                (horizon, scope.value, symbol,
+                 after.isoformat() if after else None, after.isoformat() if after else None,
+                 before.isoformat() if before else None, before.isoformat() if before else None,
+                 before.isoformat() if before else None, before.isoformat() if before else None),
             ).fetchall()
         total_count = int(total["count"])
         history_days = 0.0
@@ -856,32 +1145,69 @@ class IntradayStore:
         champion_score: float, challenger_score: float,
         created_at: datetime, hard_risk_violation: bool = False,
     ) -> None:
+        candidate = self.load_scoped_rule(candidate_id)
+        if candidate is None:
+            raise ValueError("unknown scoped rule")
         with self._connect() as connection:
             connection.execute(
                 "INSERT OR IGNORE INTO scoped_rule_soak_ticks "
-                "(candidate_id, signal_id, champion_allowed, challenger_allowed, "
+                "(candidate_id, symbol, signal_id, champion_allowed, challenger_allowed, "
                 "champion_score, challenger_score, hard_risk_violation, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    candidate_id, signal_id, int(champion_allowed),
+                    candidate_id, candidate.symbol, signal_id, int(champion_allowed),
                     int(challenger_allowed), champion_score, challenger_score,
                     int(hard_risk_violation), created_at.isoformat(),
                 ),
             )
 
-    def list_scoped_rule_soak_ticks(self, candidate_id: str) -> list[dict]:
+    def list_scoped_rule_soak_ticks(
+        self, candidate_id: str, *, as_of: datetime | None = None
+    ) -> list[dict]:
         candidate = self.load_scoped_rule(candidate_id)
         if candidate is None:
             raise ValueError("unknown scoped rule")
-        horizon = 900 if candidate.scope == DecisionScope.PERP_INTRADAY else 259_200
+        horizon = (
+            900 if candidate.scope == DecisionScope.PERP_INTRADAY else
+            43_200 if candidate.scope == DecisionScope.SPOT_4H else 259_200
+        )
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT t.*, o.directional_return_pct FROM scoped_rule_soak_ticks t "
+                "SELECT t.*, s.timestamp AS signal_timestamp, o.directional_return_pct "
+                "FROM scoped_rule_soak_ticks t "
+                "JOIN signals s ON s.id=t.signal_id "
                 "LEFT JOIN signal_outcomes o ON o.signal_id=t.signal_id "
                 "AND o.horizon_sec=? WHERE t.candidate_id=? "
                 "ORDER BY t.created_at, t.id", (horizon, candidate_id),
             ).fetchall()
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        if candidate.scope == DecisionScope.SPOT_4H or (
+            candidate.symbol != "BTCUSDT" and candidate.scope == DecisionScope.SPOT_DAILY
+        ):
+            interval = "4h" if candidate.scope == DecisionScope.SPOT_4H else "1d"
+            width = 14_400_000 if interval == "4h" else 86_400_000
+            candles = self.list_asset_candles(candidate.symbol, interval)
+            if as_of is not None:
+                cutoff = int(as_of.timestamp() * 1000)
+                candles = [row for row in candles if int(row[6]) <= cutoff]
+            for row in result:
+                signal_ms = int(datetime.fromisoformat(row["signal_timestamp"]).timestamp() * 1000)
+                entry_index = next(
+                    (index for index in range(len(candles) - 1, -1, -1)
+                     if int(candles[index][6]) <= signal_ms), None
+                )
+                if entry_index is None or entry_index + 3 >= len(candles):
+                    row["directional_return_pct"] = None
+                    continue
+                window = candles[entry_index:entry_index + 4]
+                if any(int(right[0]) - int(left[0]) != width
+                       for left, right in zip(window, window[1:])):
+                    row["directional_return_pct"] = None
+                    continue
+                first = float(window[0][4])
+                last = float(window[3][4])
+                row["directional_return_pct"] = (last / first - 1) * 100 if first > 0 else None
+        return result
 
     def record_analysis_run(
         self, evidence_hash: str, *, completed_at: datetime, thesis_id: str
@@ -1472,6 +1798,35 @@ class IntradayStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def asset_soak_heartbeat_health(
+        self, symbol: str, scope: DecisionScope, *,
+        started_at: datetime, evaluated_at: datetime, interval_seconds: int,
+    ) -> dict:
+        if interval_seconds <= 0 or evaluated_at < started_at:
+            raise ValueError("invalid asset soak interval")
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT status, hard_risk_violation, created_at "
+                "FROM portfolio_soak_ticks WHERE symbol=? AND scope=? "
+                "AND evidence_version='scope-price-v2' "
+                "AND created_at>=? AND created_at<=?",
+                (asset_spec(symbol).symbol, scope.value,
+                 started_at.isoformat(), evaluated_at.isoformat()),
+            ).fetchall()
+        slots = set()
+        violations = 0
+        for row in rows:
+            at = datetime.fromisoformat(row["created_at"])
+            violations += bool(row["hard_risk_violation"])
+            if row["status"] in {"success", "skipped_no_setup"}:
+                slots.add(int((at - started_at).total_seconds() // interval_seconds))
+        expected = max(1, math.ceil(
+            (evaluated_at - started_at).total_seconds() / interval_seconds
+        ))
+        return {"healthy_slots": len(slots), "expected_slots": expected,
+                "coverage": min(1.0, len(slots) / expected),
+                "hard_risk_violations": violations}
+
     def record_portfolio_soak_evaluation(
         self, evaluation: PortfolioSoakEvaluation
     ) -> None:
@@ -1653,7 +2008,7 @@ class IntradayStore:
             raise ValueError("signal identity and snapshots must be nonempty")
         if market not in {"binance_usdm_perp", "binance_spot"}:
             raise ValueError("signal market is invalid")
-        if feature_schema_version not in {"1", "2"}:
+        if feature_schema_version not in {"1", "2", "3"}:
             raise ValueError("signal feature schema version is invalid")
         if not raw_signals or any(
             isinstance(value, bool)
@@ -2637,10 +2992,12 @@ class IntradayStore:
             raise ValueError("invalid rule status")
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO scoped_rules VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO scoped_rules (id, scope, symbol, parent_id, status, payload_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     rule.rule_id,
                     rule.scope.value,
+                    rule.symbol,
                     rule.parent_rule_id,
                     status,
                     _json(rule),
@@ -2648,55 +3005,63 @@ class IntradayStore:
                 ),
             )
 
-    def has_open_scoped_rule_candidate(self, scope: DecisionScope) -> bool:
+    def has_open_scoped_rule_candidate(self, scope: DecisionScope, *, symbol: str = "BTCUSDT") -> bool:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT 1 FROM scoped_rules WHERE scope=? AND status IN "
+                "SELECT 1 FROM scoped_rules WHERE scope=? AND symbol=? AND status IN "
                 "('queued', 'replay_passed', 'challenger') LIMIT 1",
-                (scope.value,),
+                (scope.value, asset_spec(symbol).symbol),
             ).fetchone()
         return row is not None
 
-    def scoped_rule_registry(self, scope: DecisionScope) -> dict:
+    def scoped_rule_registry(self, scope: DecisionScope, *, symbol: str = "BTCUSDT") -> dict:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT champion_id, challenger_id, rollback_id, updated_at "
-                "FROM scoped_rule_registry WHERE scope=?",
-                (scope.value,),
+                "FROM asset_scoped_rule_registry WHERE scope=? AND symbol=?",
+                (scope.value, asset_spec(symbol).symbol),
             ).fetchone()
         if row is None:
             return {"champion_id": None, "challenger_id": None, "rollback_id": None}
         return dict(row)
 
     def activate_scoped_champion(
-        self, scope: DecisionScope, rule_id: str, *, now: datetime
+        self, scope: DecisionScope, rule_id: str, *, now: datetime, symbol: str = "BTCUSDT"
     ) -> dict:
+        symbol = asset_spec(symbol).symbol
         with self._connect() as connection:
             rule = connection.execute(
-                "SELECT scope FROM scoped_rules WHERE id=?", (rule_id,)
+                "SELECT scope, symbol FROM scoped_rules WHERE id=?", (rule_id,)
             ).fetchone()
-            if rule is None or rule["scope"] != scope.value:
+            if rule is None or rule["scope"] != scope.value or rule["symbol"] != symbol:
                 raise ValueError("unknown scoped rule")
             connection.execute(
                 "UPDATE scoped_rules SET status='champion' WHERE id=?", (rule_id,)
             )
             connection.execute(
-                "INSERT INTO scoped_rule_registry VALUES (?, ?, NULL, NULL, ?) "
-                "ON CONFLICT(scope) DO UPDATE SET champion_id=excluded.champion_id, "
+                "INSERT INTO asset_scoped_rule_registry VALUES (?, ?, ?, NULL, NULL, ?) "
+                "ON CONFLICT(symbol, scope) DO UPDATE SET champion_id=excluded.champion_id, "
                 "challenger_id=NULL, rollback_id=NULL, updated_at=excluded.updated_at",
-                (scope.value, rule_id, now.isoformat()),
+                (symbol, scope.value, rule_id, now.isoformat()),
             )
-        return self.scoped_rule_registry(scope)
+            if symbol == "BTCUSDT":
+                connection.execute(
+                    "INSERT INTO scoped_rule_registry VALUES (?, ?, NULL, NULL, ?) "
+                    "ON CONFLICT(scope) DO UPDATE SET champion_id=excluded.champion_id, "
+                    "challenger_id=NULL, rollback_id=NULL, updated_at=excluded.updated_at",
+                    (scope.value, rule_id, now.isoformat()),
+                )
+        return self.scoped_rule_registry(scope, symbol=symbol)
 
     def load_active_scoped_rule(
-        self, scope: DecisionScope
+        self, scope: DecisionScope, *, symbol: str = "BTCUSDT"
     ) -> ScopedRuleCandidate | None:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT r.payload_json FROM scoped_rules r "
-                "JOIN scoped_rule_registry g ON g.champion_id=r.id "
-                "WHERE g.scope=?",
-                (scope.value,),
+                "JOIN asset_scoped_rule_registry g ON g.champion_id=r.id "
+                "WHERE g.scope=? AND g.symbol=?",
+                (scope.value, asset_spec(symbol).symbol),
             ).fetchone()
         return (
             None
@@ -2705,13 +3070,13 @@ class IntradayStore:
         )
 
     def load_scoped_challenger(
-        self, scope: DecisionScope
+        self, scope: DecisionScope, *, symbol: str = "BTCUSDT"
     ) -> ScopedRuleCandidate | None:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT r.payload_json FROM scoped_rules r "
-                "JOIN scoped_rule_registry g ON g.challenger_id=r.id "
-                "WHERE g.scope=?", (scope.value,),
+                "JOIN asset_scoped_rule_registry g ON g.challenger_id=r.id "
+                "WHERE g.scope=? AND g.symbol=?", (scope.value, asset_spec(symbol).symbol),
             ).fetchone()
         return (
             None
@@ -3316,6 +3681,21 @@ class IntradayStore:
                 (workflow,),
             ).fetchone()
         return None if row is None else ModelCallRecord.model_validate_json(row["payload_json"])
+
+    def asset_proposal_call_window(
+        self, workflow: str, *, since: datetime
+    ) -> tuple[int, datetime | None]:
+        """Count all provider attempts, successful or not, for a bounded workflow."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count, MAX(started_at) AS latest "
+                "FROM model_calls WHERE json_extract(payload_json, '$.workflow')=? "
+                "AND julianday(started_at)>=julianday(?)",
+                (workflow, since.isoformat()),
+            ).fetchone()
+        return int(row["count"]), (
+            datetime.fromisoformat(row["latest"]) if row["latest"] else None
+        )
 
     def model_cost_since(self, since: datetime) -> float:
         if since.tzinfo is None or since.utcoffset() is None:

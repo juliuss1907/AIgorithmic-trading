@@ -180,7 +180,7 @@ def test_schema_v17_snapshot_and_soak_rows_upgrade_without_data_loss(tmp_path):
 
     store = IntradayStore(database)
 
-    assert store.schema_version() == 20
+    assert store.schema_version() == 22
     assert store.latest_snapshot().snapshot_id == legacy_snapshot.snapshot_id
     assert store.list_portfolio_soak_ticks(evidence_version="market-v1") == [
         {
@@ -239,7 +239,7 @@ def test_operational_health_reports_latest_scheduler_run_and_schema(tmp_path):
         finished_at=later,
     )
 
-    assert store.schema_version() == 20
+    assert store.schema_version() == 22
     assert store.latest_scheduler_runs() == [
         {
             "job_name": "perp_numeric",

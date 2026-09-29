@@ -37,6 +37,7 @@ class Direction(str, Enum):
 
 class DecisionScope(str, Enum):
     SPOT_DAILY = "spot_daily"
+    SPOT_4H = "spot_4h"
     PERP_INTRADAY = "perp_intraday"
 
 
@@ -100,8 +101,8 @@ class FeatureSnapshot(StrictContract):
     snapshot_id: str = Field(min_length=16, max_length=64)
     symbol: str = "BTCUSDT"
     market: Literal["binance_usdm_perp", "binance_spot"] = "binance_usdm_perp"
-    timeframe: Literal["1h", "1d"] = "1h"
-    feature_schema_version: Literal["1", "2"] = "1"
+    timeframe: Literal["1h", "4h", "1d"] = "1h"
+    feature_schema_version: Literal["1", "2", "3"] = "1"
     event_time: datetime
     built_at: datetime
     bid: float = Field(gt=0, allow_inf_nan=False)
@@ -170,7 +171,7 @@ class FeatureSnapshot(StrictContract):
             "freshness": {name: bool(value) for name, value in freshness.items()},
             "quality_flags": tuple(quality_flags),
         }
-        if feature_schema_version == "2":
+        if feature_schema_version in {"2", "3"}:
             payload.update({
                 "market": market,
                 "timeframe": timeframe,
@@ -269,7 +270,7 @@ class JevDecisionTrace(StrictContract):
 
 class ScopedJevDecision(StrictContract):
     scope: DecisionScope
-    workflow: Literal["spot_daily_entry", "perp_intraday_entry"]
+    workflow: Literal["spot_daily_entry", "spot_4h_entry", "perp_intraday_entry"]
     decision: JevDecision
     trace: JevDecisionTrace | None = None
     state_variant: StateVariant = StateVariant.NUMERIC_V1
@@ -280,6 +281,7 @@ class ScopedJevDecision(StrictContract):
     def workflow_matches_scope(self):
         expected = {
             DecisionScope.SPOT_DAILY: "spot_daily_entry",
+            DecisionScope.SPOT_4H: "spot_4h_entry",
             DecisionScope.PERP_INTRADAY: "perp_intraday_entry",
         }[self.scope]
         if self.workflow != expected:
@@ -894,6 +896,7 @@ class ScopedRuleCandidate(StrictContract):
     parent_rule_id: str = Field(min_length=1, max_length=128)
     thesis_id: str = Field(min_length=1, max_length=128)
     scope: DecisionScope
+    symbol: str = "BTCUSDT"
     parameters: SpotRuleParameters | PerpRuleParameters
     created_at: datetime
     model_ref: str = Field(min_length=1, max_length=160)
@@ -903,11 +906,17 @@ class ScopedRuleCandidate(StrictContract):
 
     _scoped_candidate_time_is_aware = field_validator("created_at")(_aware)
 
+    @field_validator("symbol")
+    @classmethod
+    def symbol_is_registered(cls, value: str) -> str:
+        from intraday.assets import asset_spec
+        return asset_spec(value).symbol
+
     @model_validator(mode="after")
     def parameters_match_scope(self):
         expected = (
             SpotRuleParameters
-            if self.scope == DecisionScope.SPOT_DAILY
+            if self.scope in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}
             else PerpRuleParameters
         )
         if type(self.parameters) is not expected:
@@ -916,6 +925,8 @@ class ScopedRuleCandidate(StrictContract):
 
     @classmethod
     def create(cls, **values) -> "ScopedRuleCandidate":
+        from intraday.assets import asset_spec
+        values["symbol"] = asset_spec(values.get("symbol", "BTCUSDT")).symbol
         payload = {
             key: (value.model_dump(mode="json") if isinstance(value, BaseModel) else value)
             for key, value in values.items()

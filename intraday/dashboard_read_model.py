@@ -175,6 +175,30 @@ def _asset_projection(store, symbol: str, *, now: datetime) -> dict:
         store.venue_health("hyperliquid", symbol=symbol, now=now),
         timedelta(seconds=60),
     )
+    rules = {}
+    for scope in DecisionScope:
+        registry = store.scoped_rule_registry(scope, symbol=symbol)
+        candidate_id = registry["challenger_id"] or registry["champion_id"]
+        replay = store.latest_scoped_rule_evaluation(candidate_id, kind="replay") if candidate_id else None
+        soak = store.latest_scoped_rule_evaluation(candidate_id, kind="soak") if candidate_id else None
+        started = (
+            datetime.fromisoformat(registry["updated_at"])
+            if registry.get("challenger_id") and registry.get("updated_at") else None
+        )
+        rules[scope.value] = {
+            **registry,
+            "replay_evaluation_id": replay.evaluation_id if replay else None,
+            "replay_status": replay.status if replay else None,
+            "soak_evaluation_id": soak.evaluation_id if soak else None,
+            "soak_status": soak.status if soak else None,
+            "soak_progress_pct": (
+                min(100, max(0, int((now - started).total_seconds() / (
+                    (14 if scope is DecisionScope.SPOT_4H else 30) * 86_400
+                ) * 100)))
+                if started and scope in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}
+                else None
+            ),
+        }
     return {
         "symbol": symbol,
         "capability": spec.capability.value,
@@ -188,6 +212,7 @@ def _asset_projection(store, symbol: str, *, now: datetime) -> dict:
             ),
         },
         "sources": sources,
+        "rules": rules,
     }
 
 
@@ -230,12 +255,13 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
         evidence_version=CURRENT_SOAK_EVIDENCE_VERSION,
     )
     latest_tick: dict[str, dict | None] = {
-        scope.value: None for scope in DecisionScope
+        scope.value: None for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY)
     }
     for tick in ticks:
-        latest_tick[tick["scope"]] = tick
+        if tick["scope"] in latest_tick:
+            latest_tick[tick["scope"]] = tick
     scopes = {}
-    for scope in DecisionScope:
+    for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY):
         name = scope.value
         item = latest_tick[name]
         latest_at = datetime.fromisoformat(item["created_at"]) if item else None

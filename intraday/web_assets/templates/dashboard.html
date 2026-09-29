@@ -75,7 +75,7 @@
             <strong>{{ thesis.stance|capitalize }} · {{ "%.0f"|format(thesis.confidence * 100) }}%</strong>
           </div>
           <p>{{ thesis.summary }}</p>
-          <small>{{ thesis.horizon_minutes }} minute horizon · {{ thesis.generated_at.isoformat() }}</small>
+          <small>{{ thesis.horizon_minutes }} minute horizon · <time datetime="{{ thesis.generated_at.isoformat() }}" title="{{ thesis.generated_at.isoformat() }} UTC">{{ thesis.generated_at|vn_time }}</time></small>
         </article>
         <div class="report-grid">
           {% for name in ("market", "news", "sentiment") %}
@@ -145,11 +145,11 @@
         {% if decisions %}
         <div class="table-wrap" tabindex="0" aria-label="Bảng quyết định gần đây">
           <table>
-            <thead><tr><th>Time (UTC)</th><th>Direction</th><th>Gate</th><th>Cross venue</th><th>Δ quality</th><th>Size</th><th>Tick</th></tr></thead>
+            <thead><tr><th>Time (UTC+7)</th><th>Direction</th><th>Gate</th><th>Cross venue</th><th>Δ quality</th><th>Size</th><th>Tick</th></tr></thead>
             <tbody>
               {% for decision in decisions %}
               <tr>
-                <td>{{ decision.created_at }}</td>
+                <td><time datetime="{{ decision.created_at }}" title="{{ decision.created_at }} UTC">{{ decision.created_at|vn_time }}</time></td>
                 <td><span class="direction">{{ decision.direction }}</span></td>
                 <td>{{ decision.gate_outcome }}</td>
                 <td>{{ decision.cross_venue_status or "off" }}</td>

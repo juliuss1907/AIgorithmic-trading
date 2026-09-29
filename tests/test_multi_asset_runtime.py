@@ -9,6 +9,8 @@ from intraday.contracts import (
     Regime,
     RiskLevel,
     ScopedJevDecision,
+    ScopedRuleCandidate,
+    SpotRuleParameters,
 )
 from intraday.portfolio_soak import run_asset_lifecycle_observation
 from intraday.providers import JevDecisionProvider
@@ -27,12 +29,12 @@ def test_provider_questions_name_the_snapshot_asset():
 
 
 def snapshot(symbol: str, scope: DecisionScope) -> FeatureSnapshot:
-    spot = scope is DecisionScope.SPOT_DAILY
+    spot = scope in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}
     return FeatureSnapshot.create(
         symbol=symbol,
         market="binance_spot" if spot else "binance_usdm_perp",
-        timeframe="1d" if spot else "1h",
-        feature_schema_version="2",
+        timeframe="4h" if scope is DecisionScope.SPOT_4H else "1d" if spot else "1h",
+        feature_schema_version="3" if scope is DecisionScope.SPOT_4H else "2",
         event_time=NOW,
         built_at=NOW,
         bid=99,
@@ -64,6 +66,7 @@ class Provider:
         workflow = (
             "spot_daily_entry"
             if scope is DecisionScope.SPOT_DAILY
+            else "spot_4h_entry" if scope is DecisionScope.SPOT_4H
             else "perp_intraday_entry"
         )
         return ScopedJevDecision(scope=scope, workflow=workflow, decision=decision)
@@ -81,10 +84,10 @@ def test_shadow_assets_persist_market_data_without_models_signals_or_fills(tmp_p
         for scope in DecisionScope
     ]
 
-    assert results == ["shadow_recorded"] * 10
+    assert results == ["shadow_recorded"] * 15
     assert provider.calls == []
     with sqlite3.connect(store.database) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0] == 10
+        assert connection.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0] == 15
         assert connection.execute("SELECT COUNT(*) FROM signals").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM parent_paper_fills").fetchone()[0] == 0
 
@@ -136,3 +139,67 @@ def test_eth_spot_soak_does_not_inherit_btc_rule_or_call_model(tmp_path):
     assert status == "skipped_no_setup"
     assert provider.calls == []
     assert store.list_portfolio_soak_ticks(symbol="ETHUSDT")[0]["scope"] == "spot_daily"
+
+
+def test_eth_spot_candidate_calls_model_only_on_setup_and_records_no_fill(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    provider = Provider()
+    candidate = ScopedRuleCandidate.create(
+        rule_id="eth-spot-baseline", parent_rule_id="bootstrap", thesis_id="baseline",
+        symbol="ETHUSDT", scope=DecisionScope.SPOT_DAILY,
+        parameters=SpotRuleParameters(), created_at=NOW,
+        model_ref="deterministic/baseline", prompt_version="spot-baseline-v1",
+    )
+    store.register_scoped_rule(candidate, status="replay_passed")
+    store.set_scoped_challenger(candidate.rule_id, now=NOW)
+    lifecycle = store.asset_lifecycle("ETHUSDT", DecisionScope.SPOT_DAILY)
+    store.save_asset_lifecycle(lifecycle.start_soak(), updated_at=NOW)
+    candles = []
+    for index in range(35):
+        price = 100 + index
+        candles.append([index * 86_400_000, str(price), str(price + 0.5),
+                        str(price - 0.5), str(price), "10",
+                        index * 86_400_000 + 86_399_999])
+
+    status = run_asset_lifecycle_observation(
+        store, provider, snapshot("ETHUSDT", DecisionScope.SPOT_DAILY),
+        scope=DecisionScope.SPOT_DAILY, now=NOW,
+        spot_rule=candidate, spot_candles=candles,
+    )
+
+    assert status == "success"
+    assert provider.calls == [("ETHUSDT", DecisionScope.SPOT_DAILY)]
+    with sqlite3.connect(store.database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM parent_paper_fills").fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT symbol, candidate_id FROM scoped_rule_soak_ticks"
+        ).fetchone() == ("ETHUSDT", candidate.rule_id)
+
+
+def test_hype_spot_4h_decision_soak_calls_model_but_cannot_enter_paper(tmp_path):
+    store = IntradayStore(tmp_path / "test.sqlite")
+    provider = Provider()
+    candidate = ScopedRuleCandidate.create(
+        rule_id="hype-spot-4h-baseline", parent_rule_id="bootstrap",
+        thesis_id="baseline", symbol="HYPEUSDT", scope=DecisionScope.SPOT_4H,
+        parameters=SpotRuleParameters(), created_at=NOW,
+        model_ref="deterministic/baseline", prompt_version="spot-4h-baseline-v1",
+    )
+    store.register_scoped_rule(candidate, status="replay_passed")
+    store.set_scoped_challenger(candidate.rule_id, now=NOW)
+    store.save_asset_lifecycle(
+        store.asset_lifecycle("HYPEUSDT", DecisionScope.SPOT_4H).start_soak(),
+        updated_at=NOW,
+    )
+    candles = [[index * 14_400_000, str(100 + index), str(100.5 + index),
+                str(99 + index), str(100 + index), "10",
+                (index + 1) * 14_400_000 - 1] for index in range(35)]
+    status = run_asset_lifecycle_observation(
+        store, provider, snapshot("HYPEUSDT", DecisionScope.SPOT_4H),
+        scope=DecisionScope.SPOT_4H, now=NOW,
+        spot_rule=candidate, spot_candles=candles,
+    )
+    assert status == "success"
+    assert provider.calls == [("HYPEUSDT", DecisionScope.SPOT_4H)]
+    assert store.list_portfolio_soak_ticks(symbol="HYPEUSDT")[0]["scope"] == "spot_4h"
+    assert store.list_parent_paper_fills() == []

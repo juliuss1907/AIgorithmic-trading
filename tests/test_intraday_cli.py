@@ -12,7 +12,10 @@ import pytest
 from intraday.__main__ import main
 from intraday.__main__ import _read_cryptorank_key
 from intraday.config import IntradayConfig
-from intraday.contracts import Direction, FeatureSnapshot
+from intraday.contracts import (
+    DecisionScope, Direction, FeatureSnapshot, PerpRuleParameters,
+    ScopedRuleCandidate,
+)
 from intraday.runtime import run_once
 from intraday.store import IntradayStore
 
@@ -78,8 +81,8 @@ def test_assets_list_reports_capability_and_scope_stage(monkeypatch, capsys, tmp
     eth = next(item for item in result if item["symbol"] == "ETHUSDT")
     hype = next(item for item in result if item["symbol"] == "HYPEUSDT")
     assert eth["capability"] == "full"
-    assert eth["stages"] == {"perp_intraday": "shadow", "spot_daily": "shadow"}
-    assert hype["capability"] == "shadow_only"
+    assert eth["stages"] == {"perp_intraday": "shadow", "spot_daily": "shadow", "spot_4h": "shadow"}
+    assert hype["capability"] == "soak_only"
 
 
 def test_assets_start_soak_is_guarded_by_registry_capability(
@@ -91,20 +94,132 @@ def test_assets_start_soak_is_guarded_by_registry_capability(
         "--scope", "perp_intraday", "--database", str(database),
     ])
 
-    main()
-
-    result = json.loads(capsys.readouterr().out)
-    assert result == {
-        "symbol": "ETHUSDT", "scope": "perp_intraday", "stage": "soak"
-    }
+    with pytest.raises(SystemExit, match="assets rules start-soak"):
+        main()
 
     monkeypatch.setattr(sys, "argv", [
         "aigt", "assets", "start-soak", "HYPEUSDT",
         "--scope", "perp_intraday", "--database", str(database),
     ])
-    with pytest.raises(SystemExit, match="shadow-only"):
+    with pytest.raises(SystemExit, match="assets rules start-soak"):
         main()
 
+
+def test_assets_rules_status_and_bootstrap_are_asset_owned(monkeypatch, capsys, tmp_path):
+    database = tmp_path / "intraday.sqlite"
+    def candles(self, *, symbol, limit, now):
+        assert (symbol, limit) == ("ETHUSDT", 1000)
+        return [
+            [index * 86_400_000, "100", "101", "99", "100", "10",
+             index * 86_400_000 + 86_399_999]
+            for index in range(730)
+        ]
+    monkeypatch.setattr("intraday.spot_signal.BinanceSpotDailyClient.candles", candles)
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "assets", "rules", "bootstrap", "ETHUSDT", "--scope", "spot_daily",
+        "--database", str(database),
+    ])
+    main()
+    candidate = json.loads(capsys.readouterr().out)
+    assert candidate["symbol"] == "ETHUSDT"
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "assets", "rules", "status", "ETHUSDT", "--database", str(database),
+    ])
+    main()
+    result = json.loads(capsys.readouterr().out)
+    assert result["spot_daily"]["rules"][0]["id"] == candidate["rule_id"]
+    assert result["spot_daily"]["registry"]["champion_id"] is None
+
+
+def test_assets_rules_bootstrap_accepts_spot_4h_for_registered_assets(
+    monkeypatch, capsys, tmp_path,
+):
+    database = tmp_path / "intraday.sqlite"
+    calls = []
+
+    def backfill(self, *, symbol, interval, start_time, end_time, now):
+        calls.append((symbol, interval))
+        return []
+
+    monkeypatch.setattr("intraday.spot_signal.BinanceSpotDailyClient.backfill", backfill)
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "assets", "rules", "bootstrap", "HYPEUSDT", "--scope", "spot_4h",
+        "--database", str(database),
+    ])
+    main()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["scope"] == "spot_4h"
+    assert calls == [("HYPEUSDT", interval) for interval in ("4h", "8h", "1d")]
+
+
+def test_perp_bootstrap_cli_starts_decision_soak_without_replay_id(
+    monkeypatch, capsys, tmp_path,
+):
+    database = tmp_path / "intraday.sqlite"
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "assets", "rules", "bootstrap", "NEARUSDT",
+        "--scope", "perp_intraday", "--database", str(database),
+    ])
+    main()
+    candidate = json.loads(capsys.readouterr().out)
+    monkeypatch.setattr(sys, "argv", [
+        "aigt", "assets", "rules", "start-soak", candidate["rule_id"],
+        "--database", str(database),
+    ])
+    main()
+    registry = json.loads(capsys.readouterr().out)
+    assert registry["challenger_id"] == candidate["rule_id"]
+
+
+def test_automatic_asset_baselines_are_symbol_scoped_and_idempotent(tmp_path):
+    from intraday.__main__ import _run_asset_rule_bootstrap_tick
+    from intraday.store import IntradayStore
+
+    database = tmp_path / "intraday.sqlite"
+    store = IntradayStore(database)
+    now = datetime(2026, 9, 29, tzinfo=timezone.utc)
+
+    class Client:
+        def backfill(self, **kwargs):
+            return []
+
+    first = _run_asset_rule_bootstrap_tick(store, now=now, spot_client=Client())
+    second = _run_asset_rule_bootstrap_tick(store, now=now, spot_client=Client())
+    assert first["HYPEUSDT:spot_4h"] == "replay_deferred"
+    assert first["HYPEUSDT:perp_intraday"] == "decision_soak_started"
+    assert second == {}
+    assert store.scoped_rule_registry(
+        DecisionScope.PERP_INTRADAY, symbol="HYPEUSDT"
+    )["challenger_id"] == "hypeusdt-perp-baseline-v1"
+
+    store.reject_scoped_challenger(
+        "hypeusdt-perp-baseline-v1", now=now + timedelta(hours=1),
+    )
+    proposed = ScopedRuleCandidate.create(
+        rule_id="hype-perp-auto-v2", parent_rule_id="bootstrap",
+        thesis_id="auto-proposal", symbol="HYPEUSDT",
+        scope=DecisionScope.PERP_INTRADAY,
+        parameters=PerpRuleParameters(), created_at=now + timedelta(hours=2),
+        model_ref="test/llm", prompt_version="test-v1",
+    )
+    store.register_scoped_rule(proposed)
+    class RecoveredClient:
+        def backfill(self, *, interval, end_time, **kwargs):
+            width = {"4h": 14_400_000, "8h": 28_800_000,
+                     "1d": 86_400_000}[interval]
+            opening = end_time // width * width - width
+            return [[opening, "100", "102", "99", "101", "10",
+                     opening + width - 1]]
+
+    later = _run_asset_rule_bootstrap_tick(
+        store, now=now + timedelta(days=1), spot_client=RecoveredClient(),
+    )
+    assert later["HYPEUSDT:perp_intraday"] == "decision_soak_started"
+    assert later["HYPEUSDT:spot_4h"] == "replay_deferred"
+    assert len(store.list_asset_candles("HYPEUSDT", "4h")) == 1
+    assert store.scoped_rule_registry(
+        DecisionScope.PERP_INTRADAY, symbol="HYPEUSDT"
+    )["challenger_id"] == proposed.rule_id
 
 def test_backup_create_and_verify_cli_with_explicit_database(
     monkeypatch, capsys, tmp_path
@@ -706,7 +821,7 @@ def test_doctor_reports_safe_defaults(monkeypatch, capsys, tmp_path):
     assert result["leverage"] == 3
     assert result["cross_venue_mode"] == "shadow"
     assert result["hyperliquid_enabled"] is True
-    assert result["schema_version"] == 20
+    assert result["schema_version"] == 22
     assert result["feature_schema_version"] == "2"
     assert result["soak_evidence_version"] == "scope-price-v2"
     assert result["markets"] == {

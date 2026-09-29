@@ -12,6 +12,7 @@ from intraday.contracts import DecisionScope
 from intraday.portfolio_coordinator import (
     ParentPortfolioState,
     PortfolioAuthorization,
+    SPOT_SCOPES,
 )
 
 
@@ -51,12 +52,12 @@ def apply_paper_target(
     scope = authorization.scope
     current_quantity = (
         state.spot_quantity
-        if scope == DecisionScope.SPOT_DAILY
+        if scope in SPOT_SCOPES
         else state.perp_quantity
     )
     current_entry = (
         state.spot_entry_price
-        if scope == DecisionScope.SPOT_DAILY
+        if scope in SPOT_SCOPES
         else state.perp_entry_price
     )
     target = authorization.target_notional
@@ -64,7 +65,7 @@ def apply_paper_target(
         raise ValueError("paper ledger refuses a same-tick position flip")
     reference_price = (
         state.spot_price
-        if scope == DecisionScope.SPOT_DAILY
+        if scope in SPOT_SCOPES
         else state.perp_mark_price
     )
     target_quantity = target / reference_price
@@ -77,7 +78,7 @@ def apply_paper_target(
     price = reference * (1 + slippage if side == "buy" else 1 - slippage)
     quantity = abs(delta)
     notional = quantity * price
-    fee_rate = (10 if scope == DecisionScope.SPOT_DAILY else 5) / 10_000
+    fee_rate = (10 if scope in SPOT_SCOPES else 5) / 10_000
     if fee_bps is not None:
         fee_rate = fee_bps / 10_000
     fee = notional * fee_rate
@@ -102,11 +103,12 @@ def apply_paper_target(
         "fees": state.fees + fee,
         "updated_at": now,
     }
-    if scope == DecisionScope.SPOT_DAILY:
+    if scope in SPOT_SCOPES:
         updates.update(
             {
                 "spot_quantity": target_quantity,
                 "spot_entry_price": entry_price,
+                "spot_entry_scope": scope if target_quantity else DecisionScope.SPOT_DAILY,
                 "spot_price": (bid + ask) / 2,
             }
         )

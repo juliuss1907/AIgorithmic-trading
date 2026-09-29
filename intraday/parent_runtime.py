@@ -14,7 +14,7 @@ from intraday.contracts import (
 )
 from intraday.journal import record_scoped_signal
 from intraday.parent_paper import apply_paper_target
-from intraday.portfolio_coordinator import ParentPortfolioState
+from intraday.portfolio_coordinator import ParentPortfolioState, SPOT_SCOPES
 from intraday.scoped_gate import ScopedEntryGate
 from intraday.scoped_rule_lifecycle import rule_allows_answers
 from intraday.spot_signal import DonchianObservation
@@ -90,14 +90,14 @@ def flatten_parent_paper_positions(
     gate = ScopedEntryGate()
     current = state
     for scope, quantity in (
-        (DecisionScope.SPOT_DAILY, current.spot_quantity),
+        (current.spot_entry_scope, current.spot_quantity),
         (DecisionScope.PERP_INTRADAY, current.perp_quantity),
     ):
         if not quantity:
             continue
         authorization = gate.deterministic_exit(current, scope, "manual")
         scope_bid, scope_ask = (
-            spot_quotes if scope == DecisionScope.SPOT_DAILY else perp_quotes
+            spot_quotes if scope in SPOT_SCOPES else perp_quotes
         )
         current, fill = apply_paper_target(
             current,
@@ -125,16 +125,18 @@ def run_parent_paper_cycle(
     store,
     provider,
     snapshot: FeatureSnapshot,
-    spot_observation: DonchianObservation,
+    spot_observation: DonchianObservation | None,
     *,
     spot_snapshot: FeatureSnapshot | None = None,
     spot_rule: SpotRuleParameters | ScopedRuleCandidate,
     perp_rule: PerpRuleParameters | ScopedRuleCandidate,
+    legacy_spot_observation: DonchianObservation | None = None,
     experiment_pair_ids: dict[DecisionScope, str] | None = None,
     decision_scopes: tuple[DecisionScope, ...] = (
         DecisionScope.SPOT_DAILY,
         DecisionScope.PERP_INTRADAY,
     ),
+    legacy_spot_entries_enabled: bool = False,
     record_snapshot: bool = True,
     now: datetime,
 ) -> dict:
@@ -144,10 +146,33 @@ def run_parent_paper_cycle(
         spot_snapshot = snapshot
     if snapshot.feature_schema_version == "2" and snapshot.market != "binance_usdm_perp":
         raise ValueError("perp runtime snapshot must come from Binance USD-M")
-    if spot_snapshot.feature_schema_version == "2" and spot_snapshot.market != "binance_spot":
+    if spot_snapshot.feature_schema_version in {"2", "3"} and spot_snapshot.market != "binance_spot":
         raise ValueError("spot runtime snapshot must come from Binance Spot")
+    spot_scope = (
+        spot_rule.scope if isinstance(spot_rule, ScopedRuleCandidate)
+        else DecisionScope.SPOT_DAILY
+    )
+    if spot_scope not in SPOT_SCOPES:
+        raise ValueError("spot rule must use a Spot scope")
+    if DecisionScope.SPOT_4H in decision_scopes:
+        active = store.load_active_scoped_rule(DecisionScope.SPOT_4H)
+        candle_age = spot_snapshot.features.get("closed_candle_age_seconds")
+        if (spot_scope is not DecisionScope.SPOT_4H or active is None
+                or not isinstance(spot_rule, ScopedRuleCandidate)
+                or active.rule_id != spot_rule.rule_id
+                or spot_snapshot.timeframe != "4h"
+                or spot_snapshot.feature_schema_version != "3"
+                or not 0 <= (now - spot_snapshot.event_time).total_seconds() <= 60
+                or not 0 <= (now - spot_snapshot.built_at).total_seconds() <= 60
+                or not isinstance(candle_age, (int, float))
+                or not 0 <= candle_age <= 14_700
+                or not spot_snapshot.freshness.get("order_book")
+                or not all(spot_snapshot.freshness.get(f"candles_{interval}")
+                           for interval in ("4h", "8h", "1d"))):
+            raise ValueError("spot_4h entry requires active champion and fresh native context")
     scope_snapshots = {
         DecisionScope.SPOT_DAILY: spot_snapshot,
+        DecisionScope.SPOT_4H: spot_snapshot,
         DecisionScope.PERP_INTRADAY: snapshot,
     }
     if record_snapshot:
@@ -234,7 +259,7 @@ def run_parent_paper_cycle(
         if state.spot_quantity:
             execute(
                 gate.deterministic_exit(
-                    state, DecisionScope.SPOT_DAILY, "parent_drawdown_limit"
+                    state, state.spot_entry_scope, "parent_drawdown_limit"
                 ),
                 close_reason="parent_drawdown_limit",
             )
@@ -249,10 +274,16 @@ def run_parent_paper_cycle(
             update={"entries_paused": True, "halt_reason": "parent_drawdown_limit"}
         )
     else:
-        if state.spot_quantity and spot_observation.exit:
+        active_spot_observation = (
+            legacy_spot_observation
+            if state.spot_entry_scope is DecisionScope.SPOT_DAILY and
+            spot_scope is DecisionScope.SPOT_4H
+            else spot_observation
+        )
+        if state.spot_quantity and active_spot_observation and active_spot_observation.exit:
             execute(
                 gate.deterministic_exit(
-                    state, DecisionScope.SPOT_DAILY, "donchian_exit"
+                    state, state.spot_entry_scope, "donchian_exit"
                 ),
                 close_reason="donchian_exit",
             )
@@ -271,14 +302,17 @@ def run_parent_paper_cycle(
 
     if state.paper_active:
         if (
-            DecisionScope.SPOT_DAILY in decision_scopes
+            spot_scope in decision_scopes
+            and (spot_scope is not DecisionScope.SPOT_DAILY
+                 or legacy_spot_entries_enabled)
             and state.spot_quantity == 0
+            and spot_observation is not None
             and spot_observation.entry
         ):
             try:
-                scoped = decide(DecisionScope.SPOT_DAILY)
+                scoped = decide(spot_scope)
             except RuntimeError:
-                provider_errors.append(DecisionScope.SPOT_DAILY.value)
+                provider_errors.append(spot_scope.value)
             else:
                 authorization = gate.spot_entry(
                     state,
@@ -286,6 +320,7 @@ def run_parent_paper_cycle(
                     spot_parameters,
                     donchian_entry=True,
                     size_multiplier=spot_observation.size_multiplier,
+                    scope=spot_scope,
                 )
                 signal_id = record_scoped_signal(
                     store,
@@ -299,7 +334,7 @@ def run_parent_paper_cycle(
                     ),
                     rule_id=spot_rule_id,
                 )
-                record_challenger_tick(DecisionScope.SPOT_DAILY, signal_id, scoped)
+                record_challenger_tick(spot_scope, signal_id, scoped)
                 if authorization.allowed:
                     execute(
                         authorization,
@@ -370,11 +405,12 @@ def run_parent_paper_cycle(
 def run_parent_risk_cycle(
     store,
     snapshot: FeatureSnapshot,
-    spot_observation: DonchianObservation,
+    spot_observation: DonchianObservation | None,
     *,
     spot_snapshot: FeatureSnapshot | None = None,
     spot_rule: SpotRuleParameters | ScopedRuleCandidate,
     perp_rule: PerpRuleParameters | ScopedRuleCandidate,
+    legacy_spot_observation: DonchianObservation | None = None,
     now: datetime,
 ) -> dict:
     """Run marks and deterministic exits without crossing the provider boundary."""
@@ -386,6 +422,7 @@ def run_parent_risk_cycle(
         spot_snapshot=spot_snapshot,
         spot_rule=spot_rule,
         perp_rule=perp_rule,
+        legacy_spot_observation=legacy_spot_observation,
         decision_scopes=(),
         record_snapshot=False,
         now=now,

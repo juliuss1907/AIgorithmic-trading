@@ -99,7 +99,7 @@ def create_app(
         now = datetime.now(timezone.utc)
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         experiments = {}
-        for scope in DecisionScope:
+        for scope in EVALUATION_HORIZONS:
             evaluation = store.latest_decision_experiment_evaluation(scope)
             experiments[scope.value] = {
                 "summary": store.decision_experiment_pair_summary(scope),
@@ -267,6 +267,7 @@ def create_app(
                 "portfolio": parent,
                 "bundle": bundle,
                 "spot_registry": store.scoped_rule_registry(DecisionScope.SPOT_DAILY),
+                "spot_4h_registry": store.scoped_rule_registry(DecisionScope.SPOT_4H),
                 "perp_registry": store.scoped_rule_registry(
                     DecisionScope.PERP_INTRADAY
                 ),

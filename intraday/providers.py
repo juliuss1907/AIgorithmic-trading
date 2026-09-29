@@ -170,9 +170,13 @@ class JevDecisionProvider:
     def _questions(
         scope: DecisionScope | None = None, symbol: str = "BTCUSDT"
     ) -> dict:
-        market_type = "spot" if scope == DecisionScope.SPOT_DAILY else "perpetual"
+        market_type = "spot" if scope in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H} else "perpetual"
         market = f"{symbol} {market_type}"
-        horizon = "daily/swing" if scope == DecisionScope.SPOT_DAILY else "intraday"
+        horizon = (
+            "daily/swing" if scope == DecisionScope.SPOT_DAILY else
+            "4h with native 8h/1d context" if scope == DecisionScope.SPOT_4H else
+            "intraday"
+        )
         return {
             "direction": {
                 "type": "choice",
@@ -538,6 +542,7 @@ class JevDecisionProvider:
     ) -> ScopedJevDecision:
         workflow = {
             DecisionScope.SPOT_DAILY: "spot_daily_entry",
+            DecisionScope.SPOT_4H: "spot_4h_entry",
             DecisionScope.PERP_INTRADAY: "perp_intraday_entry",
         }[scope]
         decision, trace = self._decide(

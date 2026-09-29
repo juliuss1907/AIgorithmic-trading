@@ -14,6 +14,7 @@ from intraday.portfolio_coordinator import (
     ParentPortfolioCoordinator,
     ParentPortfolioState,
     PortfolioAuthorization,
+    SPOT_SCOPES,
 )
 
 
@@ -29,7 +30,7 @@ class ScopedEntryGate:
     ) -> PortfolioAuthorization:
         current = (
             state.spot_notional
-            if scope == DecisionScope.SPOT_DAILY
+            if scope in SPOT_SCOPES
             else state.perp_notional
         )
         baseline = self.coordinator.authorize_target(
@@ -52,8 +53,10 @@ class ScopedEntryGate:
         *,
         donchian_entry: bool,
         size_multiplier: float = 1,
+        scope: DecisionScope = DecisionScope.SPOT_DAILY,
     ) -> PortfolioAuthorization:
-        scope = DecisionScope.SPOT_DAILY
+        if scope not in SPOT_SCOPES:
+            raise ValueError("spot entry requires a Spot scope")
         if not donchian_entry:
             return self._deny(state, scope, ("donchian_entry_not_triggered",))
         reasons = []
