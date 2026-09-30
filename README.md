@@ -67,6 +67,10 @@ chưa gửi lệnh, đọc database soak chỉ-đọc và lưu journal thực th
 route vào worker Docker hiện tại. Xem [runbook Binance Demo](docs/binance-demo-execution-runbook.md)
 trước khi cung cấp key hoặc activation. `aigt positions` chưa hiển thị vị thế Demo.
 
+Nhập và quản lý key bằng `aigt connect bnb demo`: nhập ẩn; key đã lưu có menu
+Keep/Replace/Clear. Lệnh chỉ kiểm tra API đọc, không tự bật trade hay đổi leverage.
+`connect bnb`, `connect hl demo`, `connect hl` dành sẵn cho tích hợp sau, hiện chưa hỗ trợ.
+
 Registry theo dõi BTC, ETH, HYPE, NEAR, ZEC và SOL trên cả Spot/Perp. BTC/ETH có
 capability `full`; HYPE/NEAR/ZEC/SOL chỉ được decision soak. Paper worker hiện vẫn
 chỉ giao dịch BTC và chưa bật paper cho ETH hay bốn coin còn lại. Worker tự tạo

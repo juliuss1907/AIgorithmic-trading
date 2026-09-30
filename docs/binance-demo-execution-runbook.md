@@ -48,32 +48,68 @@ manual trading, deposits, balance resets, or non-USDT commissions cause drift ch
 to pause entries. Rotating the key changes the local account fingerprint: pause,
 reconcile, and flatten before rotation; retain the previous execution journal.
 
-To create the dedicated owned 0600 JSON file, run this locally on the intended host:
+Run this locally on the intended host, from the installed project checkout:
 
 ```bash
-uv run python - <<'PY'
-import getpass
-import json
-import os
-from pathlib import Path
-
-secret_path = Path("state/execution-secrets/binance-demo.json")
-secret_path.parent.mkdir(parents=True, exist_ok=True)
-payload = {
-    "api_key": getpass.getpass("Binance Demo API key: "),
-    "api_secret": getpass.getpass("Binance Demo API secret: "),
-}
-descriptor = os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-with os.fdopen(descriptor, "w") as output:
-    json.dump(payload, output)
-print("Demo credential file created; contents not printed.")
-PY
+uv run aigt connect bnb demo
 ```
 
-The file must belong to the running Unix user, be regular (no symlink), and have
-permission 0600. Existing files are not overwritten. Do not put secrets into
-command arguments or `.env`; `state/` is already Git-ignored. The application
-redacts credentials and never prints signed request URLs or Binance error bodies.
+The wizard asks for API key and secret using hidden terminal input, checks the
+Demo API with **GET only**, and then saves the pair to
+`state/execution-secrets/binance-demo.json`. The JSON format remains compatible
+with files created by the previous Python provisioning snippet. Files are owned
+0600, in a private owned 0700 directory; symlink paths and echo fallback are refused.
+Failed API checks do not save new credentials or replace the old pair.
+The wizard creates a new secrets directory with mode 0700, but never changes the
+permissions of an existing directory automatically. If the old provisioning
+snippet created the default secrets directory with 0755, explicitly run
+`chmod 700 state/execution-secrets` first; do not chmod the project/home directory.
+
+When a valid local file already exists:
+
+```text
+Binance Demo API key: abcd... ✓
+  [K]eep / [R]eplace / [C]lear (default K):
+```
+
+The hint shows at most four initial key characters, never the secret. ✓ means
+**a local credential file exists**, not that the current API check passed.
+
+- **Keep / Enter:** reuse the saved pair and check the API without rewriting it.
+- **Replace:** confirm, input both new values, validate, then atomically replace.
+  Existing campaigns/journal remain unchanged; key rotation needs explicit activation.
+- **Clear:** confirm and remove only this credential file. The Binance key is not
+  revoked, and execution/soak journals are not deleted. The file removal has no undo;
+  reconnect with the original pair or create a new key in Binance.
+
+Replace/Clear first require any recorded campaign to be paused, every execution
+intent/fill to be reconciled, and a live GET check to show no positions or regular/algo
+orders. A busy journal lock, unavailable API, or malformed journal blocks changes.
+Pause, flatten, stop the dedicated execution runner, then manage the key. Use
+`--execution-database` to identify the actual journal if it is not the default.
+
+`connected` means account reads succeeded; leverage 5x or unsupported account modes
+are configuration warnings, not invalid keys. The wizard does not need a champion,
+source database, or passing soak. It does not activate trading or change settings.
+Account-level `canTrade` is read from `/fapi/v1/accountConfig`, not account v3; it
+does **not** prove that this API key has order-submission permission.
+
+Both connect and execution commands default to this credential file. Existing
+`--secrets-file` overrides continue to work; use a dedicated secrets directory,
+not the project root or home directory. Exchange connect commands always run
+on the current host, never inside the registered Docker admin/soak service.
+
+| Command | Current support |
+| --- | --- |
+| `aigt connect bnb demo` | Binance Demo BTC USD-M credential connection |
+| `aigt connect bnb` | Reserved for Binance live; currently refused |
+| `aigt connect hl demo` | Reserved for Hyperliquid testnet; currently refused |
+| `aigt connect hl` | Reserved for Hyperliquid live; currently refused |
+
+Unsupported commands do not prompt, save credentials, or access any exchange.
+Use `aigt`, not `aight`. Existing `connect jev` / `connect llm` are unchanged.
+Do not put secrets into command arguments or `.env`; `state/` is Git-ignored.
+The application never prints signed request URLs or Binance error bodies.
 
 ## Read-only preflight
 

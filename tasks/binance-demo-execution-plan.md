@@ -64,3 +64,36 @@ test after the operator provisions Demo keys.
 - Operator usage and recovery: [Binance Demo runbook](../docs/binance-demo-execution-runbook.md).
   **Next prerequisite:** provision owned 0600 Demo credentials and perform supervised
   account/preflight/order/protection/close acceptance before unattended deployment.
+
+## Follow-up: exchange connect wizard (2026-09-30)
+
+Accepted scope: Binance Demo only now; reserve Binance live and Hyperliquid
+testnet/live command syntax without receiving keys. Extend this execution plan;
+leave unrelated incomplete soak/Hermes tasks in the global plan/todo intact.
+
+- [x] Reproduce and fix account v3 missing `canTrade`; use signed GET accountConfig,
+  strict booleans, and preserve the runtime isolated 3x compatibility gate.
+- [x] Add native `aigt connect bnb demo`, hidden input, masked saved-key hint,
+  Keep/Replace/Clear default Keep; preserve existing Jev/LLM and explicit paths.
+- [x] Validate by GET before atomic credential publication; owned 0600 files,
+  private 0700 directory, symlink refusal, cancellation and sanitized errors.
+- [x] Guard Replace/Clear with journal lock/read-only checks, paused campaign,
+  reconciled intent/fill evidence, flat exchange account and no open orders.
+- [x] Use shared default secret path in execution commands; document setup,
+  reserved commands, file deletion scope and connection-versus-trading distinction.
+- [x] Full regression suite, read-only existing-key smoke, build and review.
+
+No production routing, live execution environment, schema migration, source DB
+write, trading activation, leverage mutation, key rotation, push or VPS deploy is
+authorized by this follow-up. Clear/Replace are operator-confirmed future actions;
+implementation tests use temporary synthetic credentials only.
+
+Verification: **629 tests passed** (18 existing dependency deprecation warnings),
+wheel/source build succeeded. Existing local Demo key passed nine guarded GET
+requests including accountConfig; credentials unchanged, 5000 USDT, no positions
+or open orders, One-way/Single-asset/isolated 5x. The wizard reports the 3x policy
+mismatch without changing leverage or activating a campaign. Secret file is 0600;
+its dedicated local directory was tightened to 0700 during the first smoke check.
+Final code refuses existing nonprivate directories rather than chmod'ing arbitrary
+paths. Independent correctness/security review's directory finding was fixed with
+a regression test; no other required findings remained.
