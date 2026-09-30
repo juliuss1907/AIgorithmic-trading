@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from intraday.contracts import DecisionScope
+from intraday.execution.contracts import AccountRef, OrderIntent, Quote
+from intraday.execution.simulated import PaperExecutionAdapter
 from intraday.portfolio_coordinator import (
     ParentPortfolioState,
     PortfolioAuthorization,
@@ -73,16 +76,24 @@ def apply_paper_target(
     if abs(delta) < 1e-12:
         return state, None
     side = "buy" if delta > 0 else "sell"
-    reference = ask if side == "buy" else bid
-    slippage = slippage_bps / 10_000
-    price = reference * (1 + slippage if side == "buy" else 1 - slippage)
     quantity = abs(delta)
-    notional = quantity * price
-    fee_rate = (10 if scope in SPOT_SCOPES else 5) / 10_000
-    if fee_bps is not None:
-        fee_rate = fee_bps / 10_000
-    fee = notional * fee_rate
     reducing = abs(target_quantity) < abs(current_quantity)
+    account = AccountRef(venue="simulated", environment="paper", account_id="parent")
+    adapter = PaperExecutionAdapter(
+        account=account,
+        quote=Quote(bid=Decimal(str(bid)), ask=Decimal(str(ask)),
+                    mark=Decimal(str(reference_price)), observed_at=now),
+        fee_bps=(10 if scope in SPOT_SCOPES else 5) if fee_bps is None else fee_bps,
+        slippage_bps=slippage_bps,
+    )
+    execution = adapter.submit(OrderIntent(
+        intent_id=hashlib.sha256(f"{scope.value}:{now.isoformat()}:{target}".encode()).hexdigest()[:32],
+        account=account, symbol="BTCUSDT", market="spot" if scope in SPOT_SCOPES else "perp",
+        side=side.upper(), quantity=Decimal(str(quantity)), reduce_only=reducing, created_at=now,
+    )).fills[0]
+    price = float(execution.price)
+    notional = quantity * price
+    fee = float(execution.commission)
     realized = state.realized_pnl
     entry_price = current_entry
     if reducing:
