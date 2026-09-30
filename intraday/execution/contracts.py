@@ -72,6 +72,7 @@ class ExecutionFill(ExecutionModel):
     price: Decimal = Field(gt=0)
     commission: Decimal = Field(ge=0)
     commission_asset: str = Field(min_length=1, max_length=24)
+    realized_pnl: Decimal = Decimal(0)
     filled_at: datetime
 
 
@@ -149,9 +150,11 @@ class ExecutionAdapter(Protocol):
 
 
 class TradingVenue(ExecutionAdapter, Protocol):
+    def check_clock(self, *, now: datetime) -> None: ...
     def account_snapshot(self, *, now: datetime) -> AccountSnapshot: ...
     def quote(self, symbol: str, *, now: datetime) -> Quote: ...
     def instrument(self, symbol: str) -> InstrumentRules: ...
+    def funding_since(self, since: datetime, *, now: datetime) -> Decimal: ...
 
 
 class ExecutionUnavailable(RuntimeError):

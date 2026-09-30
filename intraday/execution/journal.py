@@ -102,6 +102,16 @@ class ExecutionJournal:
             rows = connection.execute("SELECT intent, latest FROM execution_orders WHERE account=? ORDER BY rowid", (account.key,)).fetchall()
         return [(OrderIntent.model_validate_json(row[0]), OrderUpdate.model_validate_json(row[1])) for row in rows]
 
+    def cash_pnl(self, account: AccountRef):
+        from decimal import Decimal
+        from intraday.execution.contracts import ExecutionFill
+        with self.connect() as connection:
+            rows = connection.execute("SELECT payload FROM execution_fills WHERE account=?", (account.key,)).fetchall()
+        fills = [ExecutionFill.model_validate_json(row[0]) for row in rows]
+        if any(fill.commission_asset != "USDT" for fill in fills):
+            raise ExecutionUnavailable("non-USDT commission requires operator reconciliation")
+        return sum((fill.realized_pnl - fill.commission for fill in fills), Decimal(0))
+
     def record(self, intent: OrderIntent, update: OrderUpdate):
         if update.intent_id != intent.intent_id:
             raise ValueError("order update identity mismatch")
@@ -113,7 +123,7 @@ class ExecutionJournal:
             old = OrderUpdate.model_validate_json(previous[1])
             if update.executed_quantity < old.executed_quantity:
                 raise ExecutionUnavailable("order execution quantity regressed")
-            if old.terminal and not update.terminal:
+            if old.terminal and update.status != old.status:
                 raise ExecutionUnavailable("terminal order state regressed")
             for fill in update.fills:
                 row = connection.execute("SELECT intent_id, payload FROM execution_fills WHERE account=? AND id=?",
@@ -147,7 +157,7 @@ class OrderCoordinator:
             return self.reconcile(intent)
         try:
             update = self.adapter.submit(intent)
-        except (ExecutionUnavailable, ValueError, KeyError, TypeError):
+        except Exception:
             update = OrderUpdate(intent_id=intent.intent_id, status="UNKNOWN", received_at=datetime.now(timezone.utc))
         self.journal.record(intent, update)
         return update
@@ -158,7 +168,7 @@ class OrderCoordinator:
             raise ValueError("cannot reconcile an unjournaled order")
         try:
             update = self.adapter.query(intent)
-        except (ExecutionUnavailable, ValueError, KeyError, TypeError):
+        except Exception:
             update = None
         if update is None:
             return previous[1]
@@ -171,7 +181,7 @@ class OrderCoordinator:
             raise ValueError("cannot cancel an unjournaled order")
         try:
             update = self.adapter.cancel(intent)
-        except (ExecutionUnavailable, ValueError, KeyError, TypeError):
+        except Exception:
             return self.reconcile(intent)
         self.journal.record(intent, update)
         return update

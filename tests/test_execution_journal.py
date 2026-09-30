@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from intraday.execution.contracts import AccountRef, ExecutionUnavailable, OrderIntent, OrderUpdate
+from intraday.execution.contracts import AccountRef, ExecutionFill, ExecutionUnavailable, OrderIntent, OrderUpdate
 from intraday.execution.journal import ExecutionJournal, OrderCoordinator
 
 
@@ -74,3 +74,29 @@ def test_journal_refuses_an_existing_source_database(tmp_path):
         connection.execute("CREATE TABLE signals (id TEXT)")
     with pytest.raises(ValueError, match="execution"):
         ExecutionJournal(path)
+
+
+def test_repeated_fill_events_are_deduplicated_and_cash_uses_actual_fees(tmp_path):
+    journal = ExecutionJournal(tmp_path / "execution.sqlite3")
+    order = intent()
+    journal.prepare(order)
+    fill = ExecutionFill(fill_id="BTCUSDT:17", quantity=".01", price="100000", commission=".5",
+                         commission_asset="USDT", realized_pnl="-2", filled_at=NOW)
+    update = OrderUpdate(intent_id=order.intent_id, status="FILLED", executed_quantity=".01",
+                         average_price="100000", fills=(fill,), received_at=NOW)
+    journal.record(order, update)
+    journal.record(order, update)
+    assert journal.status()["fill_count"] == 1
+    assert journal.cash_pnl(ACCOUNT) == Decimal("-2.5")
+    assert ExecutionJournal(journal.path).cash_pnl(ACCOUNT) == Decimal("-2.5")
+
+
+def test_terminal_update_regression_does_not_change_evidence(tmp_path):
+    journal = ExecutionJournal(tmp_path / "execution.sqlite3")
+    order = intent()
+    journal.prepare(order)
+    terminal = OrderUpdate(intent_id=order.intent_id, status="CANCELED", received_at=NOW)
+    journal.record(order, terminal)
+    with pytest.raises(ExecutionUnavailable, match="regressed"):
+        journal.record(order, terminal.model_copy(update={"status": "NEW"}))
+    assert journal.order(ACCOUNT, order.intent_id)[1] == terminal

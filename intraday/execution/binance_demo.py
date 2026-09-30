@@ -7,7 +7,6 @@ import hmac
 import json
 import math
 import os
-import re
 import stat
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -26,6 +25,12 @@ from intraday.execution.contracts import (
 
 DEMO_HOST = "https://demo-fapi.binance.com"
 SYMBOL = "BTCUSDT"
+READ_ROUTES = {
+    "/fapi/v1/time", "/fapi/v1/exchangeInfo", "/fapi/v1/ticker/bookTicker", "/fapi/v1/premiumIndex",
+    "/fapi/v3/account", "/fapi/v3/positionRisk", "/fapi/v1/symbolConfig", "/fapi/v1/positionSide/dual",
+    "/fapi/v1/multiAssetsMargin", "/fapi/v1/openOrders", "/fapi/v1/openAlgoOrders", "/fapi/v1/income",
+    "/fapi/v1/order", "/fapi/v1/algoOrder", "/fapi/v1/userTrades",
+}
 
 
 class DemoCredentials(BaseModel):
@@ -35,6 +40,8 @@ class DemoCredentials(BaseModel):
 
     @classmethod
     def load(cls, path: Path):
+        if path.name == ".env" or path.name.startswith(".env."):
+            raise ValueError("use a dedicated Demo JSON secret file, not an environment file")
         try:
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except OSError:
@@ -85,7 +92,7 @@ class DemoTransport:
         self.writes_enabled = writes_enabled
 
     def request(self, method, path, parameters=None, *, signed=False):
-        if method not in {"GET", "POST", "DELETE"} or not re.fullmatch(r"/fapi/v[123]/[A-Za-z]+", path):
+        if method not in {"GET", "POST", "DELETE"} or path not in READ_ROUTES:
             raise ValueError("invalid Demo API route")
         if method != "GET":
             if not self.writes_enabled:
@@ -134,6 +141,13 @@ class BinanceDemoAdapter:
         client_id = response.get("clientAlgoId" if algo else "clientOrderId")
         if client_id != intent.intent_id:
             raise ExecutionUnavailable("Demo order identity mismatch")
+        if algo:
+            expected = {"symbol": SYMBOL, "side": intent.side, "positionSide": "BOTH",
+                        "orderType": "STOP_MARKET", "workingType": "MARK_PRICE", "reduceOnly": True}
+            if (any(response.get(name) != value for name, value in expected.items())
+                    or Decimal(response["quantity"]) != intent.quantity
+                    or Decimal(response["triggerPrice"]) != intent.stop_price):
+                raise ExecutionUnavailable("Demo protective order differs from persisted intent")
         if algo and response.get("actualOrderId"):
             child = self.transport.request("GET", "/fapi/v1/order",
                                            {"symbol": SYMBOL, "orderId": response["actualOrderId"]}, signed=True)
@@ -151,6 +165,8 @@ class BinanceDemoAdapter:
 
     def _regular_update(self, intent, response, now, status=None):
         executed = Decimal(response.get("executedQty", "0"))
+        if executed > intent.quantity or response.get("symbol", SYMBOL) != SYMBOL:
+            raise ExecutionUnavailable("Demo executed order differs from persisted intent")
         fills = ()
         if executed:
             trades = self.transport.request("GET", "/fapi/v1/userTrades",
@@ -158,8 +174,9 @@ class BinanceDemoAdapter:
             if len(trades) >= 1000:
                 raise ExecutionUnavailable("Demo fill history requires operator reconciliation")
             fills = tuple(ExecutionFill(
-                fill_id=str(row["id"]), quantity=Decimal(row["qty"]), price=Decimal(row["price"]),
+                fill_id=f"{SYMBOL}:{row['id']}", quantity=Decimal(row["qty"]), price=Decimal(row["price"]),
                 commission=Decimal(row["commission"]), commission_asset=row["commissionAsset"],
+                realized_pnl=Decimal(row["realizedPnl"]),
                 filled_at=datetime.fromtimestamp(int(row["time"]) / 1000, timezone.utc),
             ) for row in trades if str(row["orderId"]) == str(response["orderId"]))
         status = status or response.get("status", "UNKNOWN")
@@ -180,8 +197,16 @@ class BinanceDemoAdapter:
                           triggerPrice=format(intent.stop_price, "f"), workingType="MARK_PRICE")
         else:
             values.update(type="MARKET", newClientOrderId=intent.intent_id, newOrderRespType="RESULT")
-        response = self.transport.request("POST", "/fapi/v1/algoOrder" if algo else "/fapi/v1/order",
-                                          values, signed=True)
+        try:
+            response = self.transport.request("POST", "/fapi/v1/algoOrder" if algo else "/fapi/v1/order",
+                                              values, signed=True)
+        except DemoApiError as error:
+            # Explicit validation/margin rejection means no new order. Timeout, 5xx,
+            # duplicate-ID and ambiguous codes still propagate for UNKNOWN reconciliation.
+            rejected = {-1100, -1101, -1102, -1111, -1116, -1121, -1130, -2019, -2021, -2022, -4164, -4120}
+            if error.code in rejected and (error.http_status is None or 400 <= error.http_status < 500):
+                return OrderUpdate(intent_id=intent.intent_id, status="REJECTED", received_at=self.transport.clock())
+            raise
         return self._normalize(intent, response, algo=algo)
 
     def query(self, intent: OrderIntent) -> OrderUpdate | None:
@@ -230,6 +255,7 @@ class BinanceDemoAdapter:
             raise ValueError("unsupported Demo symbol")
         book = self.transport.request("GET", "/fapi/v1/ticker/bookTicker", {"symbol": symbol})
         mark = self.transport.request("GET", "/fapi/v1/premiumIndex", {"symbol": symbol})
+        now = self.transport.clock()
         for response in (book, mark):
             age = now.timestamp() - int(response["time"]) / 1000
             if not -2 <= age <= 20:
@@ -265,5 +291,15 @@ class BinanceDemoAdapter:
 
     def check_clock(self, *, now: datetime):
         server = self.transport.request("GET", "/fapi/v1/time")
+        now = self.transport.clock()
         if abs(now.timestamp() * 1000 - int(server["serverTime"])) > 1000:
             raise ExecutionUnavailable("Demo clock skew exceeds one second; synchronize system time")
+
+    def funding_since(self, since: datetime, *, now: datetime) -> Decimal:
+        response = self.transport.request("GET", "/fapi/v1/income", {
+            "symbol": SYMBOL, "incomeType": "FUNDING_FEE", "startTime": int(since.timestamp() * 1000),
+            "endTime": int(now.timestamp() * 1000), "limit": 1000,
+        }, signed=True)
+        if len(response) >= 1000 or any(row["asset"] != "USDT" for row in response):
+            raise ExecutionUnavailable("funding history requires operator reconciliation")
+        return sum((Decimal(row["income"]) for row in response), Decimal(0))
