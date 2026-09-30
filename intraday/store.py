@@ -10,7 +10,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from intraday.assets import ASSET_REGISTRY, AssetLifecycle, AssetStage, asset_spec
+from intraday.assets import (ASSET_REGISTRY, AssetCapability, AssetSpec, AssetLifecycle, AssetStage,
+                             spec_from_payload, spec_payload, ticker_symbol)
 from intraday.contracts import (
     AnalystReport,
     DecisionMode,
@@ -52,6 +53,71 @@ class IntradayStore:
         self.database = Path(database).resolve()
         self.database.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+        self._migrate_v23()
+
+    def _migrate_v23(self) -> None:
+        """Add configuration only; never rewrite market/rule/soak evidence."""
+        with self._connect() as connection:
+            connection.executescript("""
+                CREATE TABLE IF NOT EXISTS asset_catalog (
+                    symbol TEXT PRIMARY KEY, payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS asset_venue_routes (
+                    symbol TEXT NOT NULL REFERENCES asset_catalog(symbol),
+                    market TEXT NOT NULL CHECK (market IN ('spot','perp')),
+                    venue TEXT NOT NULL, environment TEXT NOT NULL,
+                    instrument TEXT NOT NULL, scan_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL, PRIMARY KEY(symbol, market)
+                );
+                CREATE TABLE IF NOT EXISTS asset_market_scans (
+                    id TEXT PRIMARY KEY, symbol TEXT NOT NULL, market TEXT NOT NULL,
+                    created_at TEXT NOT NULL, payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS asset_catalog_requests (
+                    id TEXT PRIMARY KEY, request_json TEXT NOT NULL, response_json TEXT NOT NULL
+                );
+            """)
+            for seed in ASSET_REGISTRY.values():
+                payload = spec_payload(seed)
+                # Capability is no longer ticker-gated; lifecycle/evidence gates remain.
+                payload["capability"] = AssetCapability.FULL.value
+                connection.execute("INSERT OR IGNORE INTO asset_catalog VALUES (?, ?)",
+                                   (seed.symbol, json.dumps(payload, sort_keys=True)))
+            connection.execute("UPDATE schema_meta SET value='23' WHERE key='schema_version'")
+
+    def asset_catalog(self) -> dict[str, AssetSpec]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT payload_json FROM asset_catalog ORDER BY rowid").fetchall()
+        return {spec.symbol: spec for row in rows if (spec := spec_from_payload(json.loads(row[0])))}
+
+    def asset_spec(self, symbol: str) -> AssetSpec:
+        normalized = ticker_symbol(symbol)
+        with self._connect() as connection:
+            row = connection.execute("SELECT payload_json FROM asset_catalog WHERE symbol=?", (normalized,)).fetchone()
+        if row is None:
+            raise ValueError(f"unsupported asset symbol: {normalized}")
+        return spec_from_payload(json.loads(row[0]))
+
+    def register_asset(self, symbol: str, *, market: str, now: datetime) -> AssetSpec:
+        from dataclasses import replace
+        if market not in {"spot", "perp"} or now.utcoffset() is None:
+            raise ValueError("invalid asset market or timestamp")
+        normalized = ticker_symbol(symbol)
+        scope = DecisionScope.SPOT_4H if market == "spot" else DecisionScope.PERP_INTRADAY
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT payload_json FROM asset_catalog WHERE symbol=?", (normalized,)).fetchone()
+            if row:
+                spec = spec_from_payload(json.loads(row[0]))
+                spec = replace(spec, enabled_scopes=spec.enabled_scopes | {scope})
+            else:
+                spec = AssetSpec(normalized, normalized[:-4], "USDT", frozenset({scope}),
+                                 AssetCapability.FULL, None, None, None, None, None, None)
+            connection.execute("INSERT INTO asset_catalog VALUES (?, ?) ON CONFLICT(symbol) DO UPDATE SET payload_json=excluded.payload_json",
+                               (normalized, json.dumps(spec_payload(spec), sort_keys=True)))
+            connection.execute("INSERT OR IGNORE INTO asset_scope_lifecycle VALUES (?, ?, 'shadow', NULL, ?)",
+                               (normalized, scope.value, now.isoformat()))
+        return spec
 
     def _connect(self):
         connection = sqlite3.connect(self.database)
@@ -759,7 +825,7 @@ class IntradayStore:
     def asset_lifecycle(
         self, symbol: str, scope: DecisionScope
     ) -> AssetLifecycle:
-        normalized = asset_spec(symbol).symbol
+        normalized = self.asset_spec(symbol).symbol
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT symbol, scope, stage FROM asset_scope_lifecycle "
@@ -772,13 +838,14 @@ class IntradayStore:
             symbol=row["symbol"],
             scope=DecisionScope(row["scope"]),
             stage=AssetStage(row["stage"]),
+            spec=self.asset_spec(normalized),
         )
 
     def list_asset_lifecycles(self, symbol: str | None = None) -> list[AssetLifecycle]:
         query = "SELECT symbol, scope, stage FROM asset_scope_lifecycle"
         parameters: tuple[str, ...] = ()
         if symbol is not None:
-            normalized = asset_spec(symbol).symbol
+            normalized = self.asset_spec(symbol).symbol
             query += " WHERE symbol=?"
             parameters = (normalized,)
         query += " ORDER BY symbol, scope"
@@ -789,6 +856,7 @@ class IntradayStore:
                 symbol=row["symbol"],
                 scope=DecisionScope(row["scope"]),
                 stage=AssetStage(row["stage"]),
+                spec=self.asset_spec(row["symbol"]),
             )
             for row in rows
         ]
@@ -835,7 +903,7 @@ class IntradayStore:
 
     def list_scoped_rules(self, scope: DecisionScope | None = None, *, symbol: str = "BTCUSDT") -> list[dict]:
         query = "SELECT id, scope, symbol, parent_id, status, created_at FROM scoped_rules WHERE symbol=?"
-        parameters: tuple = (asset_spec(symbol).symbol,)
+        parameters: tuple = (self.asset_spec(symbol).symbol,)
         if scope is not None:
             query += " AND scope=?"
             parameters += (scope.value,)
@@ -1031,7 +1099,7 @@ class IntradayStore:
         self, symbol: str, interval: str, candles: list[list]
     ) -> int:
         """Append native closed Binance bars, immutable per symbol and interval."""
-        symbol = asset_spec(symbol).symbol
+        symbol = self.asset_spec(symbol).symbol
         lengths = {"4h": 14_400_000, "8h": 28_800_000, "1d": 86_400_000}
         if interval not in lengths:
             raise ValueError("unsupported spot candle interval")
@@ -1083,7 +1151,7 @@ class IntradayStore:
                 "SELECT payload_json FROM asset_daily_candles "
                 "WHERE symbol=? AND interval=? "
                 "AND (? IS NULL OR close_time<=?) ORDER BY open_time",
-                (asset_spec(symbol).symbol, interval, cutoff, cutoff),
+                (self.asset_spec(symbol).symbol, interval, cutoff, cutoff),
             ).fetchall()
         return [json.loads(row["payload_json"]) for row in rows]
 
@@ -1092,7 +1160,7 @@ class IntradayStore:
             row = connection.execute(
                 "SELECT symbol, scope, stage, evaluation_id, updated_at "
                 "FROM asset_scope_lifecycle WHERE symbol=? AND scope=?",
-                (asset_spec(symbol).symbol, scope.value),
+                (self.asset_spec(symbol).symbol, scope.value),
             ).fetchone()
         if row is None:
             raise ValueError("asset lifecycle is not registered")
@@ -1103,7 +1171,7 @@ class IntradayStore:
         after: datetime | None = None, before: datetime | None = None,
     ) -> tuple[list[dict], dict]:
         horizon = 900 if scope == DecisionScope.PERP_INTRADAY else 259_200
-        symbol = asset_spec(symbol).symbol
+        symbol = self.asset_spec(symbol).symbol
         with self._connect() as connection:
             total = connection.execute(
                 "SELECT COUNT(*) AS count, MIN(timestamp) AS first_at, MAX(timestamp) AS last_at "
@@ -1363,7 +1431,7 @@ class IntradayStore:
         symbol: str = "BTCUSDT",
         market: str = "binance_usdm_perp",
     ) -> list[FeatureSnapshot]:
-        symbol = asset_spec(symbol).symbol
+        symbol = self.asset_spec(symbol).symbol
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM snapshots "
@@ -1624,6 +1692,7 @@ class IntradayStore:
         return {"id": decision.decision_id, "tick_id": decision.tick_id}
 
     def record_snapshot(self, snapshot: FeatureSnapshot) -> None:
+        self.asset_spec(snapshot.symbol)
         with self._connect() as connection:
             connection.execute(
                 "INSERT OR IGNORE INTO snapshots "
@@ -1759,7 +1828,7 @@ class IntradayStore:
             "success", "skipped_no_setup", "provider_error", "gate_error"
         }:
             raise ValueError("invalid portfolio soak status")
-        symbol = asset_spec(symbol).symbol
+        symbol = self.asset_spec(symbol).symbol
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO portfolio_soak_ticks "
@@ -1784,7 +1853,7 @@ class IntradayStore:
         parameters: tuple = (evidence_version,)
         symbol_filter = ""
         if symbol is not None:
-            symbol = asset_spec(symbol).symbol
+            symbol = self.asset_spec(symbol).symbol
             symbol_filter = " AND symbol=?"
             parameters += (symbol,)
         with self._connect() as connection:
@@ -1809,7 +1878,7 @@ class IntradayStore:
                 "FROM portfolio_soak_ticks WHERE symbol=? AND scope=? "
                 "AND evidence_version='scope-price-v2' "
                 "AND created_at>=? AND created_at<=?",
-                (asset_spec(symbol).symbol, scope.value,
+                (self.asset_spec(symbol).symbol, scope.value,
                  started_at.isoformat(), evaluated_at.isoformat()),
             ).fetchall()
         slots = set()
@@ -2101,7 +2170,7 @@ class IntradayStore:
         symbol_filter = ""
         if symbol is not None:
             symbol_filter = " AND symbol=?"
-            parameters += (asset_spec(symbol).symbol,)
+            parameters += (self.asset_spec(symbol).symbol,)
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT timestamp FROM signals WHERE feature_schema_version=? "
@@ -2318,7 +2387,7 @@ class IntradayStore:
     ) -> list[FeatureSnapshot]:
         if not 1 <= limit <= 2_000_000:
             raise ValueError("limit must be between 1 and 2000000")
-        symbol = asset_spec(symbol).symbol
+        symbol = self.asset_spec(symbol).symbol
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM snapshots "
@@ -2337,7 +2406,7 @@ class IntradayStore:
         market: str = "binance_usdm_perp",
         symbol: str = "BTCUSDT",
     ) -> FeatureSnapshot | None:
-        symbol = asset_spec(symbol).symbol
+        symbol = self.asset_spec(symbol).symbol
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT payload_json FROM snapshots "
@@ -2353,7 +2422,7 @@ class IntradayStore:
         market: str = "binance_usdm_perp",
         symbol: str = "BTCUSDT",
     ) -> dict:
-        symbol = asset_spec(symbol).symbol
+        symbol = self.asset_spec(symbol).symbol
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT COUNT(*) AS snapshots, MIN(event_time) AS first_event_time, "
@@ -2375,7 +2444,7 @@ class IntradayStore:
             raise ValueError("snapshot boundary must be timezone-aware")
         if not 1 <= limit <= 2_000_000:
             raise ValueError("limit must be between 1 and 2000000")
-        symbol = asset_spec(symbol).symbol
+        symbol = self.asset_spec(symbol).symbol
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM snapshots "
@@ -2990,6 +3059,9 @@ class IntradayStore:
     def register_scoped_rule(
         self, rule: ScopedRuleCandidate, *, status: str = "queued"
     ) -> None:
+        spec = self.asset_spec(rule.symbol)
+        if rule.scope not in spec.enabled_scopes:
+            raise ValueError("scope is not registered for this asset")
         allowed = {
             "queued", "replay_passed", "challenger", "champion",
             "hall_of_fame", "rejected",
@@ -3016,7 +3088,7 @@ class IntradayStore:
             row = connection.execute(
                 "SELECT 1 FROM scoped_rules WHERE scope=? AND symbol=? AND status IN "
                 "('queued', 'replay_passed', 'challenger') LIMIT 1",
-                (scope.value, asset_spec(symbol).symbol),
+                (scope.value, self.asset_spec(symbol).symbol),
             ).fetchone()
         return row is not None
 
@@ -3025,7 +3097,7 @@ class IntradayStore:
             row = connection.execute(
                 "SELECT champion_id, challenger_id, rollback_id, updated_at "
                 "FROM asset_scoped_rule_registry WHERE scope=? AND symbol=?",
-                (scope.value, asset_spec(symbol).symbol),
+                (scope.value, self.asset_spec(symbol).symbol),
             ).fetchone()
         if row is None:
             return {"champion_id": None, "challenger_id": None, "rollback_id": None}
@@ -3034,7 +3106,7 @@ class IntradayStore:
     def activate_scoped_champion(
         self, scope: DecisionScope, rule_id: str, *, now: datetime, symbol: str = "BTCUSDT"
     ) -> dict:
-        symbol = asset_spec(symbol).symbol
+        symbol = self.asset_spec(symbol).symbol
         with self._connect() as connection:
             rule = connection.execute(
                 "SELECT scope, symbol FROM scoped_rules WHERE id=?", (rule_id,)
@@ -3067,7 +3139,7 @@ class IntradayStore:
                 "SELECT r.payload_json FROM scoped_rules r "
                 "JOIN asset_scoped_rule_registry g ON g.champion_id=r.id "
                 "WHERE g.scope=? AND g.symbol=?",
-                (scope.value, asset_spec(symbol).symbol),
+                (scope.value, self.asset_spec(symbol).symbol),
             ).fetchone()
         return (
             None
@@ -3082,7 +3154,7 @@ class IntradayStore:
             row = connection.execute(
                 "SELECT r.payload_json FROM scoped_rules r "
                 "JOIN asset_scoped_rule_registry g ON g.challenger_id=r.id "
-                "WHERE g.scope=? AND g.symbol=?", (scope.value, asset_spec(symbol).symbol),
+                "WHERE g.scope=? AND g.symbol=?", (scope.value, self.asset_spec(symbol).symbol),
             ).fetchone()
         return (
             None
@@ -3300,7 +3372,7 @@ class IntradayStore:
             from intraday.assets import asset_spec
 
             filters.append("symbol = ?")
-            values.append(asset_spec(symbol).symbol)
+            values.append(self.asset_spec(symbol).symbol)
         if filters:
             query += " WHERE " + " AND ".join(filters)
         parameters = tuple(values)
@@ -3326,7 +3398,7 @@ class IntradayStore:
         if symbol is not None:
             from intraday.assets import asset_spec
 
-            symbol = asset_spec(symbol).symbol
+            symbol = self.asset_spec(symbol).symbol
             symbol_filter = " AND symbol = ?"
             parameters += (symbol,)
         with self._connect() as connection:
@@ -3419,7 +3491,7 @@ class IntradayStore:
         latest_parameters: tuple = (venue,)
         symbol_filter = ""
         if symbol is not None:
-            symbol = asset_spec(symbol).symbol
+            symbol = self.asset_spec(symbol).symbol
             symbol_filter = " AND symbol = ?"
             parameters += (symbol,)
             latest_parameters += (symbol,)

@@ -163,7 +163,7 @@ def _health_status(health: dict, ttl: timedelta) -> dict:
 
 
 def _asset_projection(store, symbol: str, *, now: datetime) -> dict:
-    spec = ASSET_REGISTRY[symbol]
+    spec = store.asset_spec(symbol)
     lifecycles = store.list_asset_lifecycles(symbol)
     sources = {
         source: _health_status(
@@ -371,6 +371,6 @@ def build_dashboard_snapshot(store, *, now: datetime) -> dict:
         "external_sources": external_sources,
         "assets": [
             _asset_projection(store, symbol, now=now)
-            for symbol in ASSET_REGISTRY
+            for symbol in store.asset_catalog()
         ],
     }

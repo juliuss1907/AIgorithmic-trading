@@ -23,8 +23,8 @@ def refresh_spot_4h_history(
     store, symbol: str, *, now: datetime,
     client: BinanceSpotDailyClient | None = None,
 ) -> None:
-    symbol = asset_spec(symbol).symbol
-    client = client or BinanceSpotDailyClient()
+    symbol = store.asset_spec(symbol).symbol
+    client = client or BinanceSpotDailyClient(asset_catalog=store.asset_catalog())
     now_ms = int(now.astimezone(timezone.utc).timestamp() * 1000)
     for interval, width in SPOT_INTERVAL_MS.items():
         start = (now_ms - 365 * 86_400_000) // width * width
@@ -39,7 +39,7 @@ def bootstrap_spot_4h_rule(
     store, symbol: str, *, now: datetime,
     client: BinanceSpotDailyClient | None = None,
 ) -> ScopedRuleCandidate:
-    symbol = asset_spec(symbol).symbol
+    symbol = store.asset_spec(symbol).symbol
     if store.load_active_scoped_rule(SCOPE, symbol=symbol):
         raise ValueError("asset already has a spot_4h champion")
     if store.has_open_scoped_rule_candidate(SCOPE, symbol=symbol):

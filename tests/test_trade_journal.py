@@ -80,7 +80,7 @@ def test_schema_v20_preserves_market_feature_version_and_paper_mode(tmp_path):
             "SELECT * FROM trades WHERE id=?", (trade_id,)
         ).fetchone()
 
-    assert version == "22"
+    assert version == "23"
     assert recorded_signal["symbol"] == "BTCUSDT"
     assert recorded_signal["scope"] == "perp_intraday"
     assert recorded_signal["market"] == "binance_usdm_perp"

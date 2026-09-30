@@ -16,7 +16,7 @@ def test_fresh_store_seeds_asset_scope_lifecycle_safely(tmp_path):
 
     lifecycles = store.list_asset_lifecycles()
 
-    assert store.schema_version() == 22
+    assert store.schema_version() == 23
     assert len(lifecycles) == len(ASSET_REGISTRY) * len(DecisionScope)
     assert {
         (item.symbol, item.scope, item.stage) for item in lifecycles
@@ -100,7 +100,7 @@ def test_v21_candle_constraint_migrates_without_losing_daily_history(tmp_path):
             ("BTCUSDT", "1d", 0, 86_399_999, json.dumps(candle)),
         )
     store = IntradayStore(database)
-    assert store.schema_version() == 22
+    assert store.schema_version() == 23
     assert store.list_asset_daily_candles("BTCUSDT") == [candle]
     assert store.record_asset_candles(
         "BTCUSDT", "4h", [[0, "100", "102", "99", "101", "10", 14_399_999]]
@@ -160,6 +160,6 @@ def test_schema_v19_backfills_btc_snapshot_and_soak_ownership(tmp_path):
         soak_symbol = connection.execute(
             "SELECT symbol FROM portfolio_soak_ticks"
         ).fetchone()[0]
-    assert store.schema_version() == 22
+    assert store.schema_version() == 23
     assert snapshot_symbol == "BTCUSDT"
     assert soak_symbol == "BTCUSDT"

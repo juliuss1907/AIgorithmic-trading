@@ -88,6 +88,31 @@ write, trading activation, leverage mutation, key rotation, push or VPS deploy i
 authorized by this follow-up. Clear/Replace are operator-confirmed future actions;
 implementation tests use temporary synthetic credentials only.
 
+## Follow-up: multi-asset Spot/Perp Demo (approved 2026-09-30)
+
+Implement the approved multi-asset plan in independently verified slices. Do not
+overwrite unrelated global plan/todo items. No VPS deploy, push, order smoke or
+trading activation is authorized during implementation.
+
+- [ ] Persistent dynamic catalog; independent Spot/Perp onboarding and mappings.
+- [ ] Demo/Testnet-only discovery with volume, spread, depth and size impact;
+  all existing venues visible, only Binance Demo execution selectable.
+- [ ] Multi-symbol USD-M adapter and Spot balances/filters/fills/native stops.
+- [ ] Shared allocation and multi-route runtime; per-symbol evidence gates,
+  managed-only Spot inventory, durable unknown-order reconciliation.
+- [ ] CLI and authenticated dashboard wizard with idempotent writes and UTC+7.
+- [ ] Migration preservation, regression/security/browser tests, build/runbook.
+
+Defaults: Spot USDT and USD-M USDT perpetual; Spot 60% / Perp 40%, effective
+notional caps 30% / 20% of total operator capital. Manual coin weights. Spot
+long-only, pre-existing inventory excluded. Perp isolated 3x. Keep existing rule,
+replay and soak gates; no mainnet fallback and no automatic activation/rebalance.
+
+Slice 1: persistent v23 catalog and registration-aware services/collectors. Symbol
+models validate syntax; database boundaries validate membership. Existing static
+constants remain seed/legacy defaults, not runtime authority. Verification:
+633 tests passed; old candles/checksums/soak migration and upgrade rehearsal pass.
+
 Verification: **629 tests passed** (18 existing dependency deprecation warnings),
 wheel/source build succeeded. Existing local Demo key passed nine guarded GET
 requests including accountConfig; credentials unchanged, 5000 USDT, no positions

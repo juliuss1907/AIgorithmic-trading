@@ -17,8 +17,8 @@ from intraday.backups import verify_backup
 from intraday.store import IntradayStore
 
 
-TARGET_SCHEMA_VERSION = 22
-SUPPORTED_SOURCE_VERSIONS = frozenset({19, 20, 21, 22})
+TARGET_SCHEMA_VERSION = 23
+SUPPORTED_SOURCE_VERSIONS = frozenset({19, 20, 21, 22, 23})
 _SEEDABLE_TABLES = frozenset({"asset_scope_lifecycle", "asset_scoped_rule_registry"})
 _CHECK_NAMES = (
     "backup_verified", "migration_integrity", "foreign_keys", "data_preserved",

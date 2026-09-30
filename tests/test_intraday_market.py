@@ -138,7 +138,7 @@ def test_binance_client_uses_only_allowlisted_public_futures_endpoints():
         client.open_interest("DOGEUSDT")
 
 
-def test_feature_snapshot_accepts_registered_assets_only():
+def test_feature_snapshot_validates_symbol_syntax_not_a_static_registry():
     now = datetime(2026, 9, 21, 2, 0, tzinfo=timezone.utc)
     snapshot = FeatureSnapshot.create(
         symbol="ethusdt",
@@ -152,9 +152,9 @@ def test_feature_snapshot_accepts_registered_assets_only():
 
     assert snapshot.symbol == "ETHUSDT"
 
-    with pytest.raises(ValueError, match="unsupported asset symbol"):
+    with pytest.raises(ValueError, match="alphanumeric USDT"):
         FeatureSnapshot.create(
-            symbol="DOGEUSDT",
+            symbol="../../DOGEUSDT",
             event_time=now,
             built_at=now,
             bid=100,

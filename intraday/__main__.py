@@ -367,7 +367,7 @@ def _default_secrets_file() -> Path:
 
 
 def _asset_payload(store: IntradayStore, symbol: str) -> dict:
-    spec = asset_spec(symbol)
+    spec = store.asset_spec(symbol)
     lifecycles = store.list_asset_lifecycles(spec.symbol)
     return {
         "symbol": spec.symbol,
@@ -389,19 +389,19 @@ def _asset_payload(store: IntradayStore, symbol: str) -> dict:
 def _assets_cli(arguments) -> None:
     store = IntradayStore(resolve_database_path(arguments.database))
     if arguments.assets_command == "list":
-        result = [_asset_payload(store, symbol) for symbol in ASSET_REGISTRY]
+        result = [_asset_payload(store, symbol) for symbol in store.asset_catalog()]
     elif arguments.assets_command == "status":
         result = (
             _asset_payload(store, arguments.symbol)
             if arguments.symbol
-            else [_asset_payload(store, symbol) for symbol in ASSET_REGISTRY]
+            else [_asset_payload(store, symbol) for symbol in store.asset_catalog()]
         )
     elif arguments.assets_command == "rules":
         command = arguments.asset_rules_command
         now = datetime.now(timezone.utc)
         try:
             if command == "status":
-                symbol = asset_spec(arguments.symbol).symbol
+                symbol = store.asset_spec(arguments.symbol).symbol
                 result = {
                     scope.value: {
                         "registry": store.scoped_rule_registry(scope, symbol=symbol),
@@ -835,7 +835,7 @@ def _portfolio_cli(arguments) -> None:
                 BinanceSpotDailyClient(),
                 quote_interval_seconds=config.order_book_interval_seconds,
             )
-            asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config)
+            asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config, store=store)
             interval = config.risk_interval_seconds
             background_started = False
             hyperliquid = (
@@ -1059,7 +1059,7 @@ def _portfolio_cli(arguments) -> None:
             BinanceSpotDailyClient(),
             quote_interval_seconds=config.order_book_interval_seconds,
         )
-        asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config)
+        asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config, store=store)
         interval = config.risk_interval_seconds
         hyperliquid = (
             _start_portfolio_hyperliquid(config) if not arguments.once else None
@@ -1488,18 +1488,21 @@ def _record_portfolio_hyperliquid(
             store.record_venue_frame(frame)
 
 
-def _new_asset_market_caches(config: IntradayConfig) -> tuple[dict, dict]:
-    symbols = tuple(symbol for symbol in ASSET_REGISTRY if symbol != "BTCUSDT")
+def _new_asset_market_caches(config: IntradayConfig, *, store=None) -> tuple[dict, dict]:
+    catalog = store.asset_catalog() if store else ASSET_REGISTRY
+    symbols = tuple(symbol for symbol in catalog if symbol != "BTCUSDT")
     perp = {
-        symbol: MultiCadenceMarketCache(BinanceUsdMClient())
-        for symbol in symbols
+        symbol: MultiCadenceMarketCache(BinanceUsdMClient(asset_catalog=catalog))
+        for symbol in symbols if catalog[symbol].binance_perp_symbol
+        and DecisionScope.PERP_INTRADAY in catalog[symbol].enabled_scopes
     }
     spot = {
         symbol: MultiTimeframeSpotCache(
-            BinanceSpotDailyClient(),
+            BinanceSpotDailyClient(asset_catalog=catalog),
             quote_interval_seconds=config.order_book_interval_seconds,
         )
-        for symbol in symbols
+        for symbol in symbols if catalog[symbol].binance_spot_symbol
+        and DecisionScope.SPOT_4H in catalog[symbol].enabled_scopes
     }
     return perp, spot
 
@@ -1514,8 +1517,16 @@ def _run_registered_asset_cycles(
     now: datetime,
 ) -> dict[str, str]:
     """Collect every registered asset with per-symbol failure isolation."""
+    # New registrations become visible without restarting the soak collector.
+    fresh_perp, fresh_spot = _new_asset_market_caches(config, store=store)
+    for existing, fresh in ((perp_markets, fresh_perp), (spot_markets, fresh_spot)):
+        for symbol in list(existing):
+            if symbol not in fresh:
+                del existing[symbol]
+        for symbol, market_cache in fresh.items():
+            existing.setdefault(symbol, market_cache)
     results = {}
-    for symbol in perp_markets:
+    for symbol in sorted(perp_markets.keys() | spot_markets.keys()):
         for scope, markets, interval in (
             (
                 DecisionScope.PERP_INTRADAY,
@@ -1524,6 +1535,8 @@ def _run_registered_asset_cycles(
             ),
             (DecisionScope.SPOT_4H, spot_markets, 14_400),
         ):
+            if symbol not in markets:
+                continue
             job = f"asset_{scope.value}_{symbol.lower()}"
             slot = claim_cadence(store, job, now, interval)
             if slot is None:
@@ -1574,10 +1587,14 @@ def _run_asset_rule_bootstrap_tick(
     spot_client: BinanceSpotDailyClient | None = None,
 ) -> dict[str, str]:
     """Idempotent daily baseline work; never promotes a rule or enables paper."""
-    spot_client = spot_client or BinanceSpotDailyClient()
+    spot_client = spot_client or BinanceSpotDailyClient(asset_catalog=store.asset_catalog())
     results = {}
-    for symbol in ASSET_REGISTRY:
+    for symbol, spec in store.asset_catalog().items():
         for scope in (DecisionScope.SPOT_4H, DecisionScope.PERP_INTRADAY):
+            if scope not in spec.enabled_scopes:
+                continue
+            if not (spec.binance_spot_symbol if scope is DecisionScope.SPOT_4H else spec.binance_perp_symbol):
+                continue
             if scope is DecisionScope.PERP_INTRADAY and symbol == "BTCUSDT":
                 continue  # Existing BTC Perp champion remains on its legacy lifecycle.
             if store.load_active_scoped_rule(scope, symbol=symbol):
@@ -1674,8 +1691,10 @@ def _run_asset_auto_proposal_tick(
     store: IntradayStore, *, client, now: datetime,
 ) -> dict[str, str]:
     results = {}
-    for symbol in ASSET_REGISTRY:
+    for symbol, spec in store.asset_catalog().items():
         for scope in (DecisionScope.SPOT_4H, DecisionScope.PERP_INTRADAY):
+            if scope not in spec.enabled_scopes:
+                continue
             job = f"asset_proposal_{scope.value}_{symbol.lower()}"
             slot = claim_cadence(store, job, now, 86_400)
             if slot is None:

@@ -174,9 +174,17 @@ class BinanceSpotDailyClient:
         *,
         fetch_json: Callable[[str, dict], object] | None = None,
         timeout_seconds: float = 10,
+        asset_catalog=None,
     ):
         self._fetch_json = fetch_json or self._http_get
         self.timeout_seconds = timeout_seconds
+        self.asset_catalog = asset_catalog
+
+    def _symbol(self, symbol):
+        spec = self.asset_catalog[symbol] if self.asset_catalog is not None else asset_spec(symbol)
+        if not spec.binance_spot_symbol:
+            raise ValueError("Spot market mapping unavailable")
+        return spec.binance_spot_symbol
 
     def _http_get(self, path: str, params: dict):
         if path not in SPOT_ALLOWED_PATHS:
@@ -196,7 +204,7 @@ class BinanceSpotDailyClient:
         interval: str = "1d",
         now: datetime | None = None,
     ) -> list[list]:
-        symbol = asset_spec(symbol).binance_spot_symbol
+        symbol = self._symbol(symbol)
         if not 35 <= limit <= 1000:
             raise ValueError("limit must be between 35 and 1000")
         if interval not in SPOT_INTERVAL_MS:
@@ -214,7 +222,7 @@ class BinanceSpotDailyClient:
         end_time: int, now: datetime | None = None,
     ) -> list[list]:
         """Page forward through public klines, retaining only closed UTC bars."""
-        symbol = asset_spec(symbol).binance_spot_symbol
+        symbol = self._symbol(symbol)
         if interval not in SPOT_INTERVAL_MS:
             raise ValueError("unsupported spot candle interval")
         length_ms = SPOT_INTERVAL_MS[interval]
@@ -247,7 +255,7 @@ class BinanceSpotDailyClient:
         return result
 
     def order_book(self, *, symbol: str = "BTCUSDT", limit: int = 20) -> dict:
-        symbol = asset_spec(symbol).binance_spot_symbol
+        symbol = self._symbol(symbol)
         if limit not in {5, 10, 20, 50, 100, 500, 1000}:
             raise ValueError("unsupported depth limit")
         return self._fetch_json(
@@ -354,7 +362,8 @@ class MultiTimeframeSpotCache:
         self, symbol: str = "BTCUSDT", *, now: datetime | None = None,
         sentiment_score: float | None = 0.0, candle_limit: int = 100,
     ) -> FeatureSnapshot:
-        symbol = asset_spec(symbol).symbol
+        from intraday.assets import normalize_symbol
+        symbol = normalize_symbol(symbol)
         if self._symbol is not None and self._symbol != symbol:
             raise ValueError("spot cache cannot mix asset symbols")
         self._symbol = symbol
