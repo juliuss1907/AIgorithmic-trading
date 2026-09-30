@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from intraday.contracts import (
     Direction,
@@ -250,3 +250,47 @@ def test_operational_health_reports_latest_scheduler_run_and_schema(tmp_path):
             "error_code": "ProviderTimeout",
         }
     ]
+
+
+def test_latest_scheduler_runs_has_bounded_work_for_long_running_jobs(
+    tmp_path, monkeypatch
+):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    slots = [
+        (
+            "perp_numeric",
+            (NOW + timedelta(seconds=index)).isoformat(),
+            "success",
+            NOW.isoformat(),
+        )
+        for index in range(3_000)
+    ]
+    slots.append(("spot_quote", NOW.isoformat(), "success", NOW.isoformat()))
+    with store._connect() as connection:
+        connection.executemany(
+            "INSERT INTO scheduler_runs (job_name, scheduled_for, status, started_at) "
+            "VALUES (?, ?, ?, ?)",
+            slots,
+        )
+
+    original_connect = store._connect
+
+    def limited_connect():
+        connection = original_connect()
+        progress_calls = 0
+
+        def stop_runaway_query():
+            nonlocal progress_calls
+            progress_calls += 1
+            # A single scan stays well below this cap; per-row rescans do not.
+            return progress_calls > 2_000
+
+        connection.set_progress_handler(stop_runaway_query, 1_000)
+        return connection
+
+    monkeypatch.setattr(store, "_connect", limited_connect)
+    latest = store.latest_scheduler_runs()
+
+    assert [row["job_name"] for row in latest] == ["perp_numeric", "spot_quote"]
+    assert latest[0]["scheduled_for"] == slots[2_999][1]
+    assert latest[1]["scheduled_for"] == NOW.isoformat()

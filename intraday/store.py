@@ -1501,12 +1501,11 @@ class IntradayStore:
         """Return one durable health record for each scheduler job."""
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT current.* FROM scheduler_runs current "
-                "WHERE current.rowid=(SELECT candidate.rowid FROM scheduler_runs candidate "
-                "WHERE candidate.job_name=current.job_name "
-                "ORDER BY julianday(candidate.scheduled_for) DESC, "
-                "candidate.scheduled_for DESC LIMIT 1) "
-                "ORDER BY current.job_name"
+                "SELECT job_name, scheduled_for, status, started_at, finished_at, error_code "
+                "FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY job_name "
+                "ORDER BY julianday(scheduled_for) DESC, scheduled_for DESC) AS rank "
+                "FROM scheduler_runs) "
+                "WHERE rank=1 ORDER BY job_name"
             ).fetchall()
         return [dict(row) for row in rows]
 
