@@ -61,6 +61,12 @@ paper position đang mở, cùng entry price, latest mark, mark timestamp, notio
 unrealized P&L. Lệnh tự route tới deployment Docker đã đăng ký, không tạo fill và
 không thay đổi portfolio state.
 
+Binance Demo execution có namespace riêng `aigt execution demo` với `preflight`,
+`status`, `activate`, `pause`, `run`, `flatten`. Bản đầu hỗ trợ BTC Perp, mặc định
+chưa gửi lệnh, đọc database soak chỉ-đọc và lưu journal thực thi riêng. Không tự
+route vào worker Docker hiện tại. Xem [runbook Binance Demo](docs/binance-demo-execution-runbook.md)
+trước khi cung cấp key hoặc activation. `aigt positions` chưa hiển thị vị thế Demo.
+
 Registry theo dõi BTC, ETH, HYPE, NEAR, ZEC và SOL trên cả Spot/Perp. BTC/ETH có
 capability `full`; HYPE/NEAR/ZEC/SOL chỉ được decision soak. Paper worker hiện vẫn
 chỉ giao dịch BTC và chưa bật paper cho ETH hay bốn coin còn lại. Worker tự tạo

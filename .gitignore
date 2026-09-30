@@ -1,6 +1,7 @@
 .venv/
 .vendor/
 .cache/
+.firecrawl/
 __pycache__/
 .pytest_cache/
 .env

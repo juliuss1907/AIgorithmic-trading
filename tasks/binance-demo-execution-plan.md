@@ -43,3 +43,24 @@ WebSocket optimization, and a new dashboard page. Read-only CLI projections cove
 the module's initial operational inspection. Existing market/news collectors remain
 unchanged. Live Demo permissions and fill semantics require a credentialed smoke
 test after the operator provisions Demo keys.
+
+## Verification and handoff (2026-09-30)
+
+- All five implementation slices completed locally on `feature/execution-binance-demo`.
+- Existing simulated-paper regression checks pass; no source schema migration or
+  VPS operation was performed. Source read-only behavior is tested against a v22
+  fixture, including primary model provenance and tampering/staleness rejection.
+- `uv run pytest -q`: **593 passed**, with 18 existing dependency deprecation warnings.
+  The new execution test files contain 44 tests covering contracts, transport,
+  journal, runtime, source provenance and CLI isolation/recovery.
+- `uv build` successfully produced wheel and source distribution in a temporary
+  build directory. No dependency or lockfile changes were required.
+- Independent review findings on nested API routes, freshness clocks, terminal
+  partial/rejected close recovery, and pending entry cancellation were addressed
+  and guarded by regression tests. Status snapshots are refreshed after orders
+  and flattening, including when stop cancellation remains uncertain.
+- Public Demo GET smoke checks succeeded for server clock, BTC filters, and quotes.
+  No credentialed account requests, Demo orders, activation, push, or deploy occurred.
+- Operator usage and recovery: [Binance Demo runbook](../docs/binance-demo-execution-runbook.md).
+  **Next prerequisite:** provision owned 0600 Demo credentials and perform supervised
+  account/preflight/order/protection/close acceptance before unattended deployment.
