@@ -15,6 +15,7 @@ from intraday.execution.contracts import AccountRef, ExecutionUnavailable
 from intraday.execution.journal import ExecutionJournal
 from intraday.execution.runtime import DemoRuntime
 from intraday.execution.source import EvidenceSource
+from intraday.execution.connect import DEFAULT_EXECUTION_DATABASE, DEFAULT_SECRETS_FILE
 
 
 def add_execution_parser(commands):
@@ -24,11 +25,11 @@ def add_execution_parser(commands):
     actions = demo.add_subparsers(dest="execution_action", required=True)
     for name in ("preflight", "status", "activate", "pause", "run", "flatten"):
         command = actions.add_parser(name)
-        command.add_argument("--execution-database", type=Path, default=Path("state/execution/binance-demo.sqlite3"))
+        command.add_argument("--execution-database", type=Path, default=DEFAULT_EXECUTION_DATABASE)
         if name not in {"status", "pause"}:
             if name != "flatten":
                 command.add_argument("--source-database", type=Path, required=True)
-            command.add_argument("--secrets-file", type=Path, required=True, help="owned 0600 Demo JSON secret file; never a key value")
+            command.add_argument("--secrets-file", type=Path, default=DEFAULT_SECRETS_FILE, help="owned 0600 Demo JSON secret file; never a key value")
         if name == "activate":
             command.add_argument("--evaluation-id", required=True)
             command.add_argument("--capital", type=Decimal, required=True, help="USDT strategy allocation, at most 10000")

@@ -149,6 +149,7 @@ from intraday.soak_report import (
 )
 from intraday.upgrade_preflight import preflight_upgrade_backup
 from intraday.execution.cli import add_execution_parser, dispatch_execution
+from intraday.execution.connect import add_exchange_connect_parsers, dispatch_connect
 
 
 def _project_version() -> str:
@@ -267,6 +268,7 @@ def _parser() -> argparse.ArgumentParser:
     deactivate.add_argument("--secrets-file", default=None)
     connect = commands.add_parser("connect")
     connect_roles = connect.add_subparsers(dest="connect_role", required=True)
+    add_exchange_connect_parsers(connect_roles)
     connect_jev = connect_roles.add_parser("jev")
     connect_jev.add_argument(
         "provider_option",
@@ -1748,6 +1750,9 @@ def main() -> None:
         return
     if arguments.command == "execution":
         dispatch_execution(arguments)
+        return
+    if arguments.command == "connect" and arguments.connect_role in {"bnb", "hl"}:
+        dispatch_connect(arguments)
         return
     if arguments.command == "setup":
         try:
