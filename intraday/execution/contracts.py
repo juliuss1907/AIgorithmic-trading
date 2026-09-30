@@ -82,9 +82,18 @@ class OrderIntent(ExecutionModel):
 
 
 class SpotBalance(ExecutionModel):
-    asset: str = Field(pattern=r"^[A-Z0-9]{1,24}$")
+    asset: str = Field(min_length=1, max_length=24)
     free: Decimal = Field(ge=0)
     locked: Decimal = Field(ge=0)
+
+    @field_validator("asset")
+    @classmethod
+    def balance_identifier(cls, value):
+        # Binance account balances include Unicode asset names. Preserve them;
+        # balance identifiers are not permission to route executable symbols.
+        if not value.isalnum() or value != value.upper():
+            raise ValueError("balance asset must be an uppercase Unicode alphanumeric identifier")
+        return value
 
 
 class SpotAccountSnapshot(ExecutionModel):

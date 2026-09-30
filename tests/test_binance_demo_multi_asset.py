@@ -3,9 +3,10 @@ from decimal import Decimal
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from pydantic import ValidationError
 
 from intraday.execution.binance_demo import BinanceDemoAdapter, DemoCredentials, DemoTransport
-from intraday.execution.contracts import ExecutionUnavailable, OrderIntent
+from intraday.execution.contracts import ExecutionUnavailable, OrderIntent, SpotBalance
 from intraday.execution.binance_spot_demo import BinanceSpotDemoAdapter
 
 
@@ -64,6 +65,45 @@ def test_spot_balances_are_typed_not_synthetic_perp_positions():
     assert snapshot.balance("DOGE").free == 0
     assert not hasattr(snapshot, "positions") and not hasattr(snapshot, "leverage")
     assert snapshot.account.market == "spot"
+
+
+@pytest.mark.parametrize("asset", ["币安人生", "牛来"])
+def test_spot_account_preserves_unicode_balance_identifiers(asset):
+    def send(request):
+        if urlsplit(request.full_url).path.endswith("openOrders"):
+            return []
+        return {"canTrade": True, "accountType": "SPOT", "balances": [
+            {"asset": asset, "free": "100", "locked": "2"},
+            {"asset": "USDT", "free": "5000", "locked": "0"}]}
+    venue = BinanceSpotDemoAdapter(DemoTransport(DemoCredentials(api_key="fake", api_secret="fake"),
+                                                market="spot", send=send, clock=lambda: NOW), symbol="BTCUSDT")
+    snapshot = venue.account_snapshot(now=NOW)
+    assert snapshot.can_trade
+    assert snapshot.balances[0].asset == asset
+    assert snapshot.balance(asset).free == 100
+    assert snapshot.balance(asset).locked == 2
+    assert snapshot.balance("USDT").free == 5000
+    assert not hasattr(snapshot, "positions")
+    # Reading an account balance must not expand the set of executable symbols.
+    with pytest.raises(ValueError):
+        BinanceSpotDemoAdapter(venue.transport, symbol=asset + "USDT")
+    with pytest.raises(ValidationError):
+        OrderIntent(intent_id="unicode-order", account=venue.account_ref, market="spot",
+                    symbol=asset + "USDT", side="BUY", quantity=1, created_at=NOW)
+
+
+@pytest.mark.parametrize("asset", ["", "BTC ", " BTC", "BT C", "BTC\n", "BTC\x00", "BTC\u200b",
+                                   "../BTC", "BTC/USDT", "btc", "A" * 25, "币" * 25])
+def test_spot_balance_rejects_malformed_identifiers(asset):
+    with pytest.raises(ValidationError):
+        SpotBalance(asset=asset, free=0, locked=0)
+
+
+@pytest.mark.parametrize("field", ["free", "locked"])
+@pytest.mark.parametrize("amount", ["-1", "NaN", "Infinity", "-Infinity"])
+def test_spot_balance_rejects_negative_or_nonfinite_amounts(field, amount):
+    with pytest.raises(ValidationError):
+        SpotBalance(**{"asset": "USDT", "free": "0", "locked": "0", field: amount})
 
 
 def test_spot_confirmed_partial_fills_and_native_sell_stop():

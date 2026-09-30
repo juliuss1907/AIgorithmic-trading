@@ -146,6 +146,17 @@ no environment secret file was read. No credentialed request, real Demo order,
 trading activation, VPS operation, push or merge occurred in this follow-up.
 Changes are locally committed on `feature/binance-demo-multi-asset`.
 
+Follow-up read-only verification: fixed Spot account parsing for the Unicode
+balance identifiers returned by Binance Demo without changing executable symbol
+validation or adopting seeded inventory. The two account-snapshot regression
+cases failed before the fix; the full suite now passes **692 tests** with the
+same 18 dependency warnings. Credentialed GET-only probes report both Spot and
+Perp connected, no open orders, and no Perp positions. Spot available USDT is
+5000; BTC Perp remains isolated **5x**, so the required **3x** must still be set
+manually before activation. Credentials are unchanged and no execution journal
+was created. Write permission, real order/stop behavior, activation and VPS
+deployment remain unverified/not performed.
+
 Acceptance boundary: implementation/fake-exchange tests do not prove a real Demo
 key's write permission or exchange native-stop/fill behavior. Supervised Demo
 order/protection/close acceptance remains a separate operator-authorized step.
