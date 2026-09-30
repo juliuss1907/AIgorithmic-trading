@@ -148,6 +148,7 @@ from intraday.soak_report import (
     write_report,
 )
 from intraday.upgrade_preflight import preflight_upgrade_backup
+from intraday.execution.cli import add_execution_parser, dispatch_execution
 
 
 def _project_version() -> str:
@@ -163,6 +164,7 @@ def _parser() -> argparse.ArgumentParser:
         "--version", action="version", version=f"%(prog)s {_project_version()}"
     )
     commands = parser.add_subparsers(dest="command")
+    add_execution_parser(commands)
     for name in (
         "doctor", "status", "collect", "news", "analysis", "run", "cross-venue-status",
         "cross-venue-replay", "cross-venue-evaluate",
@@ -1743,6 +1745,9 @@ def main() -> None:
     arguments = parser.parse_args()
     if arguments.command is None:
         parser.print_help()
+        return
+    if arguments.command == "execution":
+        dispatch_execution(arguments)
         return
     if arguments.command == "setup":
         try:
