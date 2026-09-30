@@ -94,13 +94,13 @@ Implement the approved multi-asset plan in independently verified slices. Do not
 overwrite unrelated global plan/todo items. No VPS deploy, push, order smoke or
 trading activation is authorized during implementation.
 
-- [ ] Persistent dynamic catalog; independent Spot/Perp onboarding and mappings.
-- [ ] Demo/Testnet-only discovery with volume, spread, depth and size impact;
+- [x] Persistent dynamic catalog; independent Spot/Perp onboarding and mappings.
+- [x] Demo/Testnet-only discovery with volume, spread, depth and size impact;
   all existing venues visible, only Binance Demo execution selectable.
 - [ ] Multi-symbol USD-M adapter and Spot balances/filters/fills/native stops.
 - [ ] Shared allocation and multi-route runtime; per-symbol evidence gates,
   managed-only Spot inventory, durable unknown-order reconciliation.
-- [ ] CLI and authenticated dashboard wizard with idempotent writes and UTC+7.
+- [x] CLI and authenticated dashboard wizard with idempotent writes and UTC+7.
 - [ ] Migration preservation, regression/security/browser tests, build/runbook.
 
 Defaults: Spot USDT and USD-M USDT perpetual; Spot 60% / Perp 40%, effective
@@ -112,6 +112,14 @@ Slice 1: persistent v23 catalog and registration-aware services/collectors. Symb
 models validate syntax; database boundaries validate membership. Existing static
 constants remain seed/legacy defaults, not runtime authority. Verification:
 633 tests passed; old candles/checksums/soak migration and upgrade rehearsal pass.
+
+Slice 2: Demo/Testnet discovery, authenticated async scan API, idempotent separate
+Spot/Perp add/select flows and `/assets` dashboard. Verification: 642 tests passed,
+wheel/source build and desktop Chrome visual smoke passed. Public ETH Spot scan
+confirmed Binance and Aster testnet listing; Lighter Spot has an empty testnet book,
+so liquidity stays N/A, not invented. Full native browser selection automation
+was interrupted after a stalled DevTools input operation; do not count it as a
+passed end-to-end test. No signed request, activation, order, push or deploy.
 
 Verification: **629 tests passed** (18 existing dependency deprecation warnings),
 wheel/source build succeeded. Existing local Demo key passed nine guarded GET

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -23,6 +23,8 @@ from intraday.dashboard_read_model import (
 from intraday.operator_service import build_operator_snapshot
 from intraday.portfolio_view import latest_parent_market_view
 from intraday.store import IntradayStore
+from intraday.asset_onboarding import AssetOnboarding
+from intraday.assets import spec_payload
 
 
 ASSETS = Path(__file__).with_name("web_assets")
@@ -73,6 +75,23 @@ class OperatorActionCreateRequest(BaseModel):
     action: Literal["pause", "resume"]
 
 
+class AssetCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str = Field(min_length=1, max_length=24, pattern=r"^[A-Za-z0-9]+$")
+    market: Literal["spot", "perp"]
+
+
+class AssetScanRequest(AssetCreateRequest):
+    notional: float = Field(default=1000, gt=0, le=1e8, allow_inf_nan=False)
+
+
+class AssetVenueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    venue: Literal["bnb", "hl", "aster", "variational", "lighter"]
+    environment: Literal["demo", "testnet"]
+    scan_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
 def create_app(
     *,
     database: str | Path = "state/intraday/intraday.sqlite3",
@@ -91,6 +110,7 @@ def create_app(
     app.mount("/static", StaticFiles(directory=ASSETS / "static"), name="static")
     app.state.store = store
     app.state.cross_venue_mode = cross_venue_mode
+    onboarding = AssetOnboarding(store)
 
     if not 60 <= operator_request_ttl_seconds <= 900:
         raise ValueError("operator request TTL must be between 60 and 900 seconds")
@@ -338,6 +358,58 @@ def create_app(
                 else None
             ),
         }
+
+    @app.get("/assets", response_class=HTMLResponse)
+    def assets_page(request: Request):
+        return templates.TemplateResponse(request=request, name="assets.html", context={"controls_enabled":bool(control_token)})
+
+    @app.get("/api/assets")
+    def list_assets(market: Literal["spot", "perp"] | None = None):
+        scope = DecisionScope.SPOT_4H if market == "spot" else DecisionScope.PERP_INTRADAY
+        return {"assets":[{**spec_payload(spec),
+                           "stages":{s.scope.value:s.stage.value for s in store.list_asset_lifecycles(spec.symbol)},
+                           "execution_routes":onboarding.routes(spec.symbol)}
+                          for spec in store.asset_catalog().values()
+                          if market is None or scope in spec.enabled_scopes]}
+
+    @app.post("/api/assets", status_code=201)
+    def add_asset(body: AssetCreateRequest, _: None = Depends(require_control),
+                  idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")):
+        try:
+            return onboarding.add(body.symbol,market=body.market,now=datetime.now(timezone.utc),request_id=idempotency_key)
+        except ValueError as error:
+            raise HTTPException(409,str(error)) from None
+
+    @app.post("/api/asset-scans", status_code=202)
+    def scan_asset(body: AssetScanRequest, background: BackgroundTasks, _: None = Depends(require_control),
+                   idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")):
+        now=datetime.now(timezone.utc)
+        try:
+            report,started=onboarding.start_scan(body.symbol,market=body.market,now=now,notional=body.notional,request_id=idempotency_key)
+        except ValueError as error:
+            raise HTTPException(409,str(error)) from None
+        if started:
+            background.add_task(onboarding.complete_scan,report["id"],notional=body.notional,now=now)
+        return report
+
+    @app.get("/api/asset-scans/{scan_id}")
+    def asset_scan_report(scan_id: str):
+        try:
+            report=onboarding.report(scan_id)
+        except ValueError:
+            raise HTTPException(404,"unknown market scan") from None
+        if report["status"]=="running" and (datetime.now(timezone.utc)-datetime.fromisoformat(report["created_at"])).total_seconds()>20:
+            return {**report,"status":"failed","reason":"scan_expired_rescan_required"}
+        return report
+
+    @app.put("/api/assets/{symbol}/venues/{market}")
+    def select_asset_venue(symbol: str,market: Literal["spot","perp"],body: AssetVenueRequest,
+                          _: None = Depends(require_control),
+                          idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")):
+        try:
+            return onboarding.select(symbol,market=market,**body.model_dump(),now=datetime.now(timezone.utc),request_id=idempotency_key)
+        except ValueError as error:
+            raise HTTPException(409,str(error)) from None
 
     @app.get("/api/operations")
     def operations():

@@ -98,14 +98,21 @@ class IntradayStore:
             raise ValueError(f"unsupported asset symbol: {normalized}")
         return spec_from_payload(json.loads(row[0]))
 
-    def register_asset(self, symbol: str, *, market: str, now: datetime) -> AssetSpec:
+    def register_asset(self, symbol: str, *, market: str, now: datetime, request_id: str | None = None) -> AssetSpec:
         from dataclasses import replace
         if market not in {"spot", "perp"} or now.utcoffset() is None:
             raise ValueError("invalid asset market or timestamp")
         normalized = ticker_symbol(symbol)
         scope = DecisionScope.SPOT_4H if market == "spot" else DecisionScope.PERP_INTRADAY
+        request_json = json.dumps({"action":"add", "symbol":normalized, "market":market}, sort_keys=True)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if request_id:
+                previous = connection.execute("SELECT request_json,response_json FROM asset_catalog_requests WHERE id=?",(request_id,)).fetchone()
+                if previous:
+                    if previous[0] != request_json:
+                        raise ValueError("idempotency key reused with a different payload")
+                    return spec_from_payload(json.loads(previous[1]))
             row = connection.execute("SELECT payload_json FROM asset_catalog WHERE symbol=?", (normalized,)).fetchone()
             if row:
                 spec = spec_from_payload(json.loads(row[0]))
@@ -117,6 +124,9 @@ class IntradayStore:
                                (normalized, json.dumps(spec_payload(spec), sort_keys=True)))
             connection.execute("INSERT OR IGNORE INTO asset_scope_lifecycle VALUES (?, ?, 'shadow', NULL, ?)",
                                (normalized, scope.value, now.isoformat()))
+            if request_id:
+                connection.execute("INSERT INTO asset_catalog_requests VALUES (?, ?, ?)",
+                                   (request_id, request_json, json.dumps(spec_payload(spec), sort_keys=True)))
         return spec
 
     def _connect(self):

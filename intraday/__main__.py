@@ -150,6 +150,7 @@ from intraday.soak_report import (
 from intraday.upgrade_preflight import preflight_upgrade_backup
 from intraday.execution.cli import add_execution_parser, dispatch_execution
 from intraday.execution.connect import add_exchange_connect_parsers, dispatch_connect
+from intraday.asset_onboarding import AssetOnboarding
 
 
 def _project_version() -> str:
@@ -190,6 +191,23 @@ def _parser() -> argparse.ArgumentParser:
     assets_status = asset_commands.add_parser("status")
     assets_status.add_argument("symbol", nargs="?")
     assets_status.add_argument("--database", default=None)
+    for name in ("add", "scan"):
+        command = asset_commands.add_parser(name, help="scope-specific Demo/Testnet onboarding")
+        command.add_argument("symbol")
+        command.add_argument("--market", required=True, choices=["spot", "perp"])
+        command.add_argument("--notional", type=float, default=1000, help="size in each venue's quote currency")
+        command.add_argument("--database", default=None)
+        if name == "add":
+            command.add_argument("--no-scan", action="store_true", help="register shadow scope without public scan")
+    venue = asset_commands.add_parser("venue")
+    venue_commands = venue.add_subparsers(dest="asset_venue_command", required=True)
+    venue_set = venue_commands.add_parser("set")
+    venue_set.add_argument("symbol")
+    venue_set.add_argument("--market", required=True, choices=["spot", "perp"])
+    venue_set.add_argument("--venue", required=True, choices=["bnb", "hl", "aster", "variational", "lighter"])
+    venue_set.add_argument("--environment", required=True, choices=["demo", "testnet"])
+    venue_set.add_argument("--scan-id")
+    venue_set.add_argument("--database", default=None)
     assets_start_soak = asset_commands.add_parser("start-soak")
     assets_start_soak.add_argument("symbol")
     assets_start_soak.add_argument(
@@ -375,6 +393,7 @@ def _asset_payload(store: IntradayStore, symbol: str) -> dict:
         "quote_asset": spec.quote_asset,
         "capability": spec.capability.value,
         "stages": {item.scope.value: item.stage.value for item in lifecycles},
+        "execution_routes": AssetOnboarding(store).routes(spec.symbol),
         "venues": {
             "binance_spot": spec.binance_spot_symbol,
             "binance_perp": spec.binance_perp_symbol,
@@ -388,6 +407,39 @@ def _asset_payload(store: IntradayStore, symbol: str) -> dict:
 
 def _assets_cli(arguments) -> None:
     store = IntradayStore(resolve_database_path(arguments.database))
+    if arguments.assets_command in {"add", "scan", "venue"}:
+        service = AssetOnboarding(store)
+        now = datetime.now(timezone.utc)
+        try:
+            if arguments.assets_command == "venue":
+                scan_id = arguments.scan_id or service.scan(arguments.symbol, market=arguments.market, now=now)["id"]
+                result = service.select(arguments.symbol, market=arguments.market, venue=arguments.venue,
+                                        environment=arguments.environment, scan_id=scan_id, now=datetime.now(timezone.utc))
+            else:
+                result = {}
+                if arguments.assets_command == "add":
+                    result["asset"] = service.add(arguments.symbol, market=arguments.market, now=now)
+                if arguments.assets_command == "scan" or not arguments.no_scan:
+                    scan = service.scan(arguments.symbol, market=arguments.market, now=now, notional=arguments.notional)
+                    if arguments.assets_command == "scan":
+                        result = scan
+                    else:
+                        result["scan"] = scan
+                        if sys.stdin.isatty():
+                            print(json.dumps(scan, indent=2), flush=True)
+                            from prompt_toolkit import prompt
+                            choice = prompt("Choose Binance Demo [bnb], or Enter to leave unselected: ").strip().lower()
+                            if choice:
+                                if choice != "bnb":
+                                    raise ValueError("only verified Binance Demo execution can be selected")
+                                result["route"] = service.select(arguments.symbol, market=arguments.market, venue="bnb",
+                                                                environment="demo", scan_id=scan["id"], now=datetime.now(timezone.utc))
+            print(json.dumps(result, indent=2), flush=True)
+        except (ValueError, KeyError, TypeError) as error:
+            raise SystemExit(str(error) if isinstance(error, ValueError) else "asset configuration unavailable") from None
+        except (KeyboardInterrupt, EOFError):
+            raise SystemExit("onboarding canceled; no trading was activated") from None
+        return
     if arguments.assets_command == "list":
         result = [_asset_payload(store, symbol) for symbol in store.asset_catalog()]
     elif arguments.assets_command == "status":
