@@ -24,10 +24,20 @@ class AccountRef(ExecutionModel):
     venue: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,30}$")
     environment: Literal["paper", "demo"]
     account_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    market: Literal["spot", "perp"] | None = None
 
     @property
     def key(self) -> str:
-        return f"{self.venue}:{self.environment}:{self.account_id}"
+        legacy = f"{self.venue}:{self.environment}:{self.account_id}"
+        return legacy + (f":{self.market}" if self.market else "")
+
+    @classmethod
+    def from_key(cls, key: str):
+        parts = key.split(":")
+        if len(parts) not in {3, 4}:
+            raise ValueError("invalid execution account key")
+        return cls(venue=parts[0], environment=parts[1], account_id=parts[2],
+                   market=parts[3] if len(parts) == 4 else None)
 
 
 class Quote(ExecutionModel):
@@ -50,7 +60,7 @@ class OrderIntent(ExecutionModel):
     market: Literal["spot", "perp"]
     side: Literal["BUY", "SELL"]
     quantity: Decimal = Field(gt=0)
-    order_type: Literal["MARKET", "STOP_MARKET"] = "MARKET"
+    order_type: Literal["MARKET", "STOP_MARKET", "STOP_LOSS"] = "MARKET"
     reduce_only: bool = False
     stop_price: Decimal | None = Field(default=None, gt=0)
     source_id: str | None = Field(default=None, max_length=128)
@@ -58,12 +68,34 @@ class OrderIntent(ExecutionModel):
 
     @model_validator(mode="after")
     def protection_is_reducing(self):
+        if self.account.market is not None and self.account.market != self.market:
+            raise ValueError("order market differs from execution account namespace")
         if self.order_type == "STOP_MARKET":
             if self.market != "perp" or not self.reduce_only or self.stop_price is None:
                 raise ValueError("protective stop requires Perp, reduce-only, and trigger")
+        elif self.order_type == "STOP_LOSS":
+            if self.market != "spot" or self.side != "SELL" or self.reduce_only or self.stop_price is None:
+                raise ValueError("Spot protection requires a sell stop, no Perp reduce-only flag, and trigger")
         elif self.stop_price is not None:
             raise ValueError("market orders cannot have a stop trigger")
         return self
+
+
+class SpotBalance(ExecutionModel):
+    asset: str = Field(pattern=r"^[A-Z0-9]{1,24}$")
+    free: Decimal = Field(ge=0)
+    locked: Decimal = Field(ge=0)
+
+
+class SpotAccountSnapshot(ExecutionModel):
+    account: AccountRef
+    balances: tuple[SpotBalance, ...]
+    open_orders: tuple["OpenOrder", ...] = ()
+    can_trade: bool
+    observed_at: datetime
+
+    def balance(self, asset):
+        return next((b for b in self.balances if b.asset == asset), SpotBalance(asset=asset, free=0, locked=0))
 
 
 class ExecutionFill(ExecutionModel):
@@ -116,6 +148,7 @@ class AccountSnapshot(ExecutionModel):
     margin_mode: str
     leverage: int = Field(ge=1)
     observed_at: datetime
+    symbol_settings: dict[str, dict] = Field(default_factory=dict)
 
     def position(self, symbol: str) -> Position | None:
         return next((p for p in self.positions if p.symbol == symbol and p.quantity), None)
@@ -128,9 +161,18 @@ class InstrumentRules(ExecutionModel):
     max_quantity: Decimal = Field(gt=0)
     min_notional: Decimal = Field(ge=0)
     price_tick: Decimal = Field(gt=0)
+    min_price: Decimal = Field(default=Decimal(0), ge=0)
+    max_price: Decimal | None = Field(default=None, gt=0)
+    max_notional: Decimal | None = Field(default=None, gt=0)
 
     def round_quantity(self, quantity: Decimal) -> Decimal:
         return (quantity / self.quantity_step).to_integral_value(rounding=ROUND_DOWN) * self.quantity_step
+
+    def validate_price(self, price):
+        if price <= 0 or price/self.price_tick != (price/self.price_tick).to_integral_value():
+            raise ValueError("price does not match instrument tick")
+        if price < self.min_price or self.max_price is not None and price > self.max_price:
+            raise ValueError("price outside instrument limits")
 
     def validate_quantity(self, quantity: Decimal, price: Decimal, *, reducing=False):
         if quantity <= 0 or quantity != self.round_quantity(quantity):
@@ -139,6 +181,8 @@ class InstrumentRules(ExecutionModel):
             raise ValueError("quantity outside instrument limits")
         if not reducing and quantity * price < self.min_notional:
             raise ValueError("order below minimum notional")
+        if self.max_notional is not None and quantity * price > self.max_notional:
+            raise ValueError("order above maximum notional")
 
 
 class ExecutionAdapter(Protocol):
@@ -155,6 +199,15 @@ class TradingVenue(ExecutionAdapter, Protocol):
     def quote(self, symbol: str, *, now: datetime) -> Quote: ...
     def instrument(self, symbol: str) -> InstrumentRules: ...
     def funding_since(self, since: datetime, *, now: datetime) -> Decimal: ...
+
+
+class SpotTradingVenue(ExecutionAdapter, Protocol):
+    """Spot capabilities are balances/native stops, never fabricated Perp settings."""
+    symbol: str
+    def check_clock(self, *, now: datetime) -> None: ...
+    def account_snapshot(self, *, now: datetime) -> SpotAccountSnapshot: ...
+    def quote(self, symbol: str, *, now: datetime) -> Quote: ...
+    def instrument(self, symbol: str, *, order_type: str = "MARKET") -> InstrumentRules: ...
 
 
 class ExecutionUnavailable(RuntimeError):

@@ -10,6 +10,7 @@ from pathlib import Path
 from prompt_toolkit import prompt
 
 from intraday.execution.binance_demo import BinanceDemoAdapter, DemoCredentials, DemoTransport
+from intraday.execution.binance_spot_demo import BinanceSpotDemoAdapter
 from intraday.execution.contracts import ExecutionUnavailable
 from intraday.execution.credential_file import ConnectError, credential_lock, rotation_guard, save_credentials
 
@@ -44,7 +45,7 @@ def _credentials():
     return DemoCredentials(**values)
 
 
-def probe_demo(credentials):
+def _probe_perp(credentials):
     venue = BinanceDemoAdapter(DemoTransport(credentials, writes_enabled=False))
     venue.check_clock(now=datetime.now(timezone.utc))
     snapshot = venue.account_snapshot(now=datetime.now(timezone.utc))
@@ -68,6 +69,38 @@ def probe_demo(credentials):
         "margin_mode": snapshot.margin_mode, "leverage": snapshot.leverage,
         "configuration_warnings": warnings, "observed_at": snapshot.observed_at.isoformat(),
     }
+
+
+def probe_demo(credentials):
+    """Probe both markets independently; connecting never enables order writes."""
+    try:
+        report = _probe_perp(credentials)
+        perp = dict(report)
+    except (ExecutionUnavailable, ValueError, TypeError, KeyError, StopIteration):
+        perp = {"status": "unavailable", "reason": "perp_account_read_unavailable"}
+        # Fail closed for rotation: an unreadable Perp account is not proof of flatness.
+        report = {"status": "unavailable", "account": credentials.account_ref.key,
+                  "venue": "binance", "environment": "demo", "positions": None, "open_orders": None,
+                  "order_permission_verified": False, "trading_activated_by_connect": False}
+    try:
+        venue = BinanceSpotDemoAdapter(DemoTransport(credentials, market="spot", writes_enabled=False), symbol="BTCUSDT")
+        venue.check_clock(now=datetime.now(timezone.utc))
+        snapshot = venue.account_snapshot(now=datetime.now(timezone.utc))
+        spot = {"status": "connected", "account": snapshot.account.key,
+                "account_can_trade": snapshot.can_trade, "open_orders": len(snapshot.open_orders),
+                "available_usdt": str(snapshot.balance("USDT").free),
+                "pre_existing_inventory": "excluded_from_strategy", "order_permission_verified": False}
+        if report["open_orders"] is not None:
+            report["open_orders"] += len(snapshot.open_orders)
+    except (ExecutionUnavailable, ValueError, TypeError, KeyError):
+        spot = {"status": "unavailable", "reason": "spot_account_read_unavailable"}
+        # Replacement cannot be approved while another market's orders are unknown.
+        report["open_orders"] = None
+    report["markets"] = {"spot": spot, "perp": perp}
+    if not any(m["status"] == "connected" for m in (spot, perp)):
+        raise ExecutionUnavailable("Demo account read unavailable for both markets")
+    report["status"] = "connected"
+    return report
 
 
 def dispatch_connect(arguments):

@@ -74,6 +74,31 @@ def test_keep_default_preserves_file_and_masks_key(monkeypatch, wizard, capsys):
     assert "fake-key-long" not in output and "fake-secret-long" not in output
 
 
+@pytest.mark.parametrize("namespace",["portfolio","spot","perp"])
+def test_rotation_cannot_bypass_active_multi_market_namespaces(monkeypatch,wizard,namespace):
+    connect,args,path,_ = wizard
+    account = DemoCredentials.load(path).account_ref
+    journal = ExecutionJournal(args.execution_database)
+    if namespace=="portfolio":
+        journal.save_portfolio(account,{"paused":False},now=datetime.now(timezone.utc),kind="fixture")
+    else:
+        journal.save_control(account.model_copy(update={"market":namespace}),{"paused":False},now=datetime.now(timezone.utc),kind="fixture")
+    answers(monkeypatch,connect,["R"])
+    before=path.read_bytes()
+    with pytest.raises(SystemExit,match="pause"):
+        connect.dispatch_connect(args)
+    assert path.read_bytes()==before
+
+
+def test_rotation_requires_both_market_reads_even_if_one_market_is_connected(monkeypatch,wizard):
+    connect,args,path,report = wizard
+    report["markets"]={"spot":{"status":"connected"},"perp":{"status":"unavailable"}}
+    answers(monkeypatch,connect,["C"])
+    with pytest.raises(SystemExit,match="both Spot and Perp"):
+        connect.dispatch_connect(args)
+    assert path.exists()
+
+
 def test_exchange_connect_bypasses_registered_docker(monkeypatch, wizard):
     from intraday import __main__ as entry
     connect, args, path, _ = wizard

@@ -87,23 +87,39 @@ def rotation_guard(database, credentials, *, probe):
             except sqlite3.Error:
                 raise ConnectError("execution journal unavailable; Replace/Clear refused") from None
             try:
-                row = connection.execute("SELECT payload FROM execution_control WHERE account=?",
-                                         (credentials.account_ref.key,)).fetchone()
-                if row:
+                namespaces = (credentials.account_ref.key, credentials.account_ref.key+":spot", credentials.account_ref.key+":perp")
+                rows = connection.execute("SELECT payload FROM execution_control WHERE account IN (?,?,?)", namespaces).fetchall()
+                tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if "execution_portfolios" in tables:
+                    rows += connection.execute("SELECT payload FROM execution_portfolios WHERE account=?", (namespaces[0],)).fetchall()
+                for row in rows:
                     control = json.loads(row[0])
                     if not isinstance(control, dict) or control.get("paused") is not True:
                         raise ConnectError("pause and flatten the existing Demo campaign before Replace/Clear")
-                orders = connection.execute("SELECT latest FROM execution_orders WHERE account=?",
-                                            (credentials.account_ref.key,)).fetchall()
-                updates = [OrderUpdate.model_validate_json(row[0]) for row in orders]
+                orders = connection.execute("SELECT intent,latest FROM execution_orders WHERE account IN (?,?,?)", namespaces).fetchall()
+                updates = [OrderUpdate.model_validate_json(row[1]) for row in orders]
                 if any(not update.terminal or update.executed_quantity != sum(
                         (fill.quantity for fill in update.fills), Decimal(0)) for update in updates):
                     raise ConnectError("unresolved execution intents block Replace/Clear; reconcile first")
+                from intraday.execution.contracts import OrderIntent
+                managed = {}
+                for row, update in zip(orders, updates):
+                    intent = OrderIntent.model_validate_json(row[0])
+                    if intent.market != "spot":
+                        continue
+                    delta = sum((f.quantity for f in update.fills), Decimal(0))*(1 if intent.side == "BUY" else -1)
+                    delta -= sum((f.commission for f in update.fills if f.commission_asset == intent.symbol[:-4]), Decimal(0))
+                    managed[intent.symbol] = managed.get(intent.symbol, Decimal(0))+delta
+                if any(qty for qty in managed.values()):
+                    raise ConnectError("managed Spot inventory blocks Replace/Clear; flatten and reconcile first")
             except sqlite3.Error:
                 raise ConnectError("execution journal unavailable; Replace/Clear refused") from None
             finally:
                 connection.close()
         report = probe(credentials)
+        if "markets" in report and (set(report["markets"]) != {"spot","perp"}
+                                    or any(m.get("status") != "connected" for m in report["markets"].values())):
+            raise ConnectError("both Spot and Perp reads must succeed before Replace/Clear")
         if report["positions"] or report["open_orders"]:
             raise ConnectError("open positions/orders block Replace/Clear; flatten and reconcile first")
         yield

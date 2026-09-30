@@ -37,6 +37,9 @@ class ExecutionJournal:
                     id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL,
                     at TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS execution_portfolios (
+                    account TEXT PRIMARY KEY, payload TEXT NOT NULL
+                );
             """)
         self.path.chmod(0o600)
 
@@ -66,6 +69,57 @@ class ExecutionJournal:
         with self.connect() as connection:
             row = connection.execute("SELECT payload FROM execution_control WHERE account=?", (account.key,)).fetchone()
         return json.loads(row[0]) if row else None
+
+    def portfolio(self, account: AccountRef):
+        with self.connect() as connection:
+            row = connection.execute("SELECT payload FROM execution_portfolios WHERE account=?", (account.key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_portfolio(self, account, payload, *, now, kind):
+        encoded = json.dumps(payload, sort_keys=True)
+        with self.connect() as connection:
+            connection.execute("INSERT INTO execution_portfolios VALUES (?,?) ON CONFLICT(account) DO UPDATE SET payload=excluded.payload",
+                               (account.key, encoded))
+            connection.execute("INSERT INTO execution_events(account,at,kind,payload) VALUES (?,?,?,?)",
+                               (account.key, now.isoformat(), kind, encoded))
+
+    def spot_inventory(self, account, symbol, *, require_valued_fees=True):
+        """Only journal-owned fills count. Never derive ownership from exchange balances."""
+        from decimal import Decimal
+        from intraday.execution.contracts import ExecutionFill
+        if account.market != "spot":
+            raise ValueError("Spot inventory requires a Spot account namespace")
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT o.intent,f.payload FROM execution_fills f JOIN execution_orders o "
+                "ON f.account=o.account AND f.intent_id=o.id WHERE f.account=? ORDER BY f.rowid", (account.key,)
+            ).fetchall()
+        quantity, cash, cost, gross_cost = Decimal(0), Decimal(0), Decimal(0), Decimal(0)
+        for row in rows:
+            intent = OrderIntent.model_validate_json(row[0])
+            if intent.symbol != symbol:
+                continue
+            fill = ExecutionFill.model_validate_json(row[1])
+            if require_valued_fees and fill.commission_asset not in {symbol[:-4], "USDT"} and fill.commission:
+                raise ExecutionUnavailable("Spot third-asset fee requires operator reconciliation")
+            base_fee = fill.commission if fill.commission_asset == symbol[:-4] else Decimal(0)
+            quote_fee = fill.commission if fill.commission_asset == "USDT" else Decimal(0)
+            notional = fill.quantity * fill.price
+            if intent.side == "BUY":
+                quantity += fill.quantity-base_fee
+                gross_cost += (fill.quantity-base_fee)*fill.price
+                cost += notional+quote_fee
+                cash -= notional+quote_fee
+            else:
+                sold = fill.quantity+base_fee
+                if sold > quantity:
+                    raise ExecutionUnavailable("Spot sell exceeds managed inventory")
+                cost *= (quantity-sold)/quantity
+                gross_cost *= (quantity-sold)/quantity
+                quantity -= sold
+                cash += notional-quote_fee
+        return {"quantity": quantity, "cash_flow": cash, "cost_basis": cost,
+                "entry_price": gross_cost/quantity if quantity else Decimal(0)}
 
     def save_control(self, account: AccountRef, control: dict, *, kind: str, now: datetime):
         encoded = json.dumps(control, sort_keys=True)
@@ -140,7 +194,9 @@ class ExecutionJournal:
             accounts = connection.execute("SELECT account, payload FROM execution_control ORDER BY account").fetchall()
             pending = connection.execute("SELECT account, id, latest FROM execution_orders ORDER BY rowid DESC LIMIT 25").fetchall()
             count = connection.execute("SELECT COUNT(*) FROM execution_fills").fetchone()[0]
+            portfolios = connection.execute("SELECT account,payload FROM execution_portfolios ORDER BY account").fetchall()
         return {"database": str(self.path), "accounts": {row[0]: json.loads(row[1]) for row in accounts},
+                "portfolios": {row[0]: json.loads(row[1]) for row in portfolios},
                 "recent_orders": [{"account": row[0], "id": row[1], "update": json.loads(row[2])} for row in pending],
                 "fill_count": count}
 
