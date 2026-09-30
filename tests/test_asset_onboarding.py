@@ -45,3 +45,14 @@ def test_stale_cross_market_and_non_executable_venue_selection_is_rejected(tmp_p
         with pytest.raises(ValueError):
             service.select("DOGE",**args)
     assert service.routes("DOGE")==[]
+
+
+def test_async_scan_concurrency_is_bounded_and_idempotent_replays_do_not_consume_slots(tmp_path):
+    service=AssetOnboarding(IntradayStore(tmp_path/"source.sqlite"),scanner=Scanner())
+    for n in range(4):
+        _,started=service.start_scan("ETH",market="spot",now=NOW,notional=1000,request_id=f"scan-{n}")
+        assert started
+    assert service.start_scan("ETH",market="spot",now=NOW,notional=1000,request_id="scan-0")[1] is False
+    with pytest.raises(ValueError,match="concurrent"):
+        service.start_scan("ETH",market="spot",now=NOW,notional=1000,request_id="scan-extra")
+    assert service.start_scan("ETH",market="spot",now=NOW+timedelta(seconds=21),notional=1000,request_id="scan-next")[1]

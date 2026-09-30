@@ -5,6 +5,7 @@
   const number = value => value === null || value === undefined ? "N/A" : Number(value).toLocaleString("en-US", {maximumFractionDigits: 4});
   const time = value => value ? new Date(value).toLocaleString("vi-VN", {timeZone: "Asia/Ho_Chi_Minh", hour12: false}) : "N/A";
   const message = value => { $("asset-message").textContent = value; };
+  const requestKey = () => crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("");
   function cell(row, text) {
     const td = document.createElement("td"); td.textContent = text; row.append(td); return td;
   }
@@ -14,7 +15,7 @@
       const token = $("control-token").value.trim();
       if (!token) throw new Error("Nhập control token để thực hiện thao tác ghi.");
       headers.Authorization = "Bearer " + token;
-      headers["Idempotency-Key"] = key || crypto.randomUUID();
+      headers["Idempotency-Key"] = key || requestKey();
       headers["Content-Type"] = "application/json";
     }
     const response = await fetch(path, {method, headers, body: body ? JSON.stringify(body) : null, credentials: "omit"});

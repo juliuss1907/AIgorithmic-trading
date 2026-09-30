@@ -118,9 +118,8 @@ class FeatureSnapshot(StrictContract):
     @field_validator("symbol")
     @classmethod
     def registered_symbol(cls, value: str) -> str:
-        # Imported lazily because the asset registry uses DecisionScope from this
-        # contract module. Keeping the dependency here avoids broadening all symbol
-        # strings while the rollout remains explicitly registry-gated.
+        # Syntax validation is lazy to avoid a cycle. Services/stores separately
+        # validate membership against their own persistent dynamic catalog.
         from intraday.assets import normalize_symbol
 
         return normalize_symbol(value)

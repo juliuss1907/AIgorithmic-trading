@@ -55,5 +55,34 @@ services:
         target: /run/provider-secrets
     command: ["doctor"]
 
+  demo-execution:
+    profiles: ["demo"]
+    build:
+      context: ../..
+      dockerfile: deploy/intraday/Dockerfile
+    user: "${AIGT_EXECUTION_UID:-1000}:${AIGT_EXECUTION_GID:-1000}"
+    command: ["execution", "demo", "run", "--multi", "--source-database", "/app/state/intraday/intraday.sqlite3", "--execution-database", "/app/state/execution/binance-demo.sqlite3", "--secrets-file", "/run/execution-secrets/binance-demo.json", "--interval-seconds", "30"]
+    volumes:
+      - type: volume
+        source: intraday-state
+        target: /app/state/intraday
+        read_only: true
+      - type: bind
+        source: ${AIGT_EXECUTION_HOST_DIR:-../../state/execution}
+        target: /app/state/execution
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${AIGT_EXECUTION_SECRETS_HOST_DIR:-../../state/execution-secrets}
+        target: /run/execution-secrets
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+
 volumes:
   intraday-state:

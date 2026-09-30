@@ -1,11 +1,124 @@
 # Binance Demo execution module
 
-Initial scope: **BTCUSDT USD-M Perp**, one dedicated Binance Demo account, One-way,
-Single-asset USDT, isolated margin, 3x leverage. Spot Demo and Hyperliquid execution
-are not implemented yet. This module does not turn on the current paper worker,
-deploy to the VPS, or submit an order just because a key exists.
+Supports dynamically registered **USDT Spot and USD-M USDT Perpetual** instruments
+listed on Binance Demo. Perp requires One-way, Single-asset, isolated 3x per coin.
+Hyperliquid and other DEX execution remain unavailable. This module does not turn
+on the current paper worker, deploy to the VPS, or submit an order just because a
+key exists. The older BTC-only commands are retained as an explicitly legacy path.
 
-## Boundaries
+## Multi-asset workflow (new)
+
+Add Spot and Perp independently; listing in one market does not enable the other:
+
+```bash
+uv run aigt assets add DOGE --market spot --database state/intraday/intraday.sqlite3
+uv run aigt assets add DOGE --market perp --database state/intraday/intraday.sqlite3
+uv run aigt assets scan DOGE --market spot --notional 1000 --database state/intraday/intraday.sqlite3
+uv run aigt assets venue set DOGE --market spot --venue bnb --environment demo --database state/intraday/intraday.sqlite3
+```
+
+Interactive `add` scans and offers a venue choice; non-interactive calls never
+auto-select. `--no-scan` registers only. `venue set` rescans unless a fresh
+`--scan-id` is supplied (60-second validity). No selection activates trading.
+Existing seeded BTC/ETH/etc also need explicit Demo venue selection before using
+the multi-route runtime. Existing BTC soak evidence is not reset or copied to
+other symbols. The catalog source schema is additive v23; migration/rehearsal must
+be applied before enabling the new runtime on an old deployment.
+
+Dashboard: `/assets`, separate Spot/Perp tabs, volume in the venue's quote currency,
+spread/depth 5/10/25 bps and buy/sell impact for the requested quote notional.
+UI history timestamps are UTC+7; exchange bars and journals remain UTC.
+Write operations require the existing dashboard **control token**, not a Binance
+key; the browser does not persist it. Scans are async, writes idempotent.
+Only Binance Demo can be selected. Hyperliquid/Aster/Lighter use verified testnet
+metadata where available; Variational stays `testnet_unverified` until a verified
+public testnet is provided. Empty/malformed/timeout liquidity is N/A, not zero or
+mainnet data. Depth is a snapshot/lower bound, not a fill guarantee.
+
+Configure total strategy capital and manual weights **within each sleeve**:
+
+```bash
+uv run aigt execution demo configure \
+  --source-database state/intraday/intraday.sqlite3 --capital 1000 \
+  --spot-weight ETH=0.5 --spot-weight DOGE=0.25 \
+  --perp-weight ETH=0.5 --perp-weight SOL=0.5 --spot-stop-percent 10
+```
+
+This performs read-only exchange checks and leaves the portfolio paused. Each
+sleeve's weights sum to at most 1; unused weight stays reserve, never automatically
+redistributed. Spot budget is 60%, Perp 40%, with effective notional caps 30% / 20%
+of operator capital. In the example ETH Spot is capped at 150 USDT, DOGE Spot at
+75, ETH Perp at 100 and SOL Perp at 100. ATR can reduce Spot sizing further.
+Spot's operator-selected emergency native SELL stop is **10% below actual entry**;
+Donchian exit stays independent. Portfolio daily loss 1.5%, drawdown 8%, gross
+50% and isolated-margin 10% remain unchanged and can close positions sooner.
+
+Preflight and activate **each route** with its exact passing soak evaluation:
+
+```bash
+uv run aigt execution demo preflight --multi --symbol ETH --market spot \
+  --source-database state/intraday/intraday.sqlite3
+uv run aigt execution demo activate --multi --symbol ETH --market spot \
+  --source-database state/intraday/intraday.sqlite3 --evaluation-id SPOT_SOAK_ID
+uv run aigt execution demo activate --multi --symbol ETH --market perp \
+  --source-database state/intraday/intraday.sqlite3 --evaluation-id PERP_SOAK_ID
+uv run aigt execution demo run --multi --once --source-database state/intraday/intraday.sqlite3
+uv run aigt execution demo status
+uv run aigt execution demo pause --multi
+uv run aigt execution demo flatten --multi
+```
+
+The sample IDs are placeholders, not real evidence. New routes require their own
+champion, passing replay and latest passing soak. Only BTC Perp may use its legacy
+passing BTC portfolio evaluation. Spot uses native closed 4h bars with 8h/1d context
+and consumes each eligible bar once. Perp requires a fresh verified primary model
+decision. Signals remain research/mainnet observations; **execution quotes and
+discovery are Demo/Testnet**, labelled separately and guarded for dislocation.
+
+The multi journal separates Spot and Perp account namespaces; the shared portfolio
+retains capital, cash baselines and risk watermarks across restarts and pauses.
+Legacy BTC evidence/journal rows are preserved; pause, flatten and reconcile the
+legacy runtime before configuring multi. Once configured, legacy activation/run
+is blocked for that journal. Allocation changes require paused, flat, reconciled
+state; capital/source/risk history cannot be reset by reconfiguration.
+
+Spot pre-existing balances are excluded from strategy equity and ownership. Only
+confirmed AIGT fills create inventory; SELL and protection are bounded to it.
+Base/USDT fees are accounted in native units. Third-asset fees, unknown orders,
+unresolved stop cancellation or filter-sized dust pause for reconciliation instead
+of inventing balances, selling seeded holdings or replaying a timed-out submission.
+Spot stops lock coins, so confirmed stop cancellation/reconciliation precedes
+market SELL. Perp protection stays reduce-only and is retained while closing.
+
+`connect bnb demo` reports Spot and Perp read capabilities separately. Successful
+connection does not prove order-write permission. Replace/Clear require both
+markets readable, portfolio paused, no managed Spot inventory, no Perp position,
+no exchange open orders and all intent/fill evidence reconciled.
+
+### Optional Docker profile, not an automatic rollout
+
+`demo-execution` is behind the `demo` profile, has no dependency on/restart of the
+soak worker, reads `intraday-state` read-only, and writes a separate host journal.
+The key directory is read-only; it runs without capabilities and with a read-only
+root filesystem. Host journal/key directories must already exist, be private and
+owned by the selected `AIGT_EXECUTION_UID/GID` (defaults 1000/1000). Verify the source
+DB/WAL is readable by that UID; do not change ownership of the soak volume blindly.
+It does not inherit `.env.intraday` or provider keys. `restart: no` is intentional
+for supervised acceptance. Missing directories/keys/allocation cause refusal.
+
+After supervised order/protection/close acceptance and explicit deployment approval,
+the operator may build/start **only** `demo-execution` with the `demo` profile.
+Configure/activate using the same container source/journal paths (host and container
+source paths are intentionally not silently interchangeable). Stop only this
+service for rollback; keep journal, keys and all soak data. No profile has been
+started as part of implementation.
+
+## Legacy BTC-only compatibility path
+
+The sections below describe the retained original BTC Perp workflow, not the
+multi-route workflow above. They cannot run against a journal configured for multi.
+
+### Boundaries
 
 ```text
 existing v22 soak DB -- read-only evidence --> BTC Demo runtime + deterministic gate
@@ -101,7 +214,7 @@ on the current host, never inside the registered Docker admin/soak service.
 
 | Command | Current support |
 | --- | --- |
-| `aigt connect bnb demo` | Binance Demo BTC USD-M credential connection |
+| `aigt connect bnb demo` | Binance Demo Spot and USD-M credential capability probes |
 | `aigt connect bnb` | Reserved for Binance live; currently refused |
 | `aigt connect hl demo` | Reserved for Hyperliquid testnet; currently refused |
 | `aigt connect hl` | Reserved for Hyperliquid live; currently refused |

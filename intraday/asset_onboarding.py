@@ -1,6 +1,6 @@
 """Shared CLI/dashboard catalog workflow. Venue selection never enables execution."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from dataclasses import replace
 import json
 import uuid
@@ -46,6 +46,13 @@ class AssetOnboarding:
                 if previous[0]!=request:
                     raise ValueError("idempotency key reused with a different payload")
                 return json.loads(previous[1]),False
+            pending=connection.execute(
+                "SELECT COUNT(*) FROM asset_market_scans WHERE created_at>? "
+                "AND json_extract(payload_json,'$.status')='running'",
+                ((now-timedelta(seconds=20)).isoformat(),),
+            ).fetchone()[0]
+            if pending>=4:
+                raise ValueError("too many concurrent scans; wait for the current scans to finish")
             connection.execute("INSERT INTO asset_market_scans VALUES (?,?,?,?,?)",(scan_id,spec.symbol,market,now.isoformat(),json.dumps(result)))
             connection.execute("INSERT INTO asset_catalog_requests VALUES (?,?,?)",(request_id,request,json.dumps(result)))
         return result,True

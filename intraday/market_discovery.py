@@ -114,6 +114,7 @@ class MarketScanner:
         self.deadline_seconds = deadline_seconds
         self._metadata_cache = {}
         self._cache_lock = threading.Lock()
+        self._pool = ThreadPoolExecutor(max_workers=5, thread_name_prefix="market-scan")
 
     def _fetch(self, venue, market, path, params=None, payload=None):
         metadata = path.endswith(("exchangeInfo", "orderBooks")) or payload and payload.get("type") in {"metaAndAssetCtxs", "spotMetaAndAssetCtxs"}
@@ -135,11 +136,12 @@ class MarketScanner:
         symbol = ticker_symbol(symbol)
         if market not in {"spot", "perp"} or now.utcoffset() is None or not 0 < _number(notional) <= 1e8:
             raise ValueError("invalid market, timestamp or scan notional")
-        pool = ThreadPoolExecutor(max_workers=5, thread_name_prefix="market-scan")
-        tasks = {venue: pool.submit(self._venue, venue, symbol, market, now, notional) for venue in VENUES}
+        tasks = {venue: self._pool.submit(self._venue, venue, symbol, market, now, notional) for venue in VENUES}
         done, _ = wait(tasks.values(), timeout=self.deadline_seconds)
         rows = [tasks[v].result() if tasks[v] in done else self._empty(v,symbol,market,now,"unavailable","scan_deadline") for v in VENUES]
-        pool.shutdown(wait=False, cancel_futures=True)
+        for task in tasks.values():
+            if task not in done:
+                task.cancel()
         return {"symbol": symbol, "market": market, "notional_quote": notional,
                 "created_at": now.isoformat(), "venues": rows}
 
