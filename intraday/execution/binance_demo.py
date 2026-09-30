@@ -27,7 +27,7 @@ DEMO_HOST = "https://demo-fapi.binance.com"
 SYMBOL = "BTCUSDT"
 READ_ROUTES = {
     "/fapi/v1/time", "/fapi/v1/exchangeInfo", "/fapi/v1/ticker/bookTicker", "/fapi/v1/premiumIndex",
-    "/fapi/v3/account", "/fapi/v3/positionRisk", "/fapi/v1/symbolConfig", "/fapi/v1/positionSide/dual",
+    "/fapi/v3/account", "/fapi/v1/accountConfig", "/fapi/v3/positionRisk", "/fapi/v1/symbolConfig", "/fapi/v1/positionSide/dual",
     "/fapi/v1/multiAssetsMargin", "/fapi/v1/openOrders", "/fapi/v1/openAlgoOrders", "/fapi/v1/income",
     "/fapi/v1/order", "/fapi/v1/algoOrder", "/fapi/v1/userTrades",
 }
@@ -265,6 +265,10 @@ class BinanceDemoAdapter:
     def account_snapshot(self, *, now: datetime) -> AccountSnapshot:
         request = self.transport.request
         account = request("GET", "/fapi/v3/account", signed=True)
+        account_config = request("GET", "/fapi/v1/accountConfig", signed=True)
+        permission = account_config.get("canTrade")
+        if type(permission) is not bool:
+            raise ExecutionUnavailable("Demo trading permission unavailable")
         positions = request("GET", "/fapi/v3/positionRisk", signed=True)
         config = request("GET", "/fapi/v1/symbolConfig", {"symbol": SYMBOL}, signed=True)
         setting = next(item for item in config if item["symbol"] == SYMBOL)
@@ -272,9 +276,8 @@ class BinanceDemoAdapter:
         multi = request("GET", "/fapi/v1/multiAssetsMargin", signed=True)["multiAssetsMargin"]
         orders = request("GET", "/fapi/v1/openOrders", signed=True)
         algos = request("GET", "/fapi/v1/openAlgoOrders", signed=True)
-        if dual is not False or multi is not False:
-            # Avoid accidental bool('false') conversion and unsupported hedge accounting.
-            raise ExecutionUnavailable("Demo account must use One-way and Single-asset mode")
+        if type(dual) is not bool or type(multi) is not bool:
+            raise ExecutionUnavailable("Demo account modes unavailable")
         return AccountSnapshot(
             account=self.account_ref, wallet_balance=account["totalWalletBalance"],
             equity=account["totalMarginBalance"], available_balance=account["availableBalance"],
@@ -284,9 +287,9 @@ class BinanceDemoAdapter:
             open_orders=tuple(OpenOrder(symbol=row["symbol"], client_id=row["clientOrderId"], order_type=row["type"])
                               for row in orders) + tuple(OpenOrder(symbol=row["symbol"], client_id=row["clientAlgoId"],
                                                                    order_type=row["orderType"]) for row in algos),
-            can_trade=account["canTrade"] is True, one_way=True, single_asset=True,
+            can_trade=permission, one_way=not dual, single_asset=not multi,
             margin_mode=(setting["marginType"] if setting["isAutoAddMargin"] is False else "AUTO_ADD_MARGIN"),
-            leverage=setting["leverage"], observed_at=now,
+            leverage=setting["leverage"], observed_at=self.transport.clock(),
         )
 
     def check_clock(self, *, now: datetime):

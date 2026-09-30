@@ -126,7 +126,8 @@ def test_real_transport_routes_quote_and_account_without_mutations():
         return {
             "/fapi/v1/ticker/bookTicker": {"bidPrice": "99990", "askPrice": "100010", "time": timestamp},
             "/fapi/v1/premiumIndex": {"markPrice": "100000", "time": timestamp},
-            "/fapi/v3/account": {"totalWalletBalance": "10000", "totalMarginBalance": "10000", "availableBalance": "10000", "canTrade": True},
+            "/fapi/v3/account": {"totalWalletBalance": "10000", "totalMarginBalance": "10000", "availableBalance": "10000"},
+            "/fapi/v1/accountConfig": {"canTrade": True},
             "/fapi/v3/positionRisk": [],
             "/fapi/v1/symbolConfig": [{"symbol": "BTCUSDT", "marginType": "ISOLATED", "leverage": 3, "isAutoAddMargin": False}],
             "/fapi/v1/positionSide/dual": {"dualSidePosition": False},
@@ -140,6 +141,29 @@ def test_real_transport_routes_quote_and_account_without_mutations():
     assert snapshot.one_way and snapshot.single_asset and snapshot.margin_mode == "ISOLATED"
     assert snapshot.wallet_balance == 10000
     assert all(method == "GET" for method, _ in calls)
+
+
+@pytest.mark.parametrize("permission", [False, None, "true"])
+def test_account_permission_never_defaults_to_enabled(permission):
+    def send(request):
+        path = urlsplit(request.full_url).path
+        return {
+            "/fapi/v3/account": {"totalWalletBalance": "5000", "totalMarginBalance": "5000", "availableBalance": "5000"},
+            "/fapi/v1/accountConfig": {} if permission is None else {"canTrade": permission},
+            "/fapi/v3/positionRisk": [],
+            "/fapi/v1/symbolConfig": [{"symbol": "BTCUSDT", "marginType": "ISOLATED", "leverage": 5, "isAutoAddMargin": False}],
+            "/fapi/v1/positionSide/dual": {"dualSidePosition": True},
+            "/fapi/v1/multiAssetsMargin": {"multiAssetsMargin": True},
+            "/fapi/v1/openOrders": [], "/fapi/v1/openAlgoOrders": [],
+        }[path]
+    adapter = BinanceDemoAdapter(DemoTransport(credentials(), send=send))
+    if permission is False:
+        snapshot = adapter.account_snapshot(now=NOW)
+        assert not snapshot.can_trade and not snapshot.one_way and not snapshot.single_asset
+        assert snapshot.leverage == 5
+    else:
+        with pytest.raises(ExecutionUnavailable, match="permission"):
+            adapter.account_snapshot(now=NOW)
 
 
 def test_unknown_lookup_not_found_does_not_submit():
