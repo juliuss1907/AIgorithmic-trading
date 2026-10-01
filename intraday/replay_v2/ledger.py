@@ -128,6 +128,9 @@ class Ledger:
         self.entry_price, self.stop, self.entered_at = price, stop, at
         self.entry_cost, self.entry_funding = cost, self.funding
         self._event(at, "entry", "signal", price, price=str(price), cost=str(cost), stop=str(stop), side=side)
+        if self.config.profile.version == "2":
+            self.events[-1]["risk_audit"] = {"pre_fill_equity":str(equity),
+                "notional":str(notional), "entries_paused":self.halted}
         return True
 
     def close(self, at, price, reason):
