@@ -52,3 +52,15 @@ def test_closed_candle_validates_ohlc_and_four_hour_width():
         Candle.from_row([opening, "100", "99", "90", "101", "20", row[6]])
     with pytest.raises(ValueError):
         Candle.from_row([opening, "NaN", "110", "90", "101", "20", row[6]])
+
+
+@pytest.mark.parametrize("price", ["1e1000", "1e-1000"])
+def test_prices_must_fit_finite_positive_policy_arithmetic(price):
+    from intraday.replay_v2.contracts import QuotePoint, FundingSettlement
+    with pytest.raises(ValueError):
+        Candle(opened_at=NOW, available_at=NOW+timedelta(hours=4),
+               open=price, high=price, low=price, close=price, volume=1)
+    with pytest.raises(ValueError):
+        QuotePoint(at=NOW,event_time=NOW,snapshot_id="s",bid=price,ask=price,mark=price)
+    with pytest.raises(ValueError):
+        FundingSettlement(at=NOW,rate=".01",mark=price)

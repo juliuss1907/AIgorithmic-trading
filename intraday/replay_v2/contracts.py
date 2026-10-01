@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import math
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -23,6 +24,15 @@ def utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def positive_policy_number(value: Decimal) -> Decimal:
+    # Existing pure coordinator/Donchian helpers use float; reject overflow and
+    # underflow at the boundary, before they can corrupt a research calculation.
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric <= 0:
+        raise ValueError("value must fit finite positive policy arithmetic")
+    return value
+
+
 class FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
@@ -33,6 +43,7 @@ class FundingSettlement(FrozenModel):
     mark: Decimal = Field(gt=0)
 
     _at = field_validator("at")(utc)
+    _mark = field_validator("mark")(positive_policy_number)
 
 
 class FundingHistory(FrozenModel):
@@ -94,6 +105,7 @@ class ReplayConfig(FrozenModel):
 
     _symbol = field_validator("symbol")(ticker_symbol)
     _times = field_validator("start", "end")(utc)
+    _capital = field_validator("capital")(positive_policy_number)
 
     @model_validator(mode="after")
     def valid_window_and_identity(self):
@@ -120,6 +132,7 @@ class Candle(FrozenModel):
     volume: Decimal = Field(ge=0)
 
     _times = field_validator("opened_at", "available_at")(utc)
+    _prices = field_validator("open", "high", "low", "close")(positive_policy_number)
 
     @model_validator(mode="after")
     def valid_bar(self):
@@ -156,6 +169,7 @@ class QuotePoint(FrozenModel):
     fresh: bool = True
 
     _times = field_validator("at", "event_time")(utc)
+    _prices = field_validator("bid", "ask", "mark")(positive_policy_number)
 
     @model_validator(mode="after")
     def valid_quote(self):
@@ -181,4 +195,3 @@ class ReplayDataset:
     decisions: tuple[RecordedDecision, ...] = ()
     limitations: tuple[str, ...] = ()
     v1_reference: dict | None = None
-
