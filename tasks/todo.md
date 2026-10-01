@@ -38,6 +38,7 @@ Checkbox code không thay cho quyền activation hoặc bằng chứng vận hà
 - [x] Binance Demo đa coin, allocation/risk và execution journal riêng.
 - [x] Per-pair leverage CLI/dashboard confirmation/controller opt-in.
 - [x] Readiness theo symbol/scope và blockers pre/post-replay: CLI/API/dashboard, read-only v23 (local).
+- [x] Replay v2 research Spot/Perp: offline ledger/risk/assumptions, CLI, private artifacts và read-only web UTC+7 (local, chưa deploy).
 - [x] VPS source worker/web v23 rollout, bảo toàn evidence (snapshot 2026-10-01 05:30 UTC).
 
 ## Nghiệm thu và vận hành còn mở
@@ -52,7 +53,7 @@ Checkbox code không thay cho quyền activation hoặc bằng chứng vận hà
 
 ## Backlog build — chưa triển khai
 
-- [ ] Replay Spot full-risk parity/versioned evaluator (không rewrite evidence).
+- [ ] Calibrate/adopt full-risk versioned gate evaluator: Replay v2 research đã xây riêng, chưa thay gate v1 hoặc rewrite evidence.
 - [ ] Unified multi-coin Demo positions/orders/protection projection.
 - [ ] Scheduled backup/retention/restore drill và Demo operational alerts.
 - [ ] Hyperliquid execution adapter; live/multi-venue allocation cần spec riêng.

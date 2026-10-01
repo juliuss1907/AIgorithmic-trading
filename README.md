@@ -85,6 +85,14 @@ database chưa có hoặc cũ sẽ báo lỗi. Mốc sớm nhất chỉ là lowe
 samples/coverage và evaluation pass riêng. Đây không phải quyền trading và chưa
 kiểm tra Demo account/allocation/execution preflight.
 
+Replay v2 có namespace nghiên cứu riêng: `aigt replay run COIN --market spot|perp
+--rule RULE_ID --from ISO_TIME --to ISO_TIME`, `aigt replay list`, `aigt replay show RUN_ID`.
+Spot dùng Donchian/ATR và ledger cash; Perp dùng Jev đã lưu, margin và funding
+settlement khi có. Không gọi model/sàn, không thay gate v1 hay soak. Funding thiếu
+không thành 0/net PnL đầy đủ. Report private lưu ngoài source DB; `/replay` chỉ đọc,
+lịch sử UTC+7. [Runbook và giả định Replay v2](docs/replay-v2-runbook.md).
+Feature xây local, chưa deploy; dùng đường dẫn native rõ ràng khi image Docker còn cũ.
+
 Binance Demo execution có namespace riêng `aigt execution demo` với `preflight`,
 `status`, `activate`, `pause`, `run`, `flatten`, cùng `configure` cho multi-route.
 Hỗ trợ USDT Spot và USD-M Perp của coin catalog mà Binance Demo hỗ trợ; mặc định

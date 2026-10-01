@@ -11,10 +11,16 @@ v1 gates, soak or execution acceptance; no activation, VPS deploy or API keys.
 - [x] Perp ledger: recorded decisions, quotes, isolated margin, stop/funding.
 - [x] Atomic artifacts and separate replay CLI namespace/Docker routing.
 - [x] Read-only dashboard/API, UTC+7 display, documented limitations.
-- [ ] Regression, money/provenance/security/browser checks and local commits.
+- [x] Regression, money/provenance/security/browser checks and local commits.
 
 Defaults: 1000 USDT, weight 1, Spot cap 30%, Perp cap 20%, leverage 3;
 daily loss 1.5%, DD 8%; assumed combined costs 15/5 bps per fill (Spot/Perp).
 Unknown funding never becomes zero/full net profit. No live adapter calls,
 source schema changes or changes to existing evaluators. Reports are stored
 separately and are not valid scoped rule evaluation IDs.
+
+Local verification: 797 tests pass, package build succeeds, desktop browser
+checks pass on an explicitly synthetic read-only preview. Responsive viewport
+resizing was not verified with the available browser tooling. See
+[verification](../docs/replay-v2-verification.md) and
+[runbook](../docs/replay-v2-runbook.md). Not pushed, merged or deployed.

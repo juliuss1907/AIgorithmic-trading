@@ -22,6 +22,7 @@ Subsystem `lab/` vẫn giữ dữ liệu, control và tests độc lập.
 | Per-asset readiness | CLI/API và `/assets`; scoped gates, blockers, pre/post-cutoff, lower bound, selected venue | Chỉ rule + venue; chưa deploy/không cấp quyền execution hoặc kiểm tra account |
 | Operations | Dashboard, readiness report, backup/verify và upgrade rehearsal | Chưa tự schedule/retain/restore backup |
 | Simulator / research | BTC parent paper và `lab/` | Không đại diện cho vị thế Demo đa coin |
+| Replay v2 research | Offline single-coin Spot/Perp, ledger/risk, versioned profile, CLI/artifacts và read-only `/replay` (local) | Không thay gate v1; funding/filters/Demo-price limitations rõ; chưa deploy |
 
 Code supports coin mới nếu catalog và Binance Demo hỗ trợ, không còn ETH-only bootstrap.
 [Demo plan](binance-demo-execution-plan.md) và
@@ -56,7 +57,7 @@ Không tự activate khi đủ lịch hoặc khi LLM đưa proposal.
 
 | Ưu tiên | Hạng mục | Acceptance cần đạt |
 | --- | --- | --- |
-| 1 | Replay Spot gần Demo risk semantics hơn | Version evaluator riêng; ATR/allocation/stop/loss assumptions inspectable; không rewrite evaluation cũ |
+| 1 — research đã xây local | Replay v2 Spot/Perp và bước adoption gate sau | ATR/allocation/stop/loss/funding assumptions inspectable; CLI/web riêng. Còn calibration và spec gate adoption; không rewrite evaluation cũ |
 | 2 — đã xây local | Soak readiness theo coin/scope | CLI/API/dashboard đã có; rollout/kiểm chứng source VPS là bước riêng, chưa deploy |
 | 3 | Unified Demo portfolio/positions | Đọc execution journal đa coin, open orders/stop/PnL/reconciliation; tách simulator |
 | 4 | Backup/alerts vận hành | Schedule ngoài volume, verification, retention/restore drill riêng; cảnh báo protection/cash drift/stale |
@@ -65,6 +66,8 @@ Không tự activate khi đủ lịch hoặc khi LLM đưa proposal.
 
 Các hạng mục chưa xây là backlog định hướng, chưa cấp quyền triển khai hoặc deploy.
 Readiness đã xây local theo [plan riêng](asset-readiness-plan.md), chưa được deploy.
+Replay v2 theo [plan riêng](replay-v2-plan.md)/[runbook](../docs/replay-v2-runbook.md), chưa deploy
+và không là passing evaluation để bắt đầu soak hoặc activate Demo.
 Không tối ưu tham số để ép một gate pass; rejection là evidence hợp lệ.
 
 ## 5. Quy tắc cập nhật roadmap
