@@ -9,6 +9,7 @@ import json
 from intraday.assets import asset_spec
 from intraday.contracts import DecisionScope, PerpRuleParameters, ScopedRuleCandidate
 from intraday.scoped_rule_lifecycle import ScopedRuleEvaluation, rule_allows_answers
+from intraday.rule_preview import RuleGatePreview
 
 
 SCOPE = DecisionScope.PERP_INTRADAY
@@ -56,7 +57,7 @@ def _eligible_returns(candidate: ScopedRuleCandidate, rows: list[dict]) -> list[
     return returns
 
 
-def replay_perp_bootstrap(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
+def preview_perp_bootstrap(store, candidate_id: str, *, now: datetime) -> RuleGatePreview:
     candidate = store.load_scoped_rule(candidate_id)
     if candidate is None or candidate.scope is not SCOPE:
         raise ValueError("unknown Perp candidate")
@@ -91,7 +92,7 @@ def replay_perp_bootstrap(store, candidate_id: str, *, now: datetime) -> ScopedR
     status = "reject" if "hard_risk_violation" in rejected else (
         "deferred" if waiting else "reject" if rejected else "pass"
     )
-    evaluation = ScopedRuleEvaluation.create(
+    values = dict(
         candidate_id=candidate_id, symbol=candidate.symbol, scope=SCOPE,
         kind="replay", status=status, evaluated_at=now, started_at=started,
         sample_count=len(scores), coverage=summary["coverage"],
@@ -101,15 +102,20 @@ def replay_perp_bootstrap(store, candidate_id: str, *, now: datetime) -> ScopedR
                  "history_days": summary["history_days"],
                  "heartbeat_coverage": health["coverage"]},
     )
+    return RuleGatePreview(values, tuple(rejected + waiting), health["hard_risk_violations"])
+
+
+def replay_perp_bootstrap(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
+    evaluation = ScopedRuleEvaluation.create(**preview_perp_bootstrap(store, candidate_id, now=now).values)
     store.record_scoped_rule_evaluation(evaluation)
-    if status == "reject":
+    if evaluation.status == "reject":
         store.reject_scoped_challenger(candidate_id, now=now)
     return evaluation
 
 
-def evaluate_perp_post_replay(
+def preview_perp_post_replay(
     store, candidate_id: str, *, now: datetime,
-) -> ScopedRuleEvaluation:
+) -> RuleGatePreview:
     candidate = store.load_scoped_rule(candidate_id)
     if candidate is None or candidate.scope is not SCOPE:
         raise ValueError("unknown Perp candidate")
@@ -145,7 +151,7 @@ def evaluate_perp_post_replay(
     status = "reject" if "hard_risk_violation" in rejected else (
         "deferred" if waiting else "reject" if rejected else "pass"
     )
-    evaluation = ScopedRuleEvaluation.create(
+    values = dict(
         candidate_id=candidate_id, symbol=candidate.symbol, scope=SCOPE,
         kind="soak", status=status, evaluated_at=now, started_at=started,
         sample_count=len(scores), coverage=summary["coverage"],
@@ -154,8 +160,13 @@ def evaluate_perp_post_replay(
         metrics={"outcomes": summary["outcomes"], "signals": summary["signals"],
                  "heartbeat_coverage": health["coverage"]},
     )
+    return RuleGatePreview(values, tuple(rejected + waiting), health["hard_risk_violations"])
+
+
+def evaluate_perp_post_replay(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
+    evaluation = ScopedRuleEvaluation.create(**preview_perp_post_replay(store, candidate_id, now=now).values)
     store.record_scoped_rule_evaluation(evaluation)
-    if status == "reject":
+    if evaluation.status == "reject":
         store.reject_scoped_challenger(candidate_id, now=now)
     return evaluation
 

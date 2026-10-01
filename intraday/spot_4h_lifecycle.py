@@ -10,6 +10,7 @@ from intraday.asset_rule_lifecycle import _walk_forward
 from intraday.assets import asset_spec
 from intraday.contracts import DecisionScope, ScopedRuleCandidate, SpotRuleParameters
 from intraday.scoped_rule_lifecycle import ScopedRuleEvaluation
+from intraday.rule_preview import RuleGatePreview
 from intraday.spot_signal import BinanceSpotDailyClient, SPOT_INTERVAL_MS
 
 
@@ -136,7 +137,7 @@ def start_spot_4h_soak(
     return registry
 
 
-def evaluate_spot_4h_soak(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
+def preview_spot_4h_soak(store, candidate_id: str, *, now: datetime) -> RuleGatePreview:
     candidate = store.load_scoped_rule(candidate_id)
     if candidate is None or candidate.scope is not SCOPE:
         raise ValueError("unknown spot_4h candidate")
@@ -171,14 +172,15 @@ def evaluate_spot_4h_soak(store, candidate_id: str, *, now: datetime) -> ScopedR
     if len(matured) < 6:
         waiting.append("minimum_6_matured_12h_setups")
     rejected = []
-    if any(row["hard_risk_violation"] for row in heartbeats + rows):
+    violations = sum(bool(row["hard_risk_violation"]) for row in heartbeats + rows)
+    if violations:
         rejected.append("hard_risk_violation")
     if score <= 0:
         rejected.append("nonpositive_soak_score")
     status = "reject" if "hard_risk_violation" in rejected else (
         "deferred" if waiting else "reject" if rejected else "pass"
     )
-    evaluation = ScopedRuleEvaluation.create(
+    values = dict(
         candidate_id=candidate_id, symbol=candidate.symbol, scope=SCOPE,
         kind="soak", status=status, evaluated_at=now, started_at=started,
         sample_count=len(matured), coverage=coverage,
@@ -187,8 +189,13 @@ def evaluate_spot_4h_soak(store, candidate_id: str, *, now: datetime) -> ScopedR
         metrics={"heartbeat_slots": len(healthy), "expected_slots": expected,
                  "matured_setups": len(matured)},
     )
+    return RuleGatePreview(values, tuple(rejected + waiting), violations)
+
+
+def evaluate_spot_4h_soak(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
+    evaluation = ScopedRuleEvaluation.create(**preview_spot_4h_soak(store, candidate_id, now=now).values)
     store.record_scoped_rule_evaluation(evaluation)
-    if status == "reject":
+    if evaluation.status == "reject":
         store.reject_scoped_challenger(candidate_id, now=now)
     return evaluation
 

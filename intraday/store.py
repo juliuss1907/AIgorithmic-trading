@@ -7,6 +7,7 @@ import hashlib
 import math
 import re
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -49,8 +50,23 @@ def _json(model) -> str:
 
 
 class IntradayStore:
-    def __init__(self, database: str | Path):
+    def __init__(self, database: str | Path, *, read_only: bool = False):
         self.database = Path(database).resolve()
+        self.read_only = read_only
+        self._read_snapshot_connection = None
+        if read_only:
+            if not self.database.is_file():
+                raise FileNotFoundError("source database not found; readiness never creates it")
+            try:
+                with self._connect() as connection:
+                    row = connection.execute(
+                        "SELECT value FROM schema_meta WHERE key='schema_version'"
+                    ).fetchone()
+                    if row is None or row[0] != "23":
+                        raise ValueError("readiness requires source schema v23; upgrade separately")
+            except sqlite3.Error:
+                raise ValueError("readiness requires a readable source schema v23") from None
+            return
         self.database.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
         self._migrate_v23()
@@ -130,12 +146,40 @@ class IntradayStore:
         return spec
 
     def _connect(self):
+        if self.read_only:
+            return self._read_connection()
         connection = sqlite3.connect(self.database)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("PRAGMA busy_timeout = 5000")
         return connection
+
+    @contextmanager
+    def _read_connection(self):
+        if self._read_snapshot_connection is not None:
+            yield self._read_snapshot_connection
+            return
+        connection = sqlite3.connect(self.database.as_uri() + "?mode=ro", uri=True, timeout=5)
+        connection.row_factory = sqlite3.Row
+        try:
+            connection.execute("PRAGMA query_only=ON")
+            yield connection
+        finally:
+            connection.close()
+
+    @contextmanager
+    def read_snapshot(self):
+        """One consistent read transaction, without source initialization or writes."""
+        if not self.read_only or self._read_snapshot_connection is not None:
+            raise ValueError("read snapshot requires an independent read-only store")
+        with self._read_connection() as connection:
+            connection.execute("BEGIN")
+            self._read_snapshot_connection = connection
+            try:
+                yield self
+            finally:
+                self._read_snapshot_connection = None
 
     def _initialize(self):
         with self._connect() as connection:
