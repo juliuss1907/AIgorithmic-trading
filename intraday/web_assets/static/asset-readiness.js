@@ -11,6 +11,7 @@
     heartbeat_coverage: "Coverage heartbeat", matured_setups: "Setup trưởng thành",
     matured_outcomes: "Outcome trưởng thành", after_cost_score: "Score sau phí",
     hard_risk_violations: "Vi phạm hard risk", outcome_coverage: "Coverage outcome",
+    closed_trades: "Giao dịch đóng", net_return_pct: "Return sau chi phí", drawdown_pct: "Drawdown",
   };
   function element(tag, text) {
     const node = document.createElement(tag); node.textContent = text; return node;
@@ -31,6 +32,12 @@
     const details = document.createElement("details");
     const summary = document.createElement("summary"); summary.textContent = "Xem bằng chứng";
     details.append(summary);
+    details.append(element("p", "Gate: " + (row.gate_version || "v1")));
+    if (row.cost_profile) {
+      const profile = row.cost_profile, prefix = row.market;
+      details.append(element("p", "Mỗi fill: phí sàn " + profile[prefix + "_fee_bps"] + " bps + trượt giá giả định " + profile[prefix + "_slippage_bps"] + " bps. Spread bid/ask và funding Perp riêng."));
+      details.append(element("p", "Profile v" + profile.version + " · biểu phí đọc " + time(profile.fee_observed_at) + " · không phải phí thực thu account."));
+    }
     details.append(element("p", "Champion: " + (row.champion_id || "chưa có")));
     details.append(element("p", "Candidate: " + (row.candidate_id || "chưa có") + " · " + (row.candidate_status || "—")));
     details.append(element("p", "Bắt đầu: " + time(row.started_at) + " · Cutoff replay: " + time(row.replay_cutoff)));
@@ -41,7 +48,14 @@
       if (saved) {
         details.append(element("p", "Lý do đã lưu: " + (saved.reason_codes.join(" · ") || "không có blocker")));
         details.append(element("pre", JSON.stringify(saved.metrics, null, 2)));
+        if (saved.run_id) {
+          const link = element("a", "Xem account replay");
+          link.href = "/replay/" + encodeURIComponent(saved.run_id); details.append(link);
+        }
       }
+    }
+    if (row.replay_v1 || row.soak_v1) {
+      details.append(element("p", "Bằng chứng v1 giữ nguyên · replay: " + (row.replay_v1?.status || "chưa có") + " · soak: " + (row.soak_v1?.status || "chưa có")));
     }
     if (row.preview) {
       details.append(element("p", "Preview chưa lưu: " + row.preview.status + " · không có evaluation ID"));

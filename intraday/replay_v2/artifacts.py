@@ -39,6 +39,9 @@ def _write(path, text):
 def markdown_summary(report):
     config, summary = report["config"], report["summary"]
     net = summary.get("net_pnl")
+    split = (f"Exchange fee: {summary['exchange_fee_known']} USDT; assumed slippage charge: "
+             f"{summary['slippage_cost_known']} USDT; funding separate.\n\n"
+             if "exchange_fee_known" in summary else "")
     return (f"# Replay v2 — {config['symbol']} {config['market']}\n\n"
         "Offline research only; not an activation or a v1 gate evaluation.\n\n"
         f"Window UTC: {config['start']} → {config['end']}\n\n"
@@ -46,6 +49,7 @@ def markdown_summary(report):
         f"PnL after known costs: {summary['pnl_after_known_costs']} USDT\n\n"
         f"Drawdown (known costs): {summary['max_drawdown_known_pct']}%\n\n"
         f"Closed trades: {summary['closed_trades']}\n\n"
+        + split +
         "## Assumptions and limitations\n\n" + "\n".join(f"- {item}" for item in report["limitations"]) +
         "\n\nCosts are profile assumptions, not verified account fees. UTC daily risk; "
         "no exact liquidation/order-book/partial-fill simulation.\n")

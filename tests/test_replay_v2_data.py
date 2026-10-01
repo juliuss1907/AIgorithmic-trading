@@ -49,7 +49,7 @@ def snapshot(at=NOW):
         freshness={name: True for name in ("candles", "order_book", "premium", "open_interest", "long_short_ratio")})
 
 
-def record_decision(store, *, at=NOW, fingerprint="a" * 64, delay=2):
+def record_decision(store, *, at=NOW, fingerprint="a" * 64, delay=2, direction="Buy"):
     snap = snapshot(at)
     store.record_snapshot(snap)
     tick = f"DOGEUSDT:perp_intraday:{int(at.timestamp()*1000)}"
@@ -64,7 +64,7 @@ def record_decision(store, *, at=NOW, fingerprint="a" * 64, delay=2):
         scope=DecisionScope.PERP_INTRADAY, market="binance_usdm_perp", feature_schema_version="2",
         state_snapshot=json.dumps(JevDecisionProvider._state(snap, DecisionScope.PERP_INTRADAY)),
         raw_signals=snap.features, jev_answers={
-            "direction": {"choice": "Buy", "probabilities": {"Buy": .95}},
+            "direction": {"choice": direction, "probabilities": {direction: .95}},
             "regime": {"choice": "Trending Up"}, "toxic_flow": {"noul": .1},
             "entry_quality": {"score": 3}, "risk_level": {"choice": "Low"}},
         gate_passed=False, gate_reason="decision_soak_only", rules_version="old-rule", llm_thesis=None)

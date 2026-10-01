@@ -18,6 +18,10 @@
         <article><h3>PnL sau chi phí đã biết</h3><strong>{{ "%.4f"|format(report.summary.pnl_after_known_costs) }}</strong><small>USDT · {{ "%.3f"|format(report.summary.return_after_known_costs_pct) }}%</small></article>
         <article><h3>Drawdown đã biết</h3><strong>{{ "%.2f"|format(report.summary.max_drawdown_known_pct) }}%</strong><small>ES theo ngày UTC: {% if report.summary.daily_expected_shortfall_known_pct is not none %}{{ "%.2f"|format(report.summary.daily_expected_shortfall_known_pct) }}%{% else %}—{% endif %} · {{ report.summary.daily_return_samples }} mẫu</small></article>
         <article><h3>Vốn / chi phí gộp</h3><strong>{{ report.config.capital }} USDT</strong><small>{{ "%.4f"|format(report.summary.execution_cost_known) }} USDT chi phí · {{ "%.4f"|format(report.summary.funding_paid_known) }} funding đã biết</small></article>
+        {% if report.summary.exchange_fee_known is defined %}
+        <article><h3>Phí sàn</h3><strong>{{ "%.4f"|format(report.summary.exchange_fee_known) }} USDT</strong><small>Biểu phí Regular User · không giảm BNB/VIP</small></article>
+        <article><h3>Trượt giá giả định</h3><strong>{{ "%.4f"|format(report.summary.slippage_cost_known) }} USDT</strong><small>Cash charge; spread Perp đã nằm trong bid/ask</small></article>
+        {% endif %}
         <article><h3>Vị thế / risk guard</h3><strong>{{ report.summary.closed_trades }} trades</strong><small>Open qty {{ report.summary.open_quantity }} · {% if report.summary.halted %}HALTED: {{ report.summary.halt_reason }}{% else %}Không chạm loss guard{% endif %}</small></article>
       </div>
     </section>
@@ -35,6 +39,9 @@
     <section class="ledger" aria-labelledby="assumptions-heading">
       <div class="section-head"><h2 id="assumptions-heading">Giả định &amp; giới hạn</h2></div>
       <p>Profile {{ report.config.profile.profile_id }} v{{ report.config.profile.version }} · giả định {{ report.config.profile.spot_cost_bps if report.config.market == 'spot' else report.config.profile.perp_cost_bps }} bps mỗi chiều, không phải phí account đã xác minh.</p>
+      {% if report.config.profile.version == '2' %}
+      <p>Phí sàn {{ report.config.profile.spot_fee_bps if report.config.market == 'spot' else report.config.profile.perp_fee_bps }} bps + trượt giá giả định {{ report.config.profile.spot_slippage_bps if report.config.market == 'spot' else report.config.profile.perp_slippage_bps }} bps mỗi fill. Biểu phí đọc {{ report.config.profile.fee_observed_at|vn_time }}; funding Perp tính riêng theo settlement.</p>
+      {% endif %}
       <p>{% if report.config.market == 'spot' %}Donchian rule-only · ATR sizing · cap 30% vốn · stop khẩn cấp 10%, Donchian exit riêng.{% else %}Jev đã lưu · cap 20% vốn · isolated {{ report.config.leverage }}x; leverage không nhân notional/PnL.{% endif %} Daily loss 1,5% / drawdown 8%.</p>
       <ul>{% for reason in report.limitations %}<li>{{ reason }}</li>{% endfor %}</ul>
       <p>Không mô phỏng order-book, partial fill, API lỗi, liquidation chính xác hoặc danh mục nhiều coin.</p>

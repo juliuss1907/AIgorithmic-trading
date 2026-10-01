@@ -64,3 +64,16 @@ def test_empty_and_missing_reports_are_explicit_and_do_not_create_report_root(tm
     assert "Chưa có report" in client.get("/replay").text
     assert client.get("/replay/"+"a"*32).status_code == 404
     assert not root.exists()
+
+
+def test_new_profile_renders_separate_fees_and_slippage_without_changing_old_reports(tmp_path):
+    from intraday.replay_v2.contracts import binance_gate_profile
+    root = tmp_path/"reports"
+    config, data = inputs([bar(22,110,111,109,110)])
+    config = config.model_copy(update={"profile":binance_gate_profile()})
+    item = publish_report(root,simulate(config,data))
+    client = TestClient(create_app(database=tmp_path/"source.sqlite",replay_report_dir=root))
+    page = client.get("/replay/"+item["run_id"])
+    assert page.status_code == 200
+    assert "Phí sàn" in page.text and "Trượt giá giả định" in page.text
+    assert "10 bps" in page.text and "5 bps" in page.text
