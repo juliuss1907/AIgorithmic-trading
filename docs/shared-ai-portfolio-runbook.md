@@ -23,6 +23,9 @@ Source schema v23; native/XDG path khác Docker volume path. Không dùng journa
 ```bash
 aigt status
 aigt assets list
+aigt assets readiness
+aigt assets readiness ETH --market perp
+aigt assets readiness --market spot --json
 aigt assets rules status ETHUSDT
 aigt portfolio soak report
 aigt execution demo status
@@ -33,6 +36,27 @@ aigt perp ETH
 Không suy ra journal native là journal VPS/container; truyền đúng execution path khi cần.
 `aigt positions` chỉ BTC parent simulator; không chứng minh tài khoản Demo flat.
 Parent `soak report` không thay exact per-asset replay/soak evaluations.
+
+### Readiness từng coin/scope
+
+CLI trên và bảng Readiness tại `/assets` cùng đọc projection từ source v23.
+`GET /api/assets/readiness?symbol=ETH&market=perp` là API chỉ đọc, không cần control token.
+CLI tự route tới admin của Docker deployment đã đăng ký; dùng `--database PATH`
+để đọc một source DB native cụ thể. Không truyền execution journal làm source.
+
+- Preview dùng chung phép tính với evaluator nhưng không lưu evaluation/ID, không
+  gọi model, sàn hoặc chạy backtest. Evaluation đã lưu hiện riêng trong bằng chứng.
+- Spot: history/replay rồi soak 14 ngày, coverage 95%, 6 matured 12h setups.
+  Perp: decision soak 14 ngày rồi cutoff replay và validation riêng ít nhất 72 giờ.
+- Mốc sớm nhất lấy từ campaign/cutoff thực tế, không từ ngày thêm coin; đủ lịch
+  không đảm bảo samples/coverage/score đạt. Operator vẫn chạy replay/evaluate/promote riêng.
+- Venue chỉ phản ánh cấu hình đã chọn; không kiểm tra credentials, account, allocation,
+  protection hoặc execution preflight. Không coi preview `pass` là quyền đặt lệnh.
+- Nếu source mất/cũ/unreadable, đọc trả lỗi thay vì tạo/migrate source. Bảng có
+  Làm mới, chi tiết bằng bàn phím, lọc Spot/Perp; thời gian hiển thị UTC+7.
+
+BTC Perp champion kế thừa không bị yêu cầu bootstrap lại. Rejection cũ và metrics
+giữ nguyên; readiness không sửa chiến lược để ép pass.
 
 ### Rollout và backup
 

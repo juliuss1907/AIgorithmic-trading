@@ -67,7 +67,9 @@ Nguồn: `XDG_STATE_HOME/aigorithmic-trading/reports/vps-rollout-20261001T043018
 
 Việc vận hành còn mở trong checklist: Perp pre/post-replay gates, Spot passing candidate,
 supervised Demo acceptance, Hermes/Telegram read-only rollout và compact eligibility.
-Backlog build theo roadmap: replay risk parity, per-asset readiness, unified Demo positions,
+Per-asset readiness CLI/API/dashboard đã xây local; chưa deploy, không cấp quyền trading.
+Chi tiết tại [readiness plan](asset-readiness-plan.md).
+Backlog build theo roadmap: replay risk parity, unified Demo positions,
 automated backup/alerts, rồi adapter Hyperliquid.
 
 ## Đợt đồng bộ tài liệu 2026-10-01

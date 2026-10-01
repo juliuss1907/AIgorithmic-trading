@@ -66,6 +66,9 @@ aigt status
 aigt positions
 aigt assets list
 aigt assets status ETHUSDT
+aigt assets readiness
+aigt assets readiness ETH --market perp
+aigt assets readiness --market spot --json
 aigt cross-venue-status
 ```
 
@@ -73,6 +76,14 @@ aigt cross-venue-status
 paper position đang mở, cùng entry price, latest mark, mark timestamp, notional và
 unrealized P&L. Lệnh tự route tới deployment Docker đã đăng ký, không tạo fill và
 không thay đổi portfolio state.
+
+`aigt assets readiness` đọc source schema v23 theo từng coin/scope: phase, gates,
+blockers, champion/candidate, evaluation đã lưu và venue được chọn. CLI có thể lọc
+`COIN`, `--market spot|perp`, xuất `--json` và chọn `--database PATH`.
+Preview không ghi evaluation, không chạy replay/model/API sàn, không migrate database;
+database chưa có hoặc cũ sẽ báo lỗi. Mốc sớm nhất chỉ là lower bound: vẫn phải đủ
+samples/coverage và evaluation pass riêng. Đây không phải quyền trading và chưa
+kiểm tra Demo account/allocation/execution preflight.
 
 Binance Demo execution có namespace riêng `aigt execution demo` với `preflight`,
 `status`, `activate`, `pause`, `run`, `flatten`, cùng `configure` cho multi-route.
@@ -194,7 +205,8 @@ khi mọi kiểm tra đều pass. Diễn tập restore trên bản sao không t�
 Mở `http://127.0.0.1:8081/` để xem trạng thái worker, parent-soak readiness legacy,
 heartbeat Spot/Perp, model calls và các Jev signal gần nhất. Trang
 `http://127.0.0.1:8081/portfolio` giữ phần chi tiết portfolio/rule/evaluation;
-`/assets` cho catalog multi-asset và onboarding, `/system-plan` cho kiến trúc hiện hành;
+`/assets` cho catalog multi-asset, onboarding và readiness Spot/Perp (Làm mới/Xem bằng chứng,
+thời gian UTC+7), `/system-plan` cho kiến trúc hiện hành;
 dashboard intraday legacy nằm tại `/legacy-intraday`. Mặc định dữ liệu nằm tại
 `${XDG_STATE_HOME:-~/.local/state}/aigorithmic-trading/intraday.sqlite3`; không dùng
 chung paper account với `lab/`. Để copy paper database cũ mà không xóa nguồn:

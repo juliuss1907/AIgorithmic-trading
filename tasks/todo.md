@@ -37,6 +37,7 @@ Checkbox code không thay cho quyền activation hoặc bằng chứng vận hà
 - [x] Generalized Spot 4h và Perp baseline/proposal/lifecycle.
 - [x] Binance Demo đa coin, allocation/risk và execution journal riêng.
 - [x] Per-pair leverage CLI/dashboard confirmation/controller opt-in.
+- [x] Readiness theo symbol/scope và blockers pre/post-replay: CLI/API/dashboard, read-only v23 (local).
 - [x] VPS source worker/web v23 rollout, bảo toàn evidence (snapshot 2026-10-01 05:30 UTC).
 
 ## Nghiệm thu và vận hành còn mở
@@ -46,12 +47,12 @@ Checkbox code không thay cho quyền activation hoặc bằng chứng vận hà
 - [ ] Spot candidate pass replay rồi operator start soak ≥14 ngày và đủ setup.
 - [ ] Supervised Demo order → native protection → reconcile → close, approval riêng.
 - [ ] Demo per-pair settings write/read-back acceptance khi paused/flat.
+- [ ] Rollout/kiểm chứng per-asset readiness trên VPS; approval deploy riêng.
 - [ ] Chỉ activate route đúng champion/passing evaluation sau acceptance được phê duyệt.
 
 ## Backlog build — chưa triển khai
 
 - [ ] Replay Spot full-risk parity/versioned evaluator (không rewrite evidence).
-- [ ] Readiness theo symbol/scope và blockers pre/post-replay.
 - [ ] Unified multi-coin Demo positions/orders/protection projection.
 - [ ] Scheduled backup/retention/restore drill và Demo operational alerts.
 - [ ] Hyperliquid execution adapter; live/multi-venue allocation cần spec riêng.

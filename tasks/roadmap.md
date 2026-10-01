@@ -19,6 +19,7 @@ Subsystem `lab/` vẫn giữ dữ liệu, control và tests độc lập.
 | Catalog/onboarding | Add → scan volume/liquidity → chọn venue, Spot/Perp riêng; v23 | Route selection không bật trading |
 | Binance Demo module | USDT Spot và USD-M Perp đa coin, journal và allocation riêng | Supervised order/stop/close acceptance chưa hoàn tất |
 | Per-pair leverage | CLI/dashboard confirmation, controller opt-in, read-back | Real Demo setting-write acceptance chưa hoàn tất |
+| Per-asset readiness | CLI/API và `/assets`; scoped gates, blockers, pre/post-cutoff, lower bound, selected venue | Chỉ rule + venue; chưa deploy/không cấp quyền execution hoặc kiểm tra account |
 | Operations | Dashboard, readiness report, backup/verify và upgrade rehearsal | Chưa tự schedule/retain/restore backup |
 | Simulator / research | BTC parent paper và `lab/` | Không đại diện cho vị thế Demo đa coin |
 
@@ -51,18 +52,19 @@ Không hardcode các trạng thái này thành UI realtime. Kiểm tra source DB
 Các mốc 14 ngày/72 giờ là minimum đánh giá, không phải lời hứa ngày bật giao dịch.
 Không tự activate khi đủ lịch hoặc khi LLM đưa proposal.
 
-## 4. Backlog xây tiếp, chưa triển khai
+## 4. Trạng thái các hạng mục xây tiếp
 
 | Ưu tiên | Hạng mục | Acceptance cần đạt |
 | --- | --- | --- |
 | 1 | Replay Spot gần Demo risk semantics hơn | Version evaluator riêng; ATR/allocation/stop/loss assumptions inspectable; không rewrite evaluation cũ |
-| 2 | Soak readiness theo coin/scope | Thấy blockers, coverage, matured outcomes, pre/post-cutoff và earliest eligible time |
+| 2 — đã xây local | Soak readiness theo coin/scope | CLI/API/dashboard đã có; rollout/kiểm chứng source VPS là bước riêng, chưa deploy |
 | 3 | Unified Demo portfolio/positions | Đọc execution journal đa coin, open orders/stop/PnL/reconciliation; tách simulator |
 | 4 | Backup/alerts vận hành | Schedule ngoài volume, verification, retention/restore drill riêng; cảnh báo protection/cash drift/stale |
 | 5 | Hyperliquid execution adapter | Giữ interface/journal isolation; spec/testnet acceptance trước mainnet |
 | Sau | Concurrent multi-venue allocation / live trading | Quyết định mandate, capital, reconciliation, launch approval riêng |
 
-Đây là backlog định hướng, chưa cấp quyền triển khai hoặc deploy các hạng mục đó.
+Các hạng mục chưa xây là backlog định hướng, chưa cấp quyền triển khai hoặc deploy.
+Readiness đã xây local theo [plan riêng](asset-readiness-plan.md), chưa được deploy.
 Không tối ưu tham số để ép một gate pass; rejection là evidence hợp lệ.
 
 ## 5. Quy tắc cập nhật roadmap
