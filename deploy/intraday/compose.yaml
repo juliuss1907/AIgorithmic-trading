@@ -28,8 +28,14 @@ services:
     command: ["serve"]
     env_file:
       - ${INTRADAY_ENV_FILE:-../../.env.intraday}
+    environment:
+      INTRADAY_REPLAY_REPORT_DIR: /app/state/replay-reports
     volumes:
       - intraday-state:/app/state/intraday
+      - type: volume
+        source: replay-reports
+        target: /app/state/replay-reports
+        read_only: true
     ports:
       - "127.0.0.1:8081:8081"
     healthcheck:
@@ -48,8 +54,10 @@ services:
       - ${INTRADAY_ENV_FILE:-../../.env.intraday}
     environment:
       INTRADAY_PROVIDER_SECRETS_FILE: /run/provider-secrets/provider-secrets.toml
+      INTRADAY_REPLAY_REPORT_DIR: /app/state/replay-reports
     volumes:
       - intraday-state:/app/state/intraday
+      - replay-reports:/app/state/replay-reports
       - type: bind
         source: ${INTRADAY_PROVIDER_SECRETS_HOST_DIR:-../../state/provider-secrets}
         target: /run/provider-secrets
@@ -86,3 +94,4 @@ services:
 
 volumes:
   intraday-state:
+  replay-reports:

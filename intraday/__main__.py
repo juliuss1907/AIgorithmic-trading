@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 from intraday.assets import ASSET_REGISTRY, asset_spec
 from intraday.asset_readiness import build_asset_readiness, format_asset_readiness
+from intraday.replay_v2.cli import add_replay_parser, dispatch_replay, docker_replay_command
 from intraday.llm_pipeline import active_llm_client
 from intraday.asset_rule_lifecycle import (
     activate_asset_spot_rule,
@@ -170,6 +171,7 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command")
     add_execution_parser(commands)
     add_perp_parser(commands)
+    add_replay_parser(commands)
     for name in (
         "doctor", "status", "collect", "news", "analysis", "run", "cross-venue-status",
         "cross-venue-replay", "cross-venue-evaluate",
@@ -1957,6 +1959,21 @@ def main() -> None:
             if code:
                 raise SystemExit(code)
             return
+    if arguments.command == "replay":
+        if arguments.database is None and arguments.report_dir is None:
+            deployment = deployment_cli.load_deployment()
+            if deployment is not None:
+                try:
+                    command = docker_replay_command(deployment, raw_arguments,
+                        config_path=getattr(arguments, "config", None))
+                except (OSError, ValueError) as error:
+                    raise SystemExit(f"replay unavailable: {error}") from None
+                code = deployment_cli.execute(command, cwd=deployment.project_root)
+                if code:
+                    raise SystemExit(code)
+                return
+        dispatch_replay(arguments)
+        return
     if arguments.command in {"start", "stop", "restart", "logs"}:
         deployment = deployment_cli.load_deployment()
         if deployment is None:
