@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
@@ -25,6 +26,7 @@ from intraday.portfolio_view import latest_parent_market_view
 from intraday.store import IntradayStore
 from intraday.asset_onboarding import AssetOnboarding
 from intraday.assets import spec_payload, ticker_symbol
+from intraday.asset_readiness import build_asset_readiness
 from intraday.execution.contracts import AccountRef
 from intraday.execution.journal import ExecutionJournal
 from intraday.execution.perp_control import LeveragePreview, queue_leverage_change, route_digest
@@ -398,6 +400,23 @@ def create_app(
                            "execution_routes":onboarding.routes(spec.symbol)}
                           for spec in store.asset_catalog().values()
                           if market is None or scope in spec.enabled_scopes]}
+
+    @app.get("/api/assets/readiness")
+    def asset_readiness(symbol: str | None = Query(default=None, min_length=1, max_length=24),
+                        market: Literal["spot", "perp"] | None = None):
+        if symbol is not None:
+            try:
+                symbol = ticker_symbol(symbol)
+            except ValueError:
+                raise HTTPException(422, "Invalid USDT asset symbol") from None
+        try:
+            return build_asset_readiness(store.database, symbol=symbol, market=market)
+        except ValueError as error:
+            if str(error) == "asset is not registered":
+                raise HTTPException(404, "Asset is not registered") from None
+            raise HTTPException(503, "Readiness requires a readable source database with schema v23") from None
+        except (OSError, sqlite3.Error):
+            raise HTTPException(503, "Source readiness is unavailable; no database was initialized") from None
 
     @app.post("/api/assets", status_code=201)
     def add_asset(body: AssetCreateRequest, _: None = Depends(require_control),

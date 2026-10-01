@@ -19,6 +19,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from intraday.assets import ASSET_REGISTRY, asset_spec
+from intraday.asset_readiness import build_asset_readiness, format_asset_readiness
 from intraday.llm_pipeline import active_llm_client
 from intraday.asset_rule_lifecycle import (
     activate_asset_spot_rule,
@@ -194,6 +195,11 @@ def _parser() -> argparse.ArgumentParser:
     assets_status = asset_commands.add_parser("status")
     assets_status.add_argument("symbol", nargs="?")
     assets_status.add_argument("--database", default=None)
+    readiness = asset_commands.add_parser("readiness", help="read-only scoped rule gates and venue state")
+    readiness.add_argument("symbol", nargs="?")
+    readiness.add_argument("--market", choices=["spot", "perp"])
+    readiness.add_argument("--json", action="store_true", dest="json_output")
+    readiness.add_argument("--database", default=None)
     for name in ("add", "scan"):
         command = asset_commands.add_parser(name, help="scope-specific Demo/Testnet onboarding")
         command.add_argument("symbol")
@@ -409,6 +415,17 @@ def _asset_payload(store: IntradayStore, symbol: str) -> dict:
 
 
 def _assets_cli(arguments) -> None:
+    if arguments.assets_command == "readiness":
+        try:
+            report = build_asset_readiness(resolve_database_path(arguments.database),
+                                          symbol=arguments.symbol, market=arguments.market)
+        except (OSError, sqlite3.Error):
+            raise SystemExit("Không thể đọc source DB; readiness không tạo hoặc migrate database.") from None
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
+        print(json.dumps(report, ensure_ascii=False, indent=2) if arguments.json_output
+              else format_asset_readiness(report), flush=True)
+        return
     store = IntradayStore(resolve_database_path(arguments.database))
     if arguments.assets_command in {"add", "scan", "venue"}:
         service = AssetOnboarding(store)

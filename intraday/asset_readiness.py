@@ -1,6 +1,7 @@
 """Read-only per-asset rule/venue readiness. Never an execution authorization."""
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from intraday.assets import ticker_symbol
 from intraday.contracts import DecisionScope
@@ -10,6 +11,23 @@ from intraday.store import IntradayStore
 
 
 SCOPES = {"spot": DecisionScope.SPOT_4H, "perp": DecisionScope.PERP_INTRADAY}
+PHASE_LABELS = {
+    "no_rule": "Chưa có baseline", "disabled": "Scope đã tắt",
+    "inconsistent": "Dữ liệu cần kiểm tra", "champion": "Đã có champion",
+    "rejected": "Candidate bị từ chối", "history": "Thiếu history",
+    "awaiting_replay": "Chờ chạy replay", "awaiting_spot_soak": "Chờ start Spot soak",
+    "awaiting_decision_soak": "Chờ start Perp soak", "decision_soak": "Perp decision soak",
+    "spot_soak": "Spot decision soak", "post_replay_validation": "Validation sau replay",
+    "awaiting_promotion": "Chờ operator promote",
+}
+ACTION_LABELS = {
+    "bootstrap": "Chuẩn bị baseline", "none": "Không có thao tác rule",
+    "investigate": "Kiểm tra blockers", "await_proposal": "Chờ proposal mới",
+    "start_decision_soak": "Operator start Perp soak", "start_soak": "Operator start Spot soak",
+    "backfill_history": "Cập nhật history", "run_replay": "Chạy replay riêng",
+    "wait": "Tiếp tục thu thập", "run_evaluation": "Chạy evaluation riêng",
+    "request_promotion": "Operator kiểm tra/promote",
+}
 
 
 def build_asset_readiness(database, *, symbol=None, market=None, now=None):
@@ -83,6 +101,8 @@ def _asset_row(reader, symbol, market, scope, now):
                    blockers=latest["reason_codes"] if latest else ["candidate_rejected"])
     else:
         row["blockers"] = ["baseline_required"]
+    row["phase_label"] = PHASE_LABELS[row["phase"]]
+    row["next_action_label"] = ACTION_LABELS[row["next_action"]]
     return row
 
 
@@ -183,3 +203,30 @@ def _soak_progress(row, preview, phase, hours, now):
             row.update(phase="awaiting_promotion", next_action="request_promotion")
         else:
             row["next_action"] = "run_evaluation"
+
+
+def format_asset_readiness(report):
+    def time(value):
+        return datetime.fromisoformat(value).astimezone(ZoneInfo("Asia/Ho_Chi_Minh")).strftime("%d/%m/%Y %H:%M UTC+7") if value else "N/A"
+
+    lines = ["Coin | Market | Bước rule | Venue | Bước tiếp theo",
+             "Readiness là preview đọc source; không phải quyền trading."]
+    for row in report["rows"]:
+        venue = row["venue"]
+        lines.append(" | ".join((row["symbol"], "Spot" if row["market"] == "spot" else "Perp",
+                                row["phase_label"], f'{venue["venue"]}/{venue["environment"]}' if venue else "chưa chọn",
+                                row["next_action_label"])))
+        if row["gates"]:
+            lines.append("  Gates: " + "; ".join(
+                f'{g["key"]}: {g["value"]:.4g} {g["comparison"]} {g["required"]:g} [{g["status"]}]'
+                if g["value"] is not None else f'{g["key"]}: N/A'
+                for g in row["gates"]))
+        if row["blockers"]:
+            lines.append("  Blockers: " + "; ".join(row["blockers"]))
+        if row["earliest_evaluation_at"]:
+            lines.append("  Mốc sớm nhất: " + time(row["earliest_evaluation_at"]))
+    if not report["rows"]:
+        lines.append("Không có coin/scope khớp bộ lọc.")
+    lines.append("Mốc thời gian chỉ là lower bound; vẫn phải đủ samples/coverage và passing evaluation riêng.")
+    lines.append("Cập nhật: " + time(report["generated_at"]))
+    return "\n".join(lines)
