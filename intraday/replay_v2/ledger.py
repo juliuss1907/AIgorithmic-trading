@@ -139,6 +139,8 @@ class Ledger:
         self.quantity = ZERO
         self.entry_price = self.entered_at = self.stop = None
         self._event(at, "close", reason, price, price=str(price), cost=str(cost), gross_pnl=str(pnl))
+        if guard := self.guard_reason(price):
+            self.halt(at, price, guard)
 
     def settle_funding(self, at, rate, mark):
         if self.config.market != "perp" or not self.quantity:

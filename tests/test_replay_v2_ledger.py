@@ -78,3 +78,13 @@ def test_funding_coverage_requires_explicit_full_window():
     assert not ledger("perp", profile=ExecutionProfile(funding=history)).funding_complete
     assert not ledger("perp").funding_complete
     assert ledger().funding_complete
+
+
+def test_closing_cost_can_trip_terminal_guard_after_an_otherwise_safe_mark():
+    book = ledger("perp")
+    book.enter(NOW, Decimal(100), Decimal(200), side=1, stop_distance=Decimal(".01"))
+    price = Decimal("92.595")
+    assert book.guard_reason(price) is None
+    book.close(NOW+timedelta(seconds=30), price, "protective_stop")
+    assert book.halted
+    assert book.halt_reason == "daily_loss_limit"

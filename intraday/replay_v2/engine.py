@@ -100,6 +100,9 @@ def simulate(config: ReplayConfig, data: ReplayDataset) -> dict:
     if (data.rule.rule_id, data.rule.symbol, data.rule.scope) != (config.rule_id, config.symbol, config.scope):
         raise ValueError("replay rule identity mismatch")
     limitations = set(data.limitations)
+    limitations.add("stored_binance_prices_not_verified_historical_demo_quotes")
+    if data.rule.created_at > config.start:
+        limitations.add("rule_selected_ex_post_not_out_of_sample")
     if config.profile.instrument is None:
         limitations.add("instrument_filters_not_verified")
     else:
