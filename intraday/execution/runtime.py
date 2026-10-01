@@ -50,6 +50,8 @@ class DemoRuntime:
         if not capital.is_finite() or not 0 < capital <= 10000:
             raise ValueError("Demo strategy capital must be positive and at most 10000 USDT")
         with self.journal.lock():
+            if self.journal.portfolio(self.account) is not None:
+                raise ValueError("multi-route portfolio exists; use multi-route commands, not legacy BTC activation")
             self.source.evaluation(evaluation_id, now=now)
             report = self.preflight(now=now)
             if not report["clean_account"]:
@@ -83,6 +85,8 @@ class DemoRuntime:
             return {"status": "activated", "account": self.account.key, "capital": str(capital), "orders_submitted": False}
 
     def _control(self):
+        if self.journal.portfolio(self.account) is not None:
+            raise ValueError("legacy BTC runtime disabled after multi-route configuration")
         control = self.journal.control(self.account)
         if control is None or not control["enabled"]:
             raise ValueError("Demo requires explicit operator activation")

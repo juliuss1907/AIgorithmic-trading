@@ -82,7 +82,7 @@ def test_assets_list_reports_capability_and_scope_stage(monkeypatch, capsys, tmp
     hype = next(item for item in result if item["symbol"] == "HYPEUSDT")
     assert eth["capability"] == "full"
     assert eth["stages"] == {"perp_intraday": "shadow", "spot_daily": "shadow", "spot_4h": "shadow"}
-    assert hype["capability"] == "soak_only"
+    assert hype["capability"] == "full"  # Eligibility is scoped/evidence-gated, not ticker-gated.
 
 
 def test_assets_start_soak_is_guarded_by_registry_capability(
@@ -882,7 +882,7 @@ def test_doctor_reports_safe_defaults(monkeypatch, capsys, tmp_path):
     assert result["leverage"] == 3
     assert result["cross_venue_mode"] == "shadow"
     assert result["hyperliquid_enabled"] is True
-    assert result["schema_version"] == 22
+    assert result["schema_version"] == 23
     assert result["feature_schema_version"] == "2"
     assert result["soak_evidence_version"] == "scope-price-v2"
     assert result["markets"] == {

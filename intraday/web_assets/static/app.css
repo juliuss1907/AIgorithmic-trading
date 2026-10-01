@@ -9,6 +9,25 @@
   --radius: 0.375rem;
 }
 
+.asset-market-switch { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-block: 1rem; }
+.asset-form { display: flex; flex-wrap: wrap; align-items: end; gap: 1rem; margin-block: 1rem; }
+.asset-form label { display: grid; gap: 0.25rem; max-width: 100%; }
+.asset-form input { max-width: 100%; padding: 0.5rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); }
+.asset-form small, #venue-results small { display: block; max-width: 18rem; white-space: normal; color: var(--muted); }
+.asset-market-switch button, .asset-form button, #venue-results button { padding: 0.5rem 0.75rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
+.asset-market-switch button[aria-pressed="true"] { background: var(--signal); color: var(--signal-ink); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+[hidden] { display: none !important; }
+#leverage-dialog { max-width: min(36rem, calc(100vw - 2rem)); background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.5rem; }
+#leverage-dialog::backdrop { background: rgba(0,0,0,0.7); }
+#leverage-dialog h2 { margin-top: 0; }
+#leverage-dialog button, #perp-edit { padding: 0.5rem 0.75rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
+#leverage-confirm { background: var(--signal) !important; color: var(--signal-ink) !important; }
+#leverage-preview { white-space: normal; overflow-wrap: anywhere; }
+#perp-message { overflow-wrap: anywhere; }
+caption { text-align: left; padding: 0.75rem 1rem; color: var(--muted); }
+
 * { box-sizing: border-box; }
 
 body {

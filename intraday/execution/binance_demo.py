@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from pydantic import BaseModel, ConfigDict, SecretStr
+from intraday.assets import normalize_symbol
 
 from intraday.execution.contracts import (
     AccountRef, AccountSnapshot, ExecutionFill, ExecutionUnavailable,
@@ -24,13 +25,17 @@ from intraday.execution.contracts import (
 
 
 DEMO_HOST = "https://demo-fapi.binance.com"
+SPOT_DEMO_HOST = "https://demo-api.binance.com"
 SYMBOL = "BTCUSDT"
 READ_ROUTES = {
     "/fapi/v1/time", "/fapi/v1/exchangeInfo", "/fapi/v1/ticker/bookTicker", "/fapi/v1/premiumIndex",
     "/fapi/v3/account", "/fapi/v1/accountConfig", "/fapi/v3/positionRisk", "/fapi/v1/symbolConfig", "/fapi/v1/positionSide/dual",
     "/fapi/v1/multiAssetsMargin", "/fapi/v1/openOrders", "/fapi/v1/openAlgoOrders", "/fapi/v1/income",
     "/fapi/v1/order", "/fapi/v1/algoOrder", "/fapi/v1/userTrades",
+    "/fapi/v1/leverageBracket", "/fapi/v1/leverage",
 }
+SPOT_READ_ROUTES = {"/api/v3/time", "/api/v3/exchangeInfo", "/api/v3/ticker/bookTicker",
+                    "/api/v3/account", "/api/v3/openOrders", "/api/v3/order", "/api/v3/myTrades"}
 
 
 class DemoCredentials(BaseModel):
@@ -81,24 +86,38 @@ class _NoRedirect(HTTPRedirectHandler):
 def _send(request):
     # Do not use an opener that follows redirects with signed headers.
     with build_opener(_NoRedirect()).open(request, timeout=10) as response:
-        return json.loads(response.read(2_000_001))
+        body = response.read(2_000_001)
+        if len(body) > 2_000_000:
+            raise ExecutionUnavailable("Demo response exceeds bounded size")
+        return json.loads(body)
 
 
 class DemoTransport:
-    def __init__(self, credentials: DemoCredentials, *, send=None, clock=None, writes_enabled=False):
+    def __init__(self, credentials: DemoCredentials, *, send=None, clock=None, writes_enabled=False, settings_enabled=False, market="perp"):
+        if market not in {"spot", "perp"}:
+            raise ValueError("invalid Demo market")
+        self.market = market
         self.credentials = credentials
         self._send = send or _send
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.writes_enabled = writes_enabled
+        self.settings_enabled = settings_enabled
 
     def request(self, method, path, parameters=None, *, signed=False):
-        if method not in {"GET", "POST", "DELETE"} or path not in READ_ROUTES:
+        routes = SPOT_READ_ROUTES if self.market == "spot" else READ_ROUTES
+        mutations = {"/api/v3/order"} if self.market == "spot" else {"/fapi/v1/order", "/fapi/v1/algoOrder"}
+        if method not in {"GET", "POST", "DELETE"} or path not in routes:
             raise ValueError("invalid Demo API route")
+        if path == "/fapi/v1/leverage":
+            if method != "POST" or not signed:
+                raise ValueError("leverage settings require signed POST")
+            if not self.settings_enabled:
+                raise ExecutionUnavailable("Demo settings submission disabled")
         if method != "GET":
-            if not self.writes_enabled:
-                raise ExecutionUnavailable("Demo order submission disabled")
-            if not signed or path not in {"/fapi/v1/order", "/fapi/v1/algoOrder"}:
+            if not signed or path not in mutations and path != "/fapi/v1/leverage":
                 raise ValueError("Demo mutation outside order interface")
+            if path != "/fapi/v1/leverage" and not self.writes_enabled:
+                raise ExecutionUnavailable("Demo order submission disabled")
         values = dict(parameters or {})
         headers = {}
         if signed:
@@ -109,7 +128,8 @@ class DemoTransport:
             signature = hmac.new(self.credentials.api_secret.get_secret_value().encode(),
                                  encoded.encode(), hashlib.sha256).hexdigest()
             encoded += "&signature=" + signature
-        request = Request(DEMO_HOST + path + ("?" + encoded if encoded else ""),
+        host = SPOT_DEMO_HOST if self.market == "spot" else DEMO_HOST
+        request = Request(host + path + ("?" + encoded if encoded else ""),
                           headers=headers, method=method)
         try:
             result = self._send(request)
@@ -128,13 +148,17 @@ class DemoTransport:
 
 
 class BinanceDemoAdapter:
-    def __init__(self, transport: DemoTransport):
+    def __init__(self, transport: DemoTransport, *, symbol=SYMBOL, market_scoped=False):
+        if transport.market != "perp":
+            raise ValueError("USD-M adapter requires Perp Demo transport")
+        self.symbol = normalize_symbol(symbol)
+        self.market_scoped = market_scoped
         self.transport = transport
-        self.account_ref = transport.credentials.account_ref
+        self.account_ref = transport.credentials.account_ref.model_copy(update={"market": "perp"}) if market_scoped else transport.credentials.account_ref
 
     def _check(self, intent):
-        if intent.account != self.account_ref or intent.market != "perp" or intent.symbol != SYMBOL:
-            raise ValueError("Binance Demo adapter supports only its BTCUSDT Perp account")
+        if intent.account != self.account_ref or intent.market != "perp" or intent.symbol != self.symbol:
+            raise ValueError("Binance Demo adapter symbol, market or account mismatch")
 
     def _normalize(self, intent, response, *, algo=False):
         now = self.transport.clock()
@@ -142,7 +166,7 @@ class BinanceDemoAdapter:
         if client_id != intent.intent_id:
             raise ExecutionUnavailable("Demo order identity mismatch")
         if algo:
-            expected = {"symbol": SYMBOL, "side": intent.side, "positionSide": "BOTH",
+            expected = {"symbol": self.symbol, "side": intent.side, "positionSide": "BOTH",
                         "orderType": "STOP_MARKET", "workingType": "MARK_PRICE", "reduceOnly": True}
             if (any(response.get(name) != value for name, value in expected.items())
                     or Decimal(response["quantity"]) != intent.quantity
@@ -150,7 +174,7 @@ class BinanceDemoAdapter:
                 raise ExecutionUnavailable("Demo protective order differs from persisted intent")
         if algo and response.get("actualOrderId"):
             child = self.transport.request("GET", "/fapi/v1/order",
-                                           {"symbol": SYMBOL, "orderId": response["actualOrderId"]}, signed=True)
+                                           {"symbol": self.symbol, "orderId": response["actualOrderId"]}, signed=True)
             return self._regular_update(intent, child, now)
         status = response.get("algoStatus" if algo else "status", "UNKNOWN")
         if status in {"TRIGGERED", "FINISHED"}:
@@ -165,20 +189,32 @@ class BinanceDemoAdapter:
 
     def _regular_update(self, intent, response, now, status=None):
         executed = Decimal(response.get("executedQty", "0"))
-        if executed > intent.quantity or response.get("symbol", SYMBOL) != SYMBOL:
+        if executed > intent.quantity or response.get("symbol", self.symbol) != self.symbol:
             raise ExecutionUnavailable("Demo executed order differs from persisted intent")
+        if self.market_scoped and (
+            response.get("symbol") != self.symbol or response.get("side") != intent.side
+            or Decimal(response.get("origQty", "0")) != intent.quantity
+        ):
+            raise ExecutionUnavailable("Demo executed order identity mismatch")
         fills = ()
         if executed:
             trades = self.transport.request("GET", "/fapi/v1/userTrades",
-                                            {"symbol": SYMBOL, "orderId": response["orderId"], "limit": 1000}, signed=True)
+                                            {"symbol": self.symbol, "orderId": response["orderId"], "limit": 1000}, signed=True)
             if len(trades) >= 1000:
                 raise ExecutionUnavailable("Demo fill history requires operator reconciliation")
+            if self.market_scoped and any(
+                row.get("symbol") != self.symbol or row.get("side") != intent.side
+                or str(row.get("orderId")) != str(response["orderId"]) for row in trades
+            ):
+                raise ExecutionUnavailable("Demo fill identity mismatch")
             fills = tuple(ExecutionFill(
-                fill_id=f"{SYMBOL}:{row['id']}", quantity=Decimal(row["qty"]), price=Decimal(row["price"]),
+                fill_id=f"{self.symbol}:{row['id']}", quantity=Decimal(row["qty"]), price=Decimal(row["price"]),
                 commission=Decimal(row["commission"]), commission_asset=row["commissionAsset"],
                 realized_pnl=Decimal(row["realizedPnl"]),
                 filled_at=datetime.fromtimestamp(int(row["time"]) / 1000, timezone.utc),
             ) for row in trades if str(row["orderId"]) == str(response["orderId"]))
+            if self.market_scoped and sum((fill.quantity for fill in fills), Decimal(0)) != executed:
+                raise ExecutionUnavailable("Demo trade history does not yet confirm executions")
         status = status or response.get("status", "UNKNOWN")
         if status not in {"NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED", "EXPIRED"}:
             status = "UNKNOWN"
@@ -189,7 +225,7 @@ class BinanceDemoAdapter:
 
     def submit(self, intent: OrderIntent) -> OrderUpdate:
         self._check(intent)
-        values = {"symbol": SYMBOL, "side": intent.side, "positionSide": "BOTH",
+        values = {"symbol": self.symbol, "side": intent.side, "positionSide": "BOTH",
                   "quantity": format(intent.quantity, "f"), "reduceOnly": str(intent.reduce_only).lower()}
         algo = intent.order_type == "STOP_MARKET"
         if algo:
@@ -212,7 +248,7 @@ class BinanceDemoAdapter:
     def query(self, intent: OrderIntent) -> OrderUpdate | None:
         self._check(intent)
         algo = intent.order_type == "STOP_MARKET"
-        parameters = {"clientAlgoId": intent.intent_id} if algo else {"symbol": SYMBOL, "origClientOrderId": intent.intent_id}
+        parameters = {"clientAlgoId": intent.intent_id} if algo else {"symbol": self.symbol, "origClientOrderId": intent.intent_id}
         try:
             response = self.transport.request("GET", "/fapi/v1/algoOrder" if algo else "/fapi/v1/order",
                                               parameters, signed=True)
@@ -225,17 +261,19 @@ class BinanceDemoAdapter:
     def cancel(self, intent: OrderIntent) -> OrderUpdate:
         self._check(intent)
         algo = intent.order_type == "STOP_MARKET"
-        parameters = {"clientAlgoId": intent.intent_id} if algo else {"symbol": SYMBOL, "origClientOrderId": intent.intent_id}
+        parameters = {"clientAlgoId": intent.intent_id} if algo else {"symbol": self.symbol, "origClientOrderId": intent.intent_id}
         self.transport.request("DELETE", "/fapi/v1/algoOrder" if algo else "/fapi/v1/order", parameters, signed=True)
         return self.query(intent) or OrderUpdate(intent_id=intent.intent_id, status="UNKNOWN", received_at=self.transport.clock())
 
     def instrument(self, symbol: str) -> InstrumentRules:
-        if symbol != SYMBOL:
-            raise ValueError("only BTCUSDT supported for initial Demo rollout")
+        if symbol != self.symbol:
+            raise ValueError("Demo instrument differs from configured symbol")
         response = self.transport.request("GET", "/fapi/v1/exchangeInfo")
         row = next((item for item in response["symbols"] if item["symbol"] == symbol), None)
         if not row or row["status"] != "TRADING" or row["contractType"] != "PERPETUAL":
-            raise ExecutionUnavailable("BTCUSDT Perp unavailable in Demo")
+            raise ExecutionUnavailable("configured USDT Perp unavailable in Demo")
+        if self.market_scoped and (row.get("baseAsset") != symbol[:-4] or row.get("quoteAsset") != "USDT"):
+            raise ExecutionUnavailable("Demo instrument identity mismatch")
         filters = {item["filterType"]: item for item in row["filters"]}
         lot, market = filters["LOT_SIZE"], filters["MARKET_LOT_SIZE"]
         steps = [Decimal(item["stepSize"]) for item in (lot, market) if Decimal(item["stepSize"]) > 0]
@@ -248,15 +286,19 @@ class BinanceDemoAdapter:
             max_quantity=min(Decimal(lot["maxQty"]), Decimal(market["maxQty"])),
             min_notional=Decimal(filters["MIN_NOTIONAL"]["notional"]),
             price_tick=Decimal(filters["PRICE_FILTER"]["tickSize"]),
+            min_price=filters["PRICE_FILTER"].get("minPrice",0),
+            max_price=Decimal(filters["PRICE_FILTER"].get("maxPrice","0")) or None,
         )
 
     def quote(self, symbol: str, *, now: datetime) -> Quote:
-        if symbol != SYMBOL:
+        if symbol != self.symbol:
             raise ValueError("unsupported Demo symbol")
         book = self.transport.request("GET", "/fapi/v1/ticker/bookTicker", {"symbol": symbol})
         mark = self.transport.request("GET", "/fapi/v1/premiumIndex", {"symbol": symbol})
         now = self.transport.clock()
         for response in (book, mark):
+            if self.market_scoped and response.get("symbol") != self.symbol:
+                raise ExecutionUnavailable("Demo quote symbol mismatch")
             age = now.timestamp() - int(response["time"]) / 1000
             if not -2 <= age <= 20:
                 raise ExecutionUnavailable("stale Demo execution quote")
@@ -270,8 +312,8 @@ class BinanceDemoAdapter:
         if type(permission) is not bool:
             raise ExecutionUnavailable("Demo trading permission unavailable")
         positions = request("GET", "/fapi/v3/positionRisk", signed=True)
-        config = request("GET", "/fapi/v1/symbolConfig", {"symbol": SYMBOL}, signed=True)
-        setting = next(item for item in config if item["symbol"] == SYMBOL)
+        config = request("GET", "/fapi/v1/symbolConfig", {"symbol": self.symbol}, signed=True)
+        setting = next(item for item in config if item["symbol"] == self.symbol)
         dual = request("GET", "/fapi/v1/positionSide/dual", signed=True)["dualSidePosition"]
         multi = request("GET", "/fapi/v1/multiAssetsMargin", signed=True)["multiAssetsMargin"]
         orders = request("GET", "/fapi/v1/openOrders", signed=True)
@@ -282,7 +324,8 @@ class BinanceDemoAdapter:
             account=self.account_ref, wallet_balance=account["totalWalletBalance"],
             equity=account["totalMarginBalance"], available_balance=account["availableBalance"],
             positions=tuple(Position(symbol=row["symbol"], quantity=row["positionAmt"],
-                                     entry_price=row["entryPrice"], mark_price=row["markPrice"])
+                                     entry_price=row["entryPrice"], mark_price=row["markPrice"],
+                                     initial_margin=row.get("positionInitialMargin"))
                             for row in positions if Decimal(row["positionAmt"])),
             open_orders=tuple(OpenOrder(symbol=row["symbol"], client_id=row["clientOrderId"], order_type=row["type"])
                               for row in orders) + tuple(OpenOrder(symbol=row["symbol"], client_id=row["clientAlgoId"],
@@ -290,7 +333,35 @@ class BinanceDemoAdapter:
             can_trade=permission, one_way=not dual, single_asset=not multi,
             margin_mode=(setting["marginType"] if setting["isAutoAddMargin"] is False else "AUTO_ADD_MARGIN"),
             leverage=setting["leverage"], observed_at=self.transport.clock(),
+            symbol_settings={item["symbol"]: item for item in config},
         )
+
+    def leverage_limit(self, notional=Decimal(0)):
+        rows = self.transport.request("GET", "/fapi/v1/leverageBracket", {"symbol": self.symbol}, signed=True)
+        rows = rows if isinstance(rows, list) else [rows]
+        matches = [r for r in rows if r.get("symbol") == self.symbol]
+        if len(matches) != 1 or not notional.is_finite() or notional < 0:
+            raise ExecutionUnavailable("Perp leverage bracket unavailable")
+        row = matches[0]
+        coefficient = Decimal(str(row.get("notionalCoef", 1)))
+        if not coefficient.is_finite() or coefficient <= 0:
+            raise ExecutionUnavailable("invalid Perp leverage bracket coefficient")
+        for bracket in row["brackets"]:
+            floor, cap = Decimal(str(bracket["notionalFloor"]))*coefficient, Decimal(str(bracket["notionalCap"]))*coefficient
+            limit = bracket["initialLeverage"]
+            if not floor.is_finite() or not cap.is_finite() or type(limit) is not int or not 1 <= limit <= 125:
+                raise ExecutionUnavailable("invalid Perp leverage bracket")
+            if floor <= notional < cap:
+                return limit
+        raise ExecutionUnavailable("Perp notional exceeds venue leverage brackets")
+
+    def set_leverage(self, leverage):
+        if type(leverage) is not int or not 1 <= leverage <= 10:
+            raise ValueError("operator leverage must be an integer from 1 to 10")
+        result = self.transport.request("POST", "/fapi/v1/leverage",
+                                        {"symbol": self.symbol, "leverage": leverage}, signed=True)
+        if result.get("symbol") != self.symbol or type(result.get("leverage")) is not int or result["leverage"] != leverage:
+            raise ExecutionUnavailable("Perp leverage acknowledgement mismatch")
 
     def check_clock(self, *, now: datetime):
         server = self.transport.request("GET", "/fapi/v1/time")
@@ -300,7 +371,7 @@ class BinanceDemoAdapter:
 
     def funding_since(self, since: datetime, *, now: datetime) -> Decimal:
         response = self.transport.request("GET", "/fapi/v1/income", {
-            "symbol": SYMBOL, "incomeType": "FUNDING_FEE", "startTime": int(since.timestamp() * 1000),
+            "symbol": self.symbol, "incomeType": "FUNDING_FEE", "startTime": int(since.timestamp() * 1000),
             "endTime": int(now.timestamp() * 1000), "limit": 1000,
         }, signed=True)
         if len(response) >= 1000 or any(row["asset"] != "USDT" for row in response):

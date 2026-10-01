@@ -51,3 +51,24 @@ def test_run_does_not_accept_api_key_values_and_requires_source_and_file():
     parser = _parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["execution", "demo", "run", "--api-key", "bad-practice"])
+
+
+def test_multi_configuration_defaults_to_operator_selected_ten_percent_spot_stop():
+    args=_parser().parse_args(["execution","demo","configure","--source-database","source.sqlite",
+                              "--capital","1000","--spot-weight","DOGE=.5","--perp-weight","ETH=1"])
+    assert args.multi and args.spot_stop_percent==10
+    assert cli._weights(args.spot_weight)=={"DOGEUSDT":cli.Decimal(".5")}
+    with pytest.raises(ValueError): cli._weights(["ETH=.5","ETHUSDT=.5"])
+
+
+def test_multi_pause_without_exchange_or_source_access(monkeypatch,tmp_path,capsys):
+    path=tmp_path/"demo.sqlite"
+    account=AccountRef(venue="binance",environment="demo",account_id="test")
+    journal=ExecutionJournal(path)
+    journal.save_portfolio(account,{"enabled":True,"paused":False},now=datetime.now(timezone.utc),kind="fixture")
+    monkeypatch.setattr(cli.DemoCredentials,"load",lambda _:pytest.fail("must not read credentials"))
+    monkeypatch.setattr(IntradayStore,"__init__",lambda *_:pytest.fail("source initialized"))
+    monkeypatch.setattr(sys,"argv",["aigt","execution","demo","pause","--multi","--execution-database",str(path)])
+    main()
+    assert json.loads(capsys.readouterr().out)["status"]=="paused"
+    assert journal.portfolio(account)["paused"]

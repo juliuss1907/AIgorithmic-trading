@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Coin &amp; venues — AIGT</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/assets.js" defer></script>
+  <script src="/static/perp.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Đến nội dung chính</a>
+  <header class="masthead"><div><p class="eyebrow">AIGT / Demo &amp; Testnet</p><h1>Coin &amp; venues</h1></div>
+    <nav aria-label="Điều hướng chính"><a class="nav-link" href="/">Dashboard</a><a class="nav-link" href="/portfolio">Portfolio</a></nav>
+  </header>
+  <main id="main">
+    <section class="ledger" aria-labelledby="onboarding-heading">
+      <div class="section-head"><h2 id="onboarding-heading">Thêm coin → quét → chọn sàn</h2></div>
+      <p>Spot và Perp có cấu hình riêng. Chọn sàn không kích hoạt giao dịch; coin vẫn phải qua rule, replay và soak.</p>
+      {% if not controls_enabled %}<p role="note">Thao tác ghi đang tắt: cần cấu hình control token cho dashboard.</p>{% endif %}
+      <div class="asset-market-switch" role="group" aria-label="Chọn thị trường">
+        <button type="button" data-market="spot" aria-pressed="true">Spot USDT</button>
+        <button type="button" data-market="perp" aria-pressed="false">USD-M Perp USDT</button>
+      </div>
+      <form id="asset-form" class="asset-form">
+        <label>Coin<input id="asset-symbol" name="symbol" required maxlength="24" pattern="[A-Za-z0-9]+" placeholder="ETH hoặc ETHUSDT" autocomplete="off"></label>
+        <label>Kích thước quét<input id="asset-notional" name="notional" type="number" min="0.01" max="100000000" step="any" value="1000" required><small>Đơn vị quote của từng sàn, không phải số coin.</small></label>
+        <label>Control token<input id="control-token" type="password" autocomplete="off"><small>Không phải Binance API key; không lưu token trong trình duyệt.</small></label>
+        <button type="submit" {% if not controls_enabled %}disabled{% endif %}>Thêm &amp; quét</button>
+        <button id="asset-rescan" type="button" {% if not controls_enabled %}disabled{% endif %}>Quét lại coin đã thêm</button>
+      </form>
+      <p id="asset-message" role="status" aria-live="polite">Chọn Spot hoặc Perp, nhập coin rồi quét các adapter.</p>
+      <div class="table-wrap"><table><caption>Demo/Testnet — không dùng dữ liệu mainnet thay thế</caption>
+        <thead><tr><th scope="col">Sàn / môi trường</th><th scope="col">Thị trường / trạng thái</th><th scope="col">Volume 24h</th><th scope="col">Spread bps</th><th scope="col">Depth mua/bán 5 · 10 · 25 bps</th><th scope="col">Slippage mua/bán bps</th><th scope="col">Nhận lúc UTC+7</th><th scope="col">Lựa chọn</th></tr></thead>
+        <tbody id="venue-results"><tr><td colspan="8">Chưa có kết quả quét.</td></tr></tbody>
+      </table></div>
+      <p>Depth là snapshot, không phải cam kết khớp lệnh. Chỉ Binance Demo có adapter đặt lệnh trong bản này; các DEX chỉ cho xem.</p>
+    </section>
+    <section class="ledger" aria-labelledby="catalog-heading"><div class="section-head"><h2 id="catalog-heading">Coin đã đăng ký</h2></div>
+      <div class="table-wrap"><table><thead><tr><th scope="col">Coin</th><th scope="col">Lifecycle</th><th scope="col">Sàn được chọn</th></tr></thead><tbody id="asset-catalog"></tbody></table></div>
+    </section>
+    <section id="perp-controls" class="ledger" aria-labelledby="perp-heading" hidden>
+      <div class="section-head"><h2 id="perp-heading">Perp · tài khoản và leverage</h2></div>
+      <p>Chỉ Binance Demo. Đọc vị thế không nhận quản lý vị thế ngoài AIGT. Control token ở trên dùng để xác thực; không nhập API key Binance vào dashboard.</p>
+      <form id="perp-read-form" class="asset-form">
+        <label>Coin Perp<input id="perp-symbol" value="ETH" maxlength="24" pattern="[A-Za-z0-9]+" required autocomplete="off"></label>
+        <button type="submit">Xem thông tin</button>
+        <button id="perp-edit" type="button" disabled>Đổi leverage</button>
+      </form>
+      <p id="perp-message" role="status" aria-live="polite">Nhập control token và coin đã chọn sàn để đọc thông tin.</p>
+      <dl id="perp-summary" class="metric-rows"></dl>
+      <div class="table-wrap"><table><caption>Vị thế · unrealized PnL USDT theo mark price, chưa bao gồm phí/funding</caption>
+        <thead><tr><th scope="col">Side</th><th scope="col">Số lượng</th><th scope="col">Entry</th><th scope="col">Mark</th><th scope="col">Unrealized PnL</th><th scope="col">Quản lý</th></tr></thead>
+        <tbody id="perp-positions"><tr><td colspan="6">Chưa xác minh vị thế.</td></tr></tbody>
+      </table></div>
+    </section>
+    <dialog id="leverage-dialog" aria-labelledby="leverage-title">
+      <h2 id="leverage-title">Đổi leverage</h2>
+      <form id="leverage-form" class="asset-form">
+        <label>Leverage mong muốn (1–10x)<input id="leverage-value" type="number" min="1" max="10" step="1" value="3" required></label>
+        <button type="submit">Tiếp tục</button>
+        <button id="leverage-input-cancel" type="button">Cancel</button>
+      </form>
+      <div id="leverage-confirmation" hidden>
+        <p id="leverage-preview"></p>
+        <p>Chỉ thay đổi leverage. Không bật trading, tăng allocation hoặc đóng/hủy lệnh.</p>
+        <div class="asset-form"><button id="leverage-cancel" type="button">Cancel</button><button id="leverage-confirm" type="button">Confirm</button></div>
+      </div>
+    </dialog>
+  </main>
+  <footer><p>Execution mặc định tắt · thời gian hiển thị Asia/Ho_Chi_Minh · không tự chọn sàn hoặc rebalance.</p></footer>
+</body></html>

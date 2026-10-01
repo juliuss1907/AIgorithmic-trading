@@ -49,7 +49,7 @@ def test_asset_rule_registry_is_independent_and_btc_compatible(tmp_path):
     with sqlite3.connect(store.database) as connection:
         old = connection.execute("SELECT champion_id FROM scoped_rule_registry WHERE scope='spot_daily'").fetchone()
     assert old == (btc.rule_id,)
-    assert store.schema_version() == 22
+    assert store.schema_version() == 23
 
 
 def test_schema_v20_rule_registry_backfills_btc(tmp_path):
@@ -95,7 +95,7 @@ def test_schema_v20_rule_registry_backfills_btc(tmp_path):
     with sqlite3.connect(database) as connection:
         for table in ("scoped_rules", "scoped_rule_evaluations", "scoped_rule_soak_ticks"):
             assert "symbol" in {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
-    assert migrated.schema_version() == 22
+    assert migrated.schema_version() == 23
 
 
 def test_daily_candles_are_immutable_and_replay_requires_history(tmp_path):

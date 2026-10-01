@@ -150,6 +150,8 @@ from intraday.soak_report import (
 from intraday.upgrade_preflight import preflight_upgrade_backup
 from intraday.execution.cli import add_execution_parser, dispatch_execution
 from intraday.execution.connect import add_exchange_connect_parsers, dispatch_connect
+from intraday.execution.perp_cli import add_perp_parser, dispatch_perp
+from intraday.asset_onboarding import AssetOnboarding
 
 
 def _project_version() -> str:
@@ -166,6 +168,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command")
     add_execution_parser(commands)
+    add_perp_parser(commands)
     for name in (
         "doctor", "status", "collect", "news", "analysis", "run", "cross-venue-status",
         "cross-venue-replay", "cross-venue-evaluate",
@@ -181,6 +184,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.choices["cross-venue-evaluate"].add_argument("--evidence", required=True)
     serve = commands.add_parser("serve")
     serve.add_argument("--database", default=None)
+    serve.add_argument("--execution-database", type=Path, default=None, help="opt-in Perp controller journal; never exchange credentials")
     positions = commands.add_parser("positions")
     positions.add_argument("--database", default=None)
     assets = commands.add_parser("assets")
@@ -190,6 +194,23 @@ def _parser() -> argparse.ArgumentParser:
     assets_status = asset_commands.add_parser("status")
     assets_status.add_argument("symbol", nargs="?")
     assets_status.add_argument("--database", default=None)
+    for name in ("add", "scan"):
+        command = asset_commands.add_parser(name, help="scope-specific Demo/Testnet onboarding")
+        command.add_argument("symbol")
+        command.add_argument("--market", required=True, choices=["spot", "perp"])
+        command.add_argument("--notional", type=float, default=1000, help="size in each venue's quote currency")
+        command.add_argument("--database", default=None)
+        if name == "add":
+            command.add_argument("--no-scan", action="store_true", help="register shadow scope without public scan")
+    venue = asset_commands.add_parser("venue")
+    venue_commands = venue.add_subparsers(dest="asset_venue_command", required=True)
+    venue_set = venue_commands.add_parser("set")
+    venue_set.add_argument("symbol")
+    venue_set.add_argument("--market", required=True, choices=["spot", "perp"])
+    venue_set.add_argument("--venue", required=True, choices=["bnb", "hl", "aster", "variational", "lighter"])
+    venue_set.add_argument("--environment", required=True, choices=["demo", "testnet"])
+    venue_set.add_argument("--scan-id")
+    venue_set.add_argument("--database", default=None)
     assets_start_soak = asset_commands.add_parser("start-soak")
     assets_start_soak.add_argument("symbol")
     assets_start_soak.add_argument(
@@ -367,7 +388,7 @@ def _default_secrets_file() -> Path:
 
 
 def _asset_payload(store: IntradayStore, symbol: str) -> dict:
-    spec = asset_spec(symbol)
+    spec = store.asset_spec(symbol)
     lifecycles = store.list_asset_lifecycles(spec.symbol)
     return {
         "symbol": spec.symbol,
@@ -375,6 +396,7 @@ def _asset_payload(store: IntradayStore, symbol: str) -> dict:
         "quote_asset": spec.quote_asset,
         "capability": spec.capability.value,
         "stages": {item.scope.value: item.stage.value for item in lifecycles},
+        "execution_routes": AssetOnboarding(store).routes(spec.symbol),
         "venues": {
             "binance_spot": spec.binance_spot_symbol,
             "binance_perp": spec.binance_perp_symbol,
@@ -388,20 +410,53 @@ def _asset_payload(store: IntradayStore, symbol: str) -> dict:
 
 def _assets_cli(arguments) -> None:
     store = IntradayStore(resolve_database_path(arguments.database))
+    if arguments.assets_command in {"add", "scan", "venue"}:
+        service = AssetOnboarding(store)
+        now = datetime.now(timezone.utc)
+        try:
+            if arguments.assets_command == "venue":
+                scan_id = arguments.scan_id or service.scan(arguments.symbol, market=arguments.market, now=now)["id"]
+                result = service.select(arguments.symbol, market=arguments.market, venue=arguments.venue,
+                                        environment=arguments.environment, scan_id=scan_id, now=datetime.now(timezone.utc))
+            else:
+                result = {}
+                if arguments.assets_command == "add":
+                    result["asset"] = service.add(arguments.symbol, market=arguments.market, now=now)
+                if arguments.assets_command == "scan" or not arguments.no_scan:
+                    scan = service.scan(arguments.symbol, market=arguments.market, now=now, notional=arguments.notional)
+                    if arguments.assets_command == "scan":
+                        result = scan
+                    else:
+                        result["scan"] = scan
+                        if sys.stdin.isatty():
+                            print(json.dumps(scan, indent=2), flush=True)
+                            from prompt_toolkit import prompt
+                            choice = prompt("Choose Binance Demo [bnb], or Enter to leave unselected: ").strip().lower()
+                            if choice:
+                                if choice != "bnb":
+                                    raise ValueError("only verified Binance Demo execution can be selected")
+                                result["route"] = service.select(arguments.symbol, market=arguments.market, venue="bnb",
+                                                                environment="demo", scan_id=scan["id"], now=datetime.now(timezone.utc))
+            print(json.dumps(result, indent=2), flush=True)
+        except (ValueError, KeyError, TypeError) as error:
+            raise SystemExit(str(error) if isinstance(error, ValueError) else "asset configuration unavailable") from None
+        except (KeyboardInterrupt, EOFError):
+            raise SystemExit("onboarding canceled; no trading was activated") from None
+        return
     if arguments.assets_command == "list":
-        result = [_asset_payload(store, symbol) for symbol in ASSET_REGISTRY]
+        result = [_asset_payload(store, symbol) for symbol in store.asset_catalog()]
     elif arguments.assets_command == "status":
         result = (
             _asset_payload(store, arguments.symbol)
             if arguments.symbol
-            else [_asset_payload(store, symbol) for symbol in ASSET_REGISTRY]
+            else [_asset_payload(store, symbol) for symbol in store.asset_catalog()]
         )
     elif arguments.assets_command == "rules":
         command = arguments.asset_rules_command
         now = datetime.now(timezone.utc)
         try:
             if command == "status":
-                symbol = asset_spec(arguments.symbol).symbol
+                symbol = store.asset_spec(arguments.symbol).symbol
                 result = {
                     scope.value: {
                         "registry": store.scoped_rule_registry(scope, symbol=symbol),
@@ -835,7 +890,7 @@ def _portfolio_cli(arguments) -> None:
                 BinanceSpotDailyClient(),
                 quote_interval_seconds=config.order_book_interval_seconds,
             )
-            asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config)
+            asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config, store=store)
             interval = config.risk_interval_seconds
             background_started = False
             hyperliquid = (
@@ -1059,7 +1114,7 @@ def _portfolio_cli(arguments) -> None:
             BinanceSpotDailyClient(),
             quote_interval_seconds=config.order_book_interval_seconds,
         )
-        asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config)
+        asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config, store=store)
         interval = config.risk_interval_seconds
         hyperliquid = (
             _start_portfolio_hyperliquid(config) if not arguments.once else None
@@ -1488,18 +1543,21 @@ def _record_portfolio_hyperliquid(
             store.record_venue_frame(frame)
 
 
-def _new_asset_market_caches(config: IntradayConfig) -> tuple[dict, dict]:
-    symbols = tuple(symbol for symbol in ASSET_REGISTRY if symbol != "BTCUSDT")
+def _new_asset_market_caches(config: IntradayConfig, *, store=None) -> tuple[dict, dict]:
+    catalog = store.asset_catalog() if store else ASSET_REGISTRY
+    symbols = tuple(symbol for symbol in catalog if symbol != "BTCUSDT")
     perp = {
-        symbol: MultiCadenceMarketCache(BinanceUsdMClient())
-        for symbol in symbols
+        symbol: MultiCadenceMarketCache(BinanceUsdMClient(asset_catalog=catalog))
+        for symbol in symbols if catalog[symbol].binance_perp_symbol
+        and DecisionScope.PERP_INTRADAY in catalog[symbol].enabled_scopes
     }
     spot = {
         symbol: MultiTimeframeSpotCache(
-            BinanceSpotDailyClient(),
+            BinanceSpotDailyClient(asset_catalog=catalog),
             quote_interval_seconds=config.order_book_interval_seconds,
         )
-        for symbol in symbols
+        for symbol in symbols if catalog[symbol].binance_spot_symbol
+        and DecisionScope.SPOT_4H in catalog[symbol].enabled_scopes
     }
     return perp, spot
 
@@ -1514,8 +1572,16 @@ def _run_registered_asset_cycles(
     now: datetime,
 ) -> dict[str, str]:
     """Collect every registered asset with per-symbol failure isolation."""
+    # New registrations become visible without restarting the soak collector.
+    fresh_perp, fresh_spot = _new_asset_market_caches(config, store=store)
+    for existing, fresh in ((perp_markets, fresh_perp), (spot_markets, fresh_spot)):
+        for symbol in list(existing):
+            if symbol not in fresh:
+                del existing[symbol]
+        for symbol, market_cache in fresh.items():
+            existing.setdefault(symbol, market_cache)
     results = {}
-    for symbol in perp_markets:
+    for symbol in sorted(perp_markets.keys() | spot_markets.keys()):
         for scope, markets, interval in (
             (
                 DecisionScope.PERP_INTRADAY,
@@ -1524,6 +1590,8 @@ def _run_registered_asset_cycles(
             ),
             (DecisionScope.SPOT_4H, spot_markets, 14_400),
         ):
+            if symbol not in markets:
+                continue
             job = f"asset_{scope.value}_{symbol.lower()}"
             slot = claim_cadence(store, job, now, interval)
             if slot is None:
@@ -1574,10 +1642,14 @@ def _run_asset_rule_bootstrap_tick(
     spot_client: BinanceSpotDailyClient | None = None,
 ) -> dict[str, str]:
     """Idempotent daily baseline work; never promotes a rule or enables paper."""
-    spot_client = spot_client or BinanceSpotDailyClient()
+    spot_client = spot_client or BinanceSpotDailyClient(asset_catalog=store.asset_catalog())
     results = {}
-    for symbol in ASSET_REGISTRY:
+    for symbol, spec in store.asset_catalog().items():
         for scope in (DecisionScope.SPOT_4H, DecisionScope.PERP_INTRADAY):
+            if scope not in spec.enabled_scopes:
+                continue
+            if not (spec.binance_spot_symbol if scope is DecisionScope.SPOT_4H else spec.binance_perp_symbol):
+                continue
             if scope is DecisionScope.PERP_INTRADAY and symbol == "BTCUSDT":
                 continue  # Existing BTC Perp champion remains on its legacy lifecycle.
             if store.load_active_scoped_rule(scope, symbol=symbol):
@@ -1674,8 +1746,10 @@ def _run_asset_auto_proposal_tick(
     store: IntradayStore, *, client, now: datetime,
 ) -> dict[str, str]:
     results = {}
-    for symbol in ASSET_REGISTRY:
+    for symbol, spec in store.asset_catalog().items():
         for scope in (DecisionScope.SPOT_4H, DecisionScope.PERP_INTRADAY):
+            if scope not in spec.enabled_scopes:
+                continue
             job = f"asset_proposal_{scope.value}_{symbol.lower()}"
             slot = claim_cadence(store, job, now, 86_400)
             if slot is None:
@@ -1750,6 +1824,9 @@ def main() -> None:
         return
     if arguments.command == "execution":
         dispatch_execution(arguments)
+        return
+    if arguments.command == "perp":
+        dispatch_perp(arguments)
         return
     if arguments.command == "connect" and arguments.connect_role in {"bnb", "hl"}:
         dispatch_connect(arguments)
@@ -1970,6 +2047,7 @@ def main() -> None:
                 operator_action_token=config.operator_action_token,
                 operator_actions_enabled=config.operator_actions_enabled,
                 operator_request_ttl_seconds=config.operator_request_ttl_seconds,
+                execution_database=arguments.execution_database,
             ),
             host=config.dashboard_host,
             port=config.dashboard_port,

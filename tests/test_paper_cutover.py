@@ -65,7 +65,7 @@ def test_paper_worker_keeps_perp_running_without_spot_champion_or_1d_entries(
         lambda self, symbol, now: (_ for _ in ()).throw(StaleMarketData("4h unavailable")),
     )
     monkeypatch.setattr("intraday.__main__._new_asset_market_caches",
-                        lambda config: ({}, {}))
+                        lambda config, **kwargs: ({}, {}))
     monkeypatch.setattr(sys, "argv", [
         "aigt", "portfolio", "paper", "run", "--once", "--database", str(database),
     ])

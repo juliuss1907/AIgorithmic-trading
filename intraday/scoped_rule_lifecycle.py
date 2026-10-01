@@ -34,13 +34,13 @@ class ScopedRuleEvaluation(BaseModel):
     @field_validator("symbol")
     @classmethod
     def symbol_is_registered(cls, value: str) -> str:
-        from intraday.assets import asset_spec
-        return asset_spec(value).symbol
+        from intraday.assets import normalize_symbol
+        return normalize_symbol(value)
 
     @classmethod
     def create(cls, **values):
-        from intraday.assets import asset_spec
-        values["symbol"] = asset_spec(values.get("symbol", "BTCUSDT")).symbol
+        from intraday.assets import normalize_symbol
+        values["symbol"] = normalize_symbol(values.get("symbol", "BTCUSDT"))
         identity = hashlib.sha256(
             json.dumps(values, sort_keys=True, default=str, separators=(",", ":")).encode()
         ).hexdigest()[:32]

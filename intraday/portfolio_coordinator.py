@@ -145,6 +145,7 @@ class ParentPortfolioCoordinator:
         *,
         scope: DecisionScope,
         target_notional: float,
+        projected_isolated_margin_pct: float | None = None,
     ) -> PortfolioAuthorization:
         equity = state.equity
         current = (
@@ -217,7 +218,9 @@ class ParentPortfolioCoordinator:
 
         gross = (spot_target + abs(perp_target)) / equity
         net = abs(spot_target + perp_target) / equity
-        margin = abs(perp_target) / self.policy.leverage / equity
+        margin = abs(perp_target) / self.policy.leverage / equity if projected_isolated_margin_pct is None else projected_isolated_margin_pct
+        if not 0 <= margin < float("inf"):
+            raise ValueError("projected margin must be finite and nonnegative")
         if gross > self.policy.max_gross_exposure_pct + 1e-9:
             entry_reasons.append("gross_exposure_limit")
         if net > self.policy.max_abs_net_delta_pct + 1e-9:

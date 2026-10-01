@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -23,6 +23,12 @@ from intraday.dashboard_read_model import (
 from intraday.operator_service import build_operator_snapshot
 from intraday.portfolio_view import latest_parent_market_view
 from intraday.store import IntradayStore
+from intraday.asset_onboarding import AssetOnboarding
+from intraday.assets import spec_payload, ticker_symbol
+from intraday.execution.contracts import AccountRef
+from intraday.execution.journal import ExecutionJournal
+from intraday.execution.perp_control import LeveragePreview, queue_leverage_change, route_digest
+from intraday.execution.scoped_source import ScopedEvidenceSource
 
 
 ASSETS = Path(__file__).with_name("web_assets")
@@ -73,6 +79,23 @@ class OperatorActionCreateRequest(BaseModel):
     action: Literal["pause", "resume"]
 
 
+class AssetCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str = Field(min_length=1, max_length=24, pattern=r"^[A-Za-z0-9]+$")
+    market: Literal["spot", "perp"]
+
+
+class AssetScanRequest(AssetCreateRequest):
+    notional: float = Field(default=1000, gt=0, le=1e8, allow_inf_nan=False)
+
+
+class AssetVenueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    venue: Literal["bnb", "hl", "aster", "variational", "lighter"]
+    environment: Literal["demo", "testnet"]
+    scan_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
 def create_app(
     *,
     database: str | Path = "state/intraday/intraday.sqlite3",
@@ -82,6 +105,7 @@ def create_app(
     operator_action_token: str | None = None,
     operator_actions_enabled: bool = False,
     operator_request_ttl_seconds: int = 300,
+    execution_database: str | Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Crypto Intraday Control Room", version="0.1.0")
     store = IntradayStore(database)
@@ -91,6 +115,29 @@ def create_app(
     app.mount("/static", StaticFiles(directory=ASSETS / "static"), name="static")
     app.state.store = store
     app.state.cross_venue_mode = cross_venue_mode
+    onboarding = AssetOnboarding(store)
+    if execution_database is not None and Path(execution_database).resolve() == Path(database).resolve():
+        raise ValueError("execution journal must be separate from source database")
+
+    def execution_journal(*, writable=False):
+        if execution_database is None or not Path(execution_database).is_file():
+            raise HTTPException(503, "Perp control unavailable; start the opt-in settings controller")
+        return ExecutionJournal(Path(execution_database), read_only=not writable)
+
+    def perp_snapshot(symbol):
+        try:
+            journal = execution_journal()
+            symbol = ticker_symbol(symbol)
+            route = ScopedEvidenceSource(Path(database), symbol=symbol, market="perp").route()
+            items = [r for r in journal.perp_snapshots() if r["symbol"] == symbol]
+            if len(items) != 1:
+                raise HTTPException(409, "no unique account snapshot; select and connect the account")
+            info = dict(items[0])
+            age = (datetime.now(timezone.utc)-datetime.fromisoformat(info["observed_at"])).total_seconds()
+            info["stale"] = not -2 <= age <= 60 or (info["status"] == "verified" and info.get("route_digest") != route_digest(route))
+            return info
+        except (OSError, ValueError, KeyError, TypeError):
+            raise HTTPException(409, "Perp route or controller snapshot unavailable") from None
 
     if not 60 <= operator_request_ttl_seconds <= 900:
         raise ValueError("operator request TTL must be between 60 and 900 seconds")
@@ -338,6 +385,97 @@ def create_app(
                 else None
             ),
         }
+
+    @app.get("/assets", response_class=HTMLResponse)
+    def assets_page(request: Request):
+        return templates.TemplateResponse(request=request, name="assets.html", context={"controls_enabled":bool(control_token)})
+
+    @app.get("/api/assets")
+    def list_assets(market: Literal["spot", "perp"] | None = None):
+        scope = DecisionScope.SPOT_4H if market == "spot" else DecisionScope.PERP_INTRADAY
+        return {"assets":[{**spec_payload(spec),
+                           "stages":{s.scope.value:s.stage.value for s in store.list_asset_lifecycles(spec.symbol)},
+                           "execution_routes":onboarding.routes(spec.symbol)}
+                          for spec in store.asset_catalog().values()
+                          if market is None or scope in spec.enabled_scopes]}
+
+    @app.post("/api/assets", status_code=201)
+    def add_asset(body: AssetCreateRequest, _: None = Depends(require_control),
+                  idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")):
+        try:
+            return onboarding.add(body.symbol,market=body.market,now=datetime.now(timezone.utc),request_id=idempotency_key)
+        except ValueError as error:
+            raise HTTPException(409,str(error)) from None
+
+    @app.post("/api/asset-scans", status_code=202)
+    def scan_asset(body: AssetScanRequest, background: BackgroundTasks, _: None = Depends(require_control),
+                   idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")):
+        now=datetime.now(timezone.utc)
+        try:
+            report,started=onboarding.start_scan(body.symbol,market=body.market,now=now,notional=body.notional,request_id=idempotency_key)
+        except ValueError as error:
+            raise HTTPException(409,str(error)) from None
+        if started:
+            background.add_task(onboarding.complete_scan,report["id"],notional=body.notional,now=now)
+        return report
+
+    @app.get("/api/asset-scans/{scan_id}")
+    def asset_scan_report(scan_id: str):
+        try:
+            report=onboarding.report(scan_id)
+        except ValueError:
+            raise HTTPException(404,"unknown market scan") from None
+        if report["status"]=="running" and (datetime.now(timezone.utc)-datetime.fromisoformat(report["created_at"])).total_seconds()>20:
+            return {**report,"status":"failed","reason":"scan_expired_rescan_required"}
+        return report
+
+    @app.put("/api/assets/{symbol}/venues/{market}")
+    def select_asset_venue(symbol: str,market: Literal["spot","perp"],body: AssetVenueRequest,
+                          _: None = Depends(require_control),
+                          idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")):
+        try:
+            return onboarding.select(symbol,market=market,**body.model_dump(),now=datetime.now(timezone.utc),request_id=idempotency_key)
+        except ValueError as error:
+            raise HTTPException(409,str(error)) from None
+
+    @app.get("/api/perp/{symbol}")
+    def read_perp(symbol: str, response: Response, _: None = Depends(require_control)):
+        response.headers["Cache-Control"] = "no-store"
+        return perp_snapshot(symbol)
+
+    @app.post("/api/perp/{symbol}/leverage-requests", status_code=202)
+    def request_leverage(symbol: str, body: LeveragePreview, response: Response, _: None = Depends(require_control),
+                         idempotency_key: str = Header(alias="Idempotency-Key", min_length=4, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")):
+        journal = execution_journal(writable=True)
+        response.headers["Cache-Control"] = "no-store"
+        request_id = "perp:" + idempotency_key
+        # Replay a previously confirmed intent without requiring its preview to stay fresh.
+        if journal.settings_request(request_id) is None:
+            info = perp_snapshot(symbol)
+            expected = {"account":info["account"], "symbol":info["symbol"], "previous":info.get("actual_leverage"),
+                        "revision":info.get("setting_revision"), "route_digest":info.get("route_digest")}
+            if (info["status"] != "verified" or info["stale"] or info.get("change_blockers")
+                    or any(body.model_dump(mode="json")[k] != v for k,v in expected.items())):
+                raise HTTPException(409, "refresh the pair; controller unavailable, blocked or confirmation changed")
+        try:
+            route = ScopedEvidenceSource(Path(database), symbol=symbol, market="perp").route()
+            if body.symbol != route["symbol"]:
+                raise ValueError("pair mismatch")
+            return queue_leverage_change(journal, body.model_dump(mode="json"), request_id=request_id,
+                account=AccountRef.from_key(body.account), route=route, now=datetime.now(timezone.utc))
+        except (OSError, ValueError, KeyError, TypeError):
+            raise HTTPException(409, "confirmation conflict or expired; refresh or reconcile pending request") from None
+
+    @app.get("/api/perp/{symbol}/leverage-requests/{request_id}")
+    def read_leverage_request(symbol: str, request_id: str, response: Response, _: None = Depends(require_control)):
+        response.headers["Cache-Control"] = "no-store"
+        item = execution_journal().settings_request(request_id)
+        try:
+            if not item or item["symbol"] != ticker_symbol(symbol):
+                raise HTTPException(404, "unknown leverage request for pair")
+        except ValueError:
+            raise HTTPException(404, "unknown Perp pair") from None
+        return item
 
     @app.get("/api/operations")
     def operations():

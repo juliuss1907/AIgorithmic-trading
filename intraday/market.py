@@ -171,9 +171,11 @@ class BinanceUsdMClient:
         *,
         fetch_json: Callable[[str, dict], object] | None = None,
         timeout_seconds: float = 10,
+        asset_catalog=None,
     ):
         self.timeout_seconds = timeout_seconds
         self._fetch_json = fetch_json or self._http_get
+        self.asset_catalog = asset_catalog
 
     def _http_get(self, path: str, params: dict):
         if path not in ALLOWED_PATHS:
@@ -185,9 +187,11 @@ class BinanceUsdMClient:
         with urlopen(request, timeout=self.timeout_seconds) as response:
             return json.load(response)
 
-    @staticmethod
-    def _symbol(symbol: str) -> str:
-        return asset_spec(symbol).binance_perp_symbol
+    def _symbol(self, symbol: str) -> str:
+        spec = self.asset_catalog[symbol] if self.asset_catalog is not None else asset_spec(symbol)
+        if not spec.binance_perp_symbol:
+            raise ValueError("Perp market mapping unavailable")
+        return spec.binance_perp_symbol
 
     def candles(self, symbol: str = "BTCUSDT", *, interval: str = "1m", limit: int = 100):
         if interval not in {"1m", "5m", "15m", "1h"}:

@@ -55,7 +55,7 @@ def auto_propose_asset_rule(
     store, symbol: str, scope: DecisionScope, *, client, now: datetime,
 ) -> ScopedRuleCandidate | None:
     """One bounded proposal on fresh evidence; never touches registry promotion."""
-    symbol = asset_spec(symbol).symbol
+    symbol = store.asset_spec(symbol).symbol
     if scope not in {DecisionScope.SPOT_4H, DecisionScope.PERP_INTRADAY}:
         raise ValueError("auto proposals support spot_4h and perp_intraday only")
     if store.has_open_scoped_rule_candidate(scope, symbol=symbol):

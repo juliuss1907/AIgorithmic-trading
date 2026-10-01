@@ -57,7 +57,7 @@ def test_preflight_migrates_private_copy_preserves_rows_and_rehearses_restore(tm
 
     assert report["status"] == "pass"
     assert report["source_schema_version"] == 21
-    assert report["target_schema_version"] == 22
+    assert report["target_schema_version"] == 23
     assert report["checks"] == {
         "backup_verified": True,
         "migration_integrity": True,
@@ -131,12 +131,12 @@ def test_preflight_accepts_v22_backup_idempotently(tmp_path):
     report = preflight_upgrade_backup(backup)
 
     assert report["status"] == "pass"
-    assert report["source_schema_version"] == 22
+    assert report["source_schema_version"] == 23
     assert report["table_counts_before"]["asset_daily_candles"] == 1
 
 
 def test_preflight_rejects_unsupported_schema_before_migration(tmp_path):
-    backup = _backup(tmp_path, version=23)
+    backup = _backup(tmp_path, version=24)
 
     report = preflight_upgrade_backup(backup)
 

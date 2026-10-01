@@ -31,7 +31,7 @@ def bootstrap_asset_spot_rule(store, symbol: str, *, now: datetime,
     symbol = _require_eth_spot(symbol, SPOT)
     if store.load_active_scoped_rule(SPOT, symbol=symbol) or store.has_open_scoped_rule_candidate(SPOT, symbol=symbol):
         raise ValueError("asset already has a champion or open candidate")
-    client = client or BinanceSpotDailyClient()
+    client = client or BinanceSpotDailyClient(asset_catalog=store.asset_catalog())
     store.record_asset_daily_candles(symbol, client.candles(symbol=symbol, limit=1000, now=now))
     candidate = ScopedRuleCandidate.create(
         rule_id=f"{symbol.lower()}-spot-baseline-v1", parent_rule_id="bootstrap",

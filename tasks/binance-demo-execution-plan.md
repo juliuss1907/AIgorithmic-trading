@@ -88,6 +88,84 @@ write, trading activation, leverage mutation, key rotation, push or VPS deploy i
 authorized by this follow-up. Clear/Replace are operator-confirmed future actions;
 implementation tests use temporary synthetic credentials only.
 
+## Follow-up: multi-asset Spot/Perp Demo (approved 2026-09-30)
+
+Implement the approved multi-asset plan in independently verified slices. Do not
+overwrite unrelated global plan/todo items. No VPS deploy, push, order smoke or
+trading activation is authorized during implementation.
+
+- [x] Persistent dynamic catalog; independent Spot/Perp onboarding and mappings.
+- [x] Demo/Testnet-only discovery with volume, spread, depth and size impact;
+  all existing venues visible, only Binance Demo execution selectable.
+- [x] Multi-symbol USD-M adapter and Spot balances/filters/fills/native stops.
+- [x] Shared allocation and multi-route runtime; per-symbol evidence gates,
+  managed-only Spot inventory, durable unknown-order reconciliation.
+- [x] CLI and authenticated dashboard wizard with idempotent writes and UTC+7.
+- [x] Migration preservation, regression/security/browser tests, build/runbook.
+
+Defaults: Spot USDT and USD-M USDT perpetual; Spot 60% / Perp 40%, effective
+notional caps 30% / 20% of total operator capital. Manual coin weights. Spot
+long-only, pre-existing inventory excluded. Perp isolated 3x. Keep existing rule,
+replay and soak gates; no mainnet fallback and no automatic activation/rebalance.
+
+Slice 1: persistent v23 catalog and registration-aware services/collectors. Symbol
+models validate syntax; database boundaries validate membership. Existing static
+constants remain seed/legacy defaults, not runtime authority. Verification:
+633 tests passed; old candles/checksums/soak migration and upgrade rehearsal pass.
+
+Slice 2: Demo/Testnet discovery, authenticated async scan API, idempotent separate
+Spot/Perp add/select flows and `/assets` dashboard. Verification: 642 tests passed,
+wheel/source build and desktop Chrome visual smoke passed. Public ETH Spot scan
+confirmed Binance and Aster testnet listing; Lighter Spot has an empty testnet book,
+so liquidity stays N/A, not invented. Full native browser selection automation
+was initially interrupted after a stalled DevTools input operation. A subsequent
+isolated Chrome native-input run passed add/scan/select, independent Spot/Perp tabs,
+320/768/1440px layouts and zero JavaScript exceptions using synthetic data/token.
+No signed live request, activation, order, push or deploy.
+
+Slices 3/4: configurable USD-M symbols, distinct Spot account/transport/contracts,
+actual fill and native fee accounting, owned-only Spot inventory, serialized shared
+allocation and multi-route execution. Manual route activation verifies exact
+symbol/scope champion/replay/soak and primary model provenance. User selected Spot
+emergency stop **10%**; Donchian exits and parent loss/exposure limits are unchanged.
+Legacy source/journal rows remain preserved; multi configuration requires paused,
+flat/reconciled legacy execution and blocks concurrent legacy BTC activation.
+Key Replace/Clear checks all account namespaces and both market read capabilities.
+
+Slice 5: optional non-started Docker `demo` profile with read-only source/key mounts,
+separate writable journal, no worker dependencies/restart, non-root UID/GID,
+read-only root and no capabilities. Compose configuration validated without reading
+service environment files. Runbook covers onboarding, weights, per-route gates,
+manual activation/recovery and host/container path identity.
+
+Final local verification: `uv run pytest -q` **670 passed** with 18 pre-existing
+dependency deprecation warnings; wheel/source build and compile checks passed.
+Native Chrome input verified the wizard with synthetic data at 320/768/1440px.
+Docker Compose config validated with `/dev/null` env file and `--no-env-resolution`;
+no environment secret file was read. No credentialed request, real Demo order,
+trading activation, VPS operation, push or merge occurred in this follow-up.
+Changes are locally committed on `feature/binance-demo-multi-asset`.
+
+Follow-up read-only verification: fixed Spot account parsing for the Unicode
+balance identifiers returned by Binance Demo without changing executable symbol
+validation or adopting seeded inventory. The two account-snapshot regression
+cases failed before the fix; the full suite now passes **692 tests** with the
+same 18 dependency warnings. Credentialed GET-only probes report both Spot and
+Perp connected, no open orders, and no Perp positions. Spot available USDT is
+5000; BTC Perp remains isolated **5x**, so the required **3x** must still be set
+manually before activation. Credentials are unchanged and no execution journal
+was created. Write permission, real order/stop behavior, activation and VPS
+deployment remain unverified/not performed.
+
+Acceptance boundary: implementation/fake-exchange tests do not prove a real Demo
+key's write permission or exchange native-stop/fill behavior. Supervised Demo
+order/protection/close acceptance remains a separate operator-authorized step.
+Unknown Spot submissions are not inferred from seeded exchange balances; reconcile
+the actual order first. Base-fee dust below exchange filters and third-asset fees
+are preserved and pause for reconciliation, not silently adopted/sold or valued.
+
+## Prior connect wizard verification (before the multi-asset follow-up)
+
 Verification: **629 tests passed** (18 existing dependency deprecation warnings),
 wheel/source build succeeded. Existing local Demo key passed nine guarded GET
 requests including accountConfig; credentials unchanged, 5000 USDT, no positions

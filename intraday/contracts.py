@@ -118,12 +118,11 @@ class FeatureSnapshot(StrictContract):
     @field_validator("symbol")
     @classmethod
     def registered_symbol(cls, value: str) -> str:
-        # Imported lazily because the asset registry uses DecisionScope from this
-        # contract module. Keeping the dependency here avoids broadening all symbol
-        # strings while the rollout remains explicitly registry-gated.
-        from intraday.assets import asset_spec
+        # Syntax validation is lazy to avoid a cycle. Services/stores separately
+        # validate membership against their own persistent dynamic catalog.
+        from intraday.assets import normalize_symbol
 
-        return asset_spec(value).symbol
+        return normalize_symbol(value)
 
     @model_validator(mode="after")
     def valid_market_state(self):
@@ -196,9 +195,9 @@ class FeatureSnapshot(StrictContract):
         freshness: dict[str, bool],
         quality_flags: tuple[str, ...] = (),
     ) -> "FeatureSnapshot":
-        from intraday.assets import asset_spec
+        from intraday.assets import normalize_symbol
 
-        symbol = asset_spec(symbol).symbol
+        symbol = normalize_symbol(symbol)
         checksum = cls._checksum_for(
             symbol=symbol,
             market=market,
@@ -462,9 +461,9 @@ class VenueMarketFrame(StrictContract):
     @field_validator("symbol")
     @classmethod
     def registered_venue_symbol(cls, value: str) -> str:
-        from intraday.assets import asset_spec
+        from intraday.assets import normalize_symbol
 
-        return asset_spec(value).symbol
+        return normalize_symbol(value)
 
     @model_validator(mode="after")
     def valid_frame(self):
@@ -491,9 +490,9 @@ class VenueMarketFrame(StrictContract):
 
     @classmethod
     def create(cls, **values) -> "VenueMarketFrame":
-        from intraday.assets import asset_spec
+        from intraday.assets import normalize_symbol
 
-        values["symbol"] = asset_spec(values.get("symbol", "BTCUSDT")).symbol
+        values["symbol"] = normalize_symbol(values.get("symbol", "BTCUSDT"))
         payload = {"schema_version": "1", **values}
         checksum = cls._checksum_for(payload)
         return cls(frame_id=checksum[:24], checksum=checksum, **values)
@@ -520,9 +519,9 @@ class ExternalObservation(StrictContract):
     def registered_observation_symbol(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        from intraday.assets import asset_spec
+        from intraday.assets import normalize_symbol
 
-        return asset_spec(value).symbol
+        return normalize_symbol(value)
 
     @model_validator(mode="after")
     def valid_observation(self):
@@ -550,9 +549,9 @@ class ExternalObservation(StrictContract):
     @classmethod
     def create(cls, **values) -> "ExternalObservation":
         if values.get("symbol") is not None:
-            from intraday.assets import asset_spec
+            from intraday.assets import normalize_symbol
 
-            values["symbol"] = asset_spec(values["symbol"]).symbol
+            values["symbol"] = normalize_symbol(values["symbol"])
         payload = {"schema_version": "1", **values}
         checksum = cls._checksum_for(payload)
         return cls(observation_id=checksum[:24], checksum=checksum, **values)
@@ -909,8 +908,8 @@ class ScopedRuleCandidate(StrictContract):
     @field_validator("symbol")
     @classmethod
     def symbol_is_registered(cls, value: str) -> str:
-        from intraday.assets import asset_spec
-        return asset_spec(value).symbol
+        from intraday.assets import normalize_symbol
+        return normalize_symbol(value)
 
     @model_validator(mode="after")
     def parameters_match_scope(self):
@@ -925,8 +924,8 @@ class ScopedRuleCandidate(StrictContract):
 
     @classmethod
     def create(cls, **values) -> "ScopedRuleCandidate":
-        from intraday.assets import asset_spec
-        values["symbol"] = asset_spec(values.get("symbol", "BTCUSDT")).symbol
+        from intraday.assets import normalize_symbol
+        values["symbol"] = normalize_symbol(values.get("symbol", "BTCUSDT"))
         payload = {
             key: (value.model_dump(mode="json") if isinstance(value, BaseModel) else value)
             for key, value in values.items()

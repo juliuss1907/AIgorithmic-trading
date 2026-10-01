@@ -16,7 +16,7 @@ PERP_ROUND_TRIP_COST_PCT = 0.10
 
 
 def bootstrap_perp_rule(store, symbol: str, *, now: datetime) -> ScopedRuleCandidate:
-    symbol = asset_spec(symbol).symbol
+    symbol = store.asset_spec(symbol).symbol
     if store.load_active_scoped_rule(SCOPE, symbol=symbol):
         raise ValueError("asset already has a Perp champion")
     if store.has_open_scoped_rule_candidate(SCOPE, symbol=symbol):
