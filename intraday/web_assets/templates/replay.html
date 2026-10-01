@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="vi"><head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark"><link rel="icon" href="data:,">
+  <title>Replay v2 — AIGT</title><link rel="stylesheet" href="/static/app.css">
+</head><body>
+  <a class="skip-link" href="#main">Đến nội dung chính</a>
+  <header class="masthead"><div><p class="eyebrow">AIGT / Offline research / Read-only</p><h1>Replay v2</h1></div>
+    <nav aria-label="Điều hướng chính"><a class="nav-link" href="/">Dashboard</a><a class="nav-link" href="/assets">Coin &amp; venues</a></nav>
+  </header>
+  <main id="main">
+    <section class="ledger" aria-labelledby="reports-heading">
+      <div class="section-head"><h2 id="reports-heading">Report nghiên cứu đã lưu</h2><small>{{ listing.total }} run · UTC+7</small></div>
+      <p>Chỉ đọc kết quả offline. Không gọi model, đặt lệnh, sửa soak hay cấp quyền trading. Gate v1 vẫn giữ nguyên.</p>
+      <p>Chạy bằng CLI: <code>aigt replay run ETH --market spot --rule RULE_ID --from ISO_TIME --to ISO_TIME</code></p>
+      {% if listing['items'] %}
+      <div class="table-wrap" tabindex="0" aria-label="Bảng replay, cuộn ngang để xem đủ cột"><table>
+        <caption>Net PnL để trống khi thiếu funding hoặc dữ liệu tính toán. Chi phí là giả định profile, không phải phí account đã xác minh.</caption>
+        <thead><tr><th scope="col">Coin / thị trường</th><th scope="col">Lưu lúc UTC+7</th><th scope="col">Dữ liệu</th><th scope="col">PnL sau chi phí đã biết</th><th scope="col">Net PnL</th><th scope="col">Drawdown đã biết</th><th scope="col">Trades</th><th scope="col">Report</th></tr></thead>
+        <tbody>{% for item in listing['items'] %}<tr>
+          <td>{{ item.symbol }} · {{ item.market|upper }}</td><td><time datetime="{{ item.created_at }}">{{ item.created_at|vn_time }}</time></td>
+          <td>{{ item.status }} · {{ item.limitations|length }} giới hạn</td>
+          <td>{{ "%.4f"|format(item.summary.pnl_after_known_costs) }} USDT</td>
+          <td>{% if item.summary.net_pnl is not none %}{{ "%.4f"|format(item.summary.net_pnl) }} USDT{% else %}— chưa đủ dữ liệu{% endif %}</td>
+          <td>{{ "%.2f"|format(item.summary.max_drawdown_known_pct) }}%</td><td>{{ item.summary.closed_trades }}</td>
+          <td><a class="nav-link" href="/replay/{{ item.run_id }}">Xem {{ item.symbol }} {{ item.market }}</a></td>
+        </tr>{% endfor %}</tbody>
+      </table></div>
+      {% else %}<p role="status">Chưa có report trong trang này. Chạy CLI với database nguồn và report directory phù hợp.</p>{% endif %}
+      <nav class="replay-pagination" aria-label="Phân trang report">
+        {% if listing.offset > 0 %}<a class="nav-link" href="/replay?offset={{ [0,listing.offset-listing.limit]|max }}&amp;limit={{ listing.limit }}">Trang trước</a>{% endif %}
+        {% if listing.offset+listing.limit < listing.total %}<a class="nav-link" href="/replay?offset={{ listing.offset+listing.limit }}&amp;limit={{ listing.limit }}">Trang sau</a>{% endif %}
+      </nav>
+    </section>
+  </main><footer><p>Research-only · không mô phỏng đầy đủ sàn · lịch sử hiển thị Asia/Ho_Chi_Minh, risk day UTC.</p></footer>
+</body></html>

@@ -10,7 +10,7 @@ v1 gates, soak or execution acceptance; no activation, VPS deploy or API keys.
 - [x] Spot ledger: next open, ATR/allocation, Donchian/10% stop, portfolio guard.
 - [x] Perp ledger: recorded decisions, quotes, isolated margin, stop/funding.
 - [x] Atomic artifacts and separate replay CLI namespace/Docker routing.
-- [ ] Read-only dashboard/API, UTC+7 display, documented limitations.
+- [x] Read-only dashboard/API, UTC+7 display, documented limitations.
 - [ ] Regression, money/provenance/security/browser checks and local commits.
 
 Defaults: 1000 USDT, weight 1, Spot cap 30%, Perp cap 20%, leverage 3;

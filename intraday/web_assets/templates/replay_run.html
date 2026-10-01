@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="vi"><head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark"><link rel="icon" href="data:,">
+  <title>{{ report.config.symbol }} {{ report.config.market }} replay — AIGT</title><link rel="stylesheet" href="/static/app.css">
+</head><body>
+  <a class="skip-link" href="#main">Đến nội dung chính</a>
+  <header class="masthead"><div><p class="eyebrow">{{ report.evaluator_version }} / Binance offline profile / {{ report.status }}</p><h1>{{ report.config.symbol }} · {{ report.config.market|upper }}</h1></div>
+    <nav aria-label="Điều hướng chính"><a class="nav-link" href="/replay">Replay v2</a><a class="nav-link" href="/">Dashboard</a></nav>
+  </header>
+  <main id="main">
+    <section class="ledger replay-intro" aria-labelledby="summary-heading">
+      <div class="section-head"><h2 id="summary-heading">Tài khoản mô phỏng · không phải vị thế Demo</h2></div>
+      <p>Report nghiên cứu riêng; không phải evaluation ID của gate v1, không cấp quyền trading hoặc thay đổi champion/soak.</p>
+      <p>Window UTC+7: <time datetime="{{ report.config.start }}">{{ report.config.start|vn_time }}</time> → <time datetime="{{ report.config.end }}">{{ report.config.end|vn_time }}</time>. Risk day dùng UTC.</p>
+      <div class="strip operations-strip">
+        <article><h3>Net PnL</h3><strong>{% if report.summary.net_pnl is not none %}{{ "%.4f"|format(report.summary.net_pnl) }}{% else %}Chưa xác định{% endif %}</strong><small>USDT · {% if report.summary.funding_complete %}funding đủ coverage khai báo{% else %}funding chưa đủ, không mặc định 0{% endif %}</small></article>
+        <article><h3>PnL sau chi phí đã biết</h3><strong>{{ "%.4f"|format(report.summary.pnl_after_known_costs) }}</strong><small>USDT · {{ "%.3f"|format(report.summary.return_after_known_costs_pct) }}%</small></article>
+        <article><h3>Drawdown đã biết</h3><strong>{{ "%.2f"|format(report.summary.max_drawdown_known_pct) }}%</strong><small>ES theo ngày UTC: {% if report.summary.daily_expected_shortfall_known_pct is not none %}{{ "%.2f"|format(report.summary.daily_expected_shortfall_known_pct) }}%{% else %}—{% endif %} · {{ report.summary.daily_return_samples }} mẫu</small></article>
+        <article><h3>Vốn / chi phí gộp</h3><strong>{{ report.config.capital }} USDT</strong><small>{{ "%.4f"|format(report.summary.execution_cost_known) }} USDT chi phí · {{ "%.4f"|format(report.summary.funding_paid_known) }} funding đã biết</small></article>
+        <article><h3>Vị thế / risk guard</h3><strong>{{ report.summary.closed_trades }} trades</strong><small>Open qty {{ report.summary.open_quantity }} · {% if report.summary.halted %}HALTED: {{ report.summary.halt_reason }}{% else %}Không chạm loss guard{% endif %}</small></article>
+      </div>
+    </section>
+    <section class="ledger" aria-labelledby="equity-heading">
+      <div class="section-head"><h2 id="equity-heading">Equity · sau chi phí đã biết</h2><small>Exposure max {{ "%.2f"|format(report.summary.max_exposure_pct) }}% · margin max {{ "%.2f"|format(report.summary.max_isolated_margin_pct) }}%</small></div>
+      {% if chart %}
+      <p class="replay-scale">Thang equity: {{ "%.2f"|format(chart.minimum) }}–{{ "%.2f"|format(chart.maximum) }} USDT. Preview tối đa 200 điểm; ledger đầy đủ được lưu riêng.</p>
+      <svg class="replay-chart" viewBox="0 0 1000 200" preserveAspectRatio="none" role="img" aria-labelledby="equity-heading equity-desc">
+        <desc id="equity-desc">Equity mô phỏng, không bao gồm funding còn thiếu. Thang giá được ghi bên trên.</desc>
+        <polyline points="{{ chart.plot }}" fill="none" stroke="currentColor" stroke-width="2" vector-effect="non-scaling-stroke" />
+      </svg>
+      <div class="replay-timeline"><time datetime="{{ chart.first_at }}">{{ chart.first_at|vn_time }}</time><time datetime="{{ chart.last_at }}">{{ chart.last_at|vn_time }}</time></div>
+      {% else %}<p role="status">Chưa có dữ liệu equity hợp lệ.</p>{% endif %}
+    </section>
+    <section class="ledger" aria-labelledby="assumptions-heading">
+      <div class="section-head"><h2 id="assumptions-heading">Giả định &amp; giới hạn</h2></div>
+      <p>Profile {{ report.config.profile.profile_id }} v{{ report.config.profile.version }} · giả định {{ report.config.profile.spot_cost_bps if report.config.market == 'spot' else report.config.profile.perp_cost_bps }} bps mỗi chiều, không phải phí account đã xác minh.</p>
+      <p>{% if report.config.market == 'spot' %}Donchian rule-only · ATR sizing · cap 30% vốn · stop khẩn cấp 10%, Donchian exit riêng.{% else %}Jev đã lưu · cap 20% vốn · isolated {{ report.config.leverage }}x; leverage không nhân notional/PnL.{% endif %} Daily loss 1,5% / drawdown 8%.</p>
+      <ul>{% for reason in report.limitations %}<li>{{ reason }}</li>{% endfor %}</ul>
+      <p>Không mô phỏng order-book, partial fill, API lỗi, liquidation chính xác hoặc danh mục nhiều coin.</p>
+      <details><summary>Provenance và cấu hình</summary><pre class="replay-config">{{ report.inputs|tojson(indent=2) }}</pre><pre class="replay-config">{{ report.config|tojson(indent=2) }}</pre></details>
+      <details><summary>Gate v1 · chỉ tham chiếu, khác phương pháp</summary><pre class="replay-config">{{ report.v1_reference|tojson(indent=2) }}</pre></details>
+    </section>
+    <section class="ledger" aria-labelledby="trades-heading">
+      <div class="section-head"><h2 id="trades-heading">Trades · {{ trades.total }}</h2></div>
+      <div class="table-wrap" tabindex="0" aria-label="Bảng giao dịch, cuộn ngang để xem đủ cột"><table>
+        <caption>Thời gian UTC+7; intrabar Spot là thời điểm ước tính ở mức nến. PnL là phần sau chi phí đã biết.</caption>
+        <thead><tr><th scope="col">Entry</th><th scope="col">Exit</th><th scope="col">Side / quantity</th><th scope="col">Giá vào / ra</th><th scope="col">PnL đã biết</th><th scope="col">Lý do exit</th></tr></thead>
+        <tbody>{% for trade in trades['items'] %}<tr><td>{{ trade.entered_at|vn_time }}</td><td>{{ trade.closed_at|vn_time }}</td><td>{{ trade.side }} · {{ trade.quantity }}</td><td>{{ trade.entry_price }} / {{ trade.exit_price }}</td><td>{{ trade.net_known_pnl }} USDT</td><td>{{ trade.exit_reason }}</td></tr>{% else %}<tr><td colspan="6">Chưa có closed trade.</td></tr>{% endfor %}</tbody>
+      </table></div>
+      <nav class="replay-pagination" aria-label="Phân trang trades">
+        {% if trades.offset > 0 %}<a class="nav-link" href="?trades_offset={{ [0,trades.offset-trades.limit]|max }}&amp;events_offset={{ events.offset }}#trades-heading">Trades trước</a>{% endif %}
+        {% if trades.offset+trades.limit < trades.total %}<a class="nav-link" href="?trades_offset={{ trades.offset+trades.limit }}&amp;events_offset={{ events.offset }}#trades-heading">Trades sau</a>{% endif %}
+      </nav>
+    </section>
+    <section class="ledger" aria-labelledby="events-heading">
+      <div class="section-head"><h2 id="events-heading">Event ledger · {{ events.total }}</h2></div>
+      <div class="table-wrap" tabindex="0" aria-label="Event ledger, cuộn ngang để xem đủ cột"><table>
+        <caption>Entry, close, funding, halt và quyết định bị chặn/không thực hiện.</caption>
+        <thead><tr><th scope="col">UTC+7</th><th scope="col">Event</th><th scope="col">Reason</th><th scope="col">Quantity</th><th scope="col">Cash</th><th scope="col">Equity đã biết</th></tr></thead>
+        <tbody>{% for event in events['items'] %}<tr><td>{{ event.at|vn_time }}</td><td>{{ event.kind }}</td><td>{{ event.reason }}</td><td>{{ event.quantity }}</td><td>{{ event.cash }}</td><td>{{ event.equity_known }}</td></tr>{% else %}<tr><td colspan="6">Chưa có sự kiện.</td></tr>{% endfor %}</tbody>
+      </table></div>
+      <nav class="replay-pagination" aria-label="Phân trang events">
+        {% if events.offset > 0 %}<a class="nav-link" href="?events_offset={{ [0,events.offset-events.limit]|max }}&amp;trades_offset={{ trades.offset }}#events-heading">Events trước</a>{% endif %}
+        {% if events.offset+events.limit < events.total %}<a class="nav-link" href="?events_offset={{ events.offset+events.limit }}&amp;trades_offset={{ trades.offset }}#events-heading">Events sau</a>{% endif %}
+      </nav>
+    </section>
+  </main><footer><p>Run {{ report.run_id }} · UTC+7 display / UTC calculations · không thay đổi tài khoản, rule hoặc evidence.</p></footer>
+</body></html>

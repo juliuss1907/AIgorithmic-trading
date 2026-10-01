@@ -27,6 +27,8 @@ from intraday.store import IntradayStore
 from intraday.asset_onboarding import AssetOnboarding
 from intraday.assets import spec_payload, ticker_symbol
 from intraday.asset_readiness import build_asset_readiness
+from intraday.replay_v2.artifacts import resolve_report_dir
+from intraday.replay_v2.web import replay_router
 from intraday.execution.contracts import AccountRef
 from intraday.execution.journal import ExecutionJournal
 from intraday.execution.perp_control import LeveragePreview, queue_leverage_change, route_digest
@@ -108,12 +110,14 @@ def create_app(
     operator_actions_enabled: bool = False,
     operator_request_ttl_seconds: int = 300,
     execution_database: str | Path | None = None,
+    replay_report_dir: str | Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Crypto Intraday Control Room", version="0.1.0")
     store = IntradayStore(database)
     templates = Jinja2Templates(directory=ASSETS / "templates")
     templates.env.filters["vn_time"] = _vn_time
     templates.env.filters["duration"] = _duration
+    app.include_router(replay_router(resolve_report_dir(replay_report_dir), templates))
     app.mount("/static", StaticFiles(directory=ASSETS / "static"), name="static")
     app.state.store = store
     app.state.cross_venue_mode = cross_venue_mode

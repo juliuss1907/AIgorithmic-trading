@@ -73,6 +73,16 @@ nav { display: flex; align-items: center; gap: 1rem; }
 .nav-link { color: var(--muted); text-underline-offset: 0.25rem; }
 .nav-link:hover { color: var(--ink); }
 
+.replay-intro { padding-bottom: 0; }
+.replay-intro .strip h3 { margin: 0; color: var(--muted); font-size: 0.75rem; font-weight: 600; }
+.replay-chart { display: block; width: 100%; height: 16rem; color: var(--signal); border: 1px solid var(--line); }
+.replay-scale, .replay-timeline { color: var(--muted); font-size: 0.875rem; }
+.replay-timeline, .replay-pagination { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
+.replay-config { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.875rem; }
+.replay-intro p, .replay-intro code { overflow-wrap: anywhere; }
+summary { cursor: pointer; padding-block: 0.5rem; }
+summary:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
 .strip { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--line); }
 .strip article { min-width: 0; padding: 1.25rem 1rem 1.25rem 0; }
 .strip article + article { padding-left: 1rem; border-left: 1px solid var(--line); }
