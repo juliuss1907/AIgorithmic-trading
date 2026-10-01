@@ -14,7 +14,7 @@
 .asset-form label { display: grid; gap: 0.25rem; max-width: 100%; }
 .asset-form input { max-width: 100%; padding: 0.5rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); }
 .asset-form small, #venue-results small { display: block; max-width: 18rem; white-space: normal; color: var(--muted); }
-.asset-market-switch button, .asset-form button, #venue-results button { padding: 0.5rem 0.75rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
+.asset-market-switch button, .asset-form button, #venue-results button, #readiness-refresh { padding: 0.5rem 0.75rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
 .asset-market-switch button[aria-pressed="true"] { background: var(--signal); color: var(--signal-ink); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
@@ -267,6 +267,12 @@ footer p { margin-bottom: 0; }
 .acceptance li + li { margin-top: 0.75rem; }
 
 :focus-visible { outline: 3px solid var(--signal); outline-offset: 3px; }
+
+.readiness-table td { white-space: normal; vertical-align: top; min-width: 10rem; max-width: 24rem; overflow-wrap: anywhere; }
+.readiness-table p { margin: 0.5rem 0; }
+.readiness-table details { margin-top: 0.75rem; }
+.readiness-table summary { cursor: pointer; color: var(--signal); }
+.readiness-table pre { max-width: 22rem; white-space: pre-wrap; font-size: 0.75rem; }
 
 @media (max-width: 48rem) {
   .masthead { align-items: start; flex-direction: column; padding-top: 2rem; }

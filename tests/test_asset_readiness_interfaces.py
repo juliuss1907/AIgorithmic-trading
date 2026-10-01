@@ -25,6 +25,8 @@ def test_readiness_api_filters_public_read_only_and_no_network(tmp_path, monkeyp
     store = IntradayStore(path)
     store.register_asset("DOGE", market="spot", now=NOW)
     before = content(path)
+    import socket
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **kw: pytest.fail("readiness performed network IO"))
     import intraday.asset_readiness as readiness
     original = readiness.build_asset_readiness
     monkeypatch.setattr("intraday.web.build_asset_readiness", lambda database, **kw: original(database, now=NOW, **kw))
@@ -74,3 +76,34 @@ def test_readiness_cli_routes_to_registered_admin(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["aigt", "assets", "readiness", "ETH", "--market", "perp", "--json"])
     main()
     assert calls == [(deployment.admin_command(registered, sys.argv[1:]), {"cwd": registered.project_root})]
+
+
+def test_assets_page_exposes_read_only_readiness_and_keyboard_details(tmp_path):
+    client = TestClient(create_app(database=tmp_path / "source.sqlite"))
+    page = client.get("/assets")
+    assert page.status_code == 200
+    assert "Readiness" in page.text
+    assert 'id="readiness-refresh"' in page.text
+    assert 'id="readiness-message"' in page.text
+    assert "không phải quyền trading" in page.text
+    script = client.get("/static/asset-readiness.js")
+    assert script.status_code == 200
+    assert "/api/assets/readiness?market=" in script.text
+    assert 'createElement("details")' in script.text
+    assert 'createElement("summary")' in script.text
+    assert "textContent" in script.text
+    assert "innerHTML" not in script.text
+    assert "setInterval" not in script.text
+
+
+def test_readiness_api_old_database_returns_safe_error_without_migration(tmp_path):
+    path = tmp_path / "source.sqlite"
+    client = TestClient(create_app(database=path))
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE schema_meta SET value='22' WHERE key='schema_version'")
+    before = content(path)
+    response = client.get("/api/assets/readiness")
+    assert response.status_code == 503
+    assert "v23" in response.json()["detail"]
+    assert str(path) not in response.text
+    assert content(path) == before

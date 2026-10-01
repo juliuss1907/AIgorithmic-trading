@@ -4,6 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Coin &amp; venues — AIGT</title>
   <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/asset-readiness.js" defer></script>
   <script src="/static/assets.js" defer></script>
   <script src="/static/perp.js" defer></script>
 </head>
@@ -35,8 +36,13 @@
       </table></div>
       <p>Depth là snapshot, không phải cam kết khớp lệnh. Chỉ Binance Demo có adapter đặt lệnh trong bản này; các DEX chỉ cho xem.</p>
     </section>
-    <section class="ledger" aria-labelledby="catalog-heading"><div class="section-head"><h2 id="catalog-heading">Coin đã đăng ký</h2></div>
-      <div class="table-wrap"><table><thead><tr><th scope="col">Coin</th><th scope="col">Lifecycle</th><th scope="col">Sàn được chọn</th></tr></thead><tbody id="asset-catalog"></tbody></table></div>
+    <section class="ledger" aria-labelledby="catalog-heading"><div class="section-head"><h2 id="catalog-heading">Readiness · coin đã đăng ký</h2><button id="readiness-refresh" type="button">Làm mới readiness</button></div>
+      <p>Preview rule + sàn được chọn; không phải quyền trading. Chưa kiểm tra tài khoản Demo, allocation hoặc execution preflight.</p>
+      <p id="readiness-message" role="status" aria-live="polite">Đang đọc readiness…</p>
+      <div class="table-wrap" tabindex="0" aria-label="Bảng readiness, cuộn ngang để xem đủ cột"><table class="readiness-table">
+        <caption>Mốc thời gian là giới hạn sớm nhất, không phải thời gian hoàn thành. Vẫn cần đủ samples, coverage và evaluation được lưu riêng.</caption>
+        <thead><tr><th scope="col">Coin / bằng chứng</th><th scope="col">Bước rule</th><th scope="col">Gates hiện tại</th><th scope="col">Blockers / bước tiếp theo</th><th scope="col">Mốc sớm nhất UTC+7</th><th scope="col">Sàn được chọn</th></tr></thead><tbody id="asset-catalog"></tbody>
+      </table></div>
     </section>
     <section id="perp-controls" class="ledger" aria-labelledby="perp-heading" hidden>
       <div class="section-head"><h2 id="perp-heading">Perp · tài khoản và leverage</h2></div>

@@ -24,16 +24,7 @@
     return data;
   }
   async function catalog() {
-    const selectedMarket = market, data = await api("/api/assets?market=" + market);
-    if (selectedMarket !== market) return;
-    const target = $("asset-catalog"); target.replaceChildren();
-    for (const asset of data.assets) {
-      const row = document.createElement("tr");
-      const scope = market === "spot" ? "spot_4h" : "perp_intraday";
-      cell(row, asset.symbol); cell(row, asset.stages[scope] || "chưa đăng ký");
-      const route = asset.execution_routes.find(r => r.market === market);
-      cell(row, route ? route.venue + " / " + route.environment : "chưa chọn"); target.append(row);
-    }
+    document.dispatchEvent(new Event("aigt:catalog-refresh"));
   }
   function render(report) {
     const target = $("venue-results"); target.replaceChildren();
