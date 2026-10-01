@@ -102,6 +102,8 @@ class Ledger:
             return self.deny(at, price, "allocation_limit")
         rules = self.config.profile.instrument
         quantity = notional / price
+        if self.config.profile.version == "2" and quantity*price > notional:
+            quantity = quantity.next_minus()  # Never round an ideal fill above its approved cap.
         stop = price * (ONE - stop_distance if side == 1 else ONE + stop_distance)
         if rules:
             quantity = rules.round_quantity(quantity)

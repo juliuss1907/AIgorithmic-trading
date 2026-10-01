@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from datetime import datetime, timedelta
 from decimal import Decimal
 import hashlib
@@ -106,9 +108,12 @@ def _perp_data(store, config):
         sorted(decisions, key=lambda d: (d.available_at, d.decision.decision_id))), tuple(limitations)
 
 
-def load_dataset(database: str | Path, config: ReplayConfig) -> ReplayDataset:
-    store = IntradayStore(database, read_only=True)
-    with store.read_snapshot():
+def load_dataset(database: str | Path, config: ReplayConfig, *, reader=None) -> ReplayDataset:
+    store = reader or IntradayStore(database, read_only=True)
+    if not store.read_only or store.database != Path(database).resolve():
+        raise ValueError("replay dataset requires its matching read-only source")
+    context = nullcontext(store) if store._read_snapshot_connection is not None else store.read_snapshot()
+    with context:
         rule = store.load_scoped_rule(config.rule_id)
         if not rule or rule.symbol != config.symbol or rule.scope != config.scope:
             raise ValueError("research rule must belong to the requested coin and scope")

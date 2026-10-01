@@ -44,6 +44,13 @@ class ScopedEvidenceSource(EvidenceSource):
     def evaluation(self, evaluation_id, *, now):
         rule = self.rule()
         with self.connect() as c:
+            gate_extension = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='replay_gate_meta'").fetchone()
+        if gate_extension:
+            from intraday.replay_v2.compatibility import execution_gate_evaluation
+            gate = execution_gate_evaluation(self.path,rule,evaluation_id,now=now)
+            if gate is not None:
+                return gate
+        with self.connect() as c:
             row = c.execute("SELECT * FROM scoped_rule_evaluations WHERE id=?", (evaluation_id,)).fetchone()
             latest = c.execute("SELECT id,status FROM scoped_rule_evaluations WHERE candidate_id=? AND kind='soak' "
                                "ORDER BY evaluated_at DESC,id DESC LIMIT 1", (rule.rule_id,)).fetchone()

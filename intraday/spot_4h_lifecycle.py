@@ -11,6 +11,7 @@ from intraday.assets import asset_spec
 from intraday.contracts import DecisionScope, ScopedRuleCandidate, SpotRuleParameters
 from intraday.scoped_rule_lifecycle import ScopedRuleEvaluation
 from intraday.rule_preview import RuleGatePreview
+from intraday.replay_v2.compatibility import require_legacy_campaign
 from intraday.spot_signal import BinanceSpotDailyClient, SPOT_INTERVAL_MS
 
 
@@ -75,6 +76,7 @@ def spot_4h_history_progress(candles: list, *, now: datetime) -> dict:
 
 
 def replay_spot_4h_rule(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
+    require_legacy_campaign(store,candidate_id)
     candidate = store.load_scoped_rule(candidate_id)
     if candidate is None or candidate.scope is not SCOPE:
         raise ValueError("unknown spot_4h candidate")
@@ -129,6 +131,7 @@ def replay_spot_4h_rule(store, candidate_id: str, *, now: datetime) -> ScopedRul
 def start_spot_4h_soak(
     store, candidate_id: str, *, evaluation_id: str, now: datetime,
 ) -> dict:
+    require_legacy_campaign(store,candidate_id)
     candidate = store.load_scoped_rule(candidate_id)
     if candidate is None or candidate.scope is not SCOPE:
         raise ValueError("unknown spot_4h candidate")
@@ -146,14 +149,18 @@ def start_spot_4h_soak(
     return registry
 
 
-def preview_spot_4h_soak(store, candidate_id: str, *, now: datetime) -> RuleGatePreview:
+def preview_spot_4h_soak(store, candidate_id: str, *, now: datetime,
+                         started_at: datetime | None = None,
+                         round_trip_cost_pct: float = ROUND_TRIP_COST_PCT) -> RuleGatePreview:
     candidate = store.load_scoped_rule(candidate_id)
     if candidate is None or candidate.scope is not SCOPE:
         raise ValueError("unknown spot_4h candidate")
     registry = store.scoped_rule_registry(SCOPE, symbol=candidate.symbol)
     if registry["challenger_id"] != candidate_id:
         raise ValueError("candidate is not active challenger")
-    started = datetime.fromisoformat(registry["updated_at"])
+    started = started_at or datetime.fromisoformat(registry["updated_at"])
+    if started > now:
+        raise ValueError("soak start is in the future")
     heartbeats = [row for row in store.list_portfolio_soak_ticks(symbol=candidate.symbol)
                   if row["scope"] == SCOPE.value
                   and started <= datetime.fromisoformat(row["created_at"]) <= now]
@@ -167,11 +174,13 @@ def preview_spot_4h_soak(store, candidate_id: str, *, now: datetime) -> RuleGate
     for row in rows:
         if row["directional_return_pct"] is None or not row["challenger_allowed"]:
             continue
+        if started_at is not None and datetime.fromisoformat(row["signal_timestamp"]) < started:
+            continue
         slot = int(datetime.fromisoformat(row["signal_timestamp"]).timestamp()
                    // (WIDTH / 1000))
         distinct_matured.setdefault(slot, row)
     matured = list(distinct_matured.values())
-    score = fmean(float(row["directional_return_pct"]) - ROUND_TRIP_COST_PCT
+    score = fmean(float(row["directional_return_pct"]) - round_trip_cost_pct
                   for row in matured) if matured else 0.0
     waiting = []
     if now - started < timedelta(days=14):
@@ -202,6 +211,7 @@ def preview_spot_4h_soak(store, candidate_id: str, *, now: datetime) -> RuleGate
 
 
 def evaluate_spot_4h_soak(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
+    require_legacy_campaign(store,candidate_id)
     evaluation = ScopedRuleEvaluation.create(**preview_spot_4h_soak(store, candidate_id, now=now).values)
     store.record_scoped_rule_evaluation(evaluation)
     if evaluation.status == "reject":
@@ -212,6 +222,7 @@ def evaluate_spot_4h_soak(store, candidate_id: str, *, now: datetime) -> ScopedR
 def activate_spot_4h_rule(
     store, candidate_id: str, *, evaluation_id: str, now: datetime,
 ) -> dict:
+    require_legacy_campaign(store,candidate_id)
     candidate = store.load_scoped_rule(candidate_id)
     if candidate is None or candidate.scope is not SCOPE:
         raise ValueError("unknown spot_4h candidate")

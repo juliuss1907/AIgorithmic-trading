@@ -1,7 +1,6 @@
 """Additive v2 evidence extension; no changes to v1 evaluation payloads."""
 
 import json
-import sqlite3
 
 from intraday.replay_v2.contracts import utc, binance_gate_profile
 from intraday.replay_v2.gates import GateEvaluation, profile_fingerprint
@@ -47,7 +46,21 @@ class GateRepository:
             """)
 
     def _exists(self, connection):
-        return connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='replay_gate_meta'").fetchone() is not None
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='replay_gate_meta'").fetchone() is None:
+            return False
+        row = connection.execute("SELECT value FROM replay_gate_meta WHERE key='version'").fetchone()
+        if row is None or row["value"] != "1":
+            raise ValueError("unsupported gate extension version")
+        return True
+
+    def latest_for_route(self, symbol, scope):
+        with self.store._connect() as connection:
+            if not self._exists(connection):
+                return None
+            row = connection.execute("SELECT e.payload_json FROM replay_gate_evaluations e JOIN scoped_rules r ON r.id=e.candidate_id "
+                "WHERE r.symbol=? AND r.scope=? AND e.kind='replay' AND e.campaign_id IS NULL "
+                "ORDER BY e.evaluated_at DESC,e.id DESC LIMIT 1", (symbol,scope.value)).fetchone()
+        return GateEvaluation.model_validate_json(row["payload_json"]) if row else None
 
     def get(self, evaluation_id):
         with self.store._connect() as connection:
@@ -73,6 +86,14 @@ class GateRepository:
             row = connection.execute("SELECT payload_json,status FROM replay_gate_campaigns WHERE symbol=? AND scope=? "
                 "ORDER BY started_at DESC,id DESC LIMIT 1", (symbol, scope.value)).fetchone()
         return {**json.loads(row["payload_json"]), "status":row["status"]} if row else None
+
+    def campaign_for_rule(self, candidate_id):
+        with self.store._connect() as connection:
+            if not self._exists(connection):
+                return None
+            row = connection.execute("SELECT payload_json,status FROM replay_gate_campaigns WHERE candidate_id=? "
+                "ORDER BY started_at DESC,id DESC LIMIT 1", (candidate_id,)).fetchone()
+        return {**json.loads(row["payload_json"]),"status":row["status"]} if row else None
 
     def record(self, evaluation):
         self.install()
@@ -118,6 +139,10 @@ class GateRepository:
             "rule_content_hash":candidate.content_hash,"status":"active"}
         with self.store._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            latest_row = connection.execute("SELECT id FROM replay_gate_evaluations WHERE candidate_id=? AND kind='replay' AND campaign_id IS NULL "
+                "ORDER BY evaluated_at DESC,id DESC LIMIT 1", (candidate.rule_id,)).fetchone()
+            if latest_row is None or latest_row["id"] != evaluation_id:
+                raise ValueError("start-soak requires latest v2 replay evaluation")
             if connection.execute("SELECT 1 FROM replay_gate_campaigns WHERE symbol=? AND scope=? AND status='active'",
                                   (candidate.symbol,candidate.scope.value)).fetchone():
                 raise ValueError("route already has an active v2 campaign")
@@ -169,6 +194,10 @@ class GateRepository:
             raise ValueError("rule changed during validation")
         with self.store._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            latest_row = connection.execute("SELECT id FROM replay_gate_evaluations WHERE candidate_id=? AND kind='soak' AND campaign_id=? "
+                "ORDER BY evaluated_at DESC,id DESC LIMIT 1", (candidate.rule_id,evaluation.campaign_id)).fetchone()
+            if latest_row is None or latest_row["id"] != evaluation_id:
+                raise ValueError("exact latest soak evaluation required")
             row = connection.execute("SELECT champion_id,challenger_id FROM asset_scoped_rule_registry WHERE symbol=? AND scope=?",
                                      (evaluation.symbol,evaluation.scope.value)).fetchone()
             if row is None or row["challenger_id"] != candidate.rule_id or candidate.parent_rule_id != (row["champion_id"] or "bootstrap"):

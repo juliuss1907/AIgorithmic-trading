@@ -114,3 +114,33 @@ def docker_replay_command(deployment, raw_arguments, *, config_path=None):
         args = ["--config=/run/replay-config.json" if item.startswith("--config=") else item for item in args]
     return deployment_cli.compose_command(deployment, "--profile", "admin", "run", "--rm", "--volume",
         f"{path}:/run/replay-config.json:ro", "admin", *args)
+
+
+def dispatch_gate_command(store, arguments, *, now):
+    """Return None only when the explicitly selected lifecycle is still v1."""
+    from intraday.replay_v2.gate_repository import GateRepository
+    from intraday.replay_v2.lifecycle import replay_gate, start_gate_soak, evaluate_gate_soak, activate_gate_rule
+    command = arguments.asset_rules_command
+    if command not in {"replay","start-soak","evaluate","activate"}:
+        return None
+    repository = GateRepository(store)
+    candidate = store.load_scoped_rule(arguments.candidate_id)
+    campaign = repository.current(candidate.symbol,candidate.scope) if candidate else None
+    selected = bool(campaign and campaign["candidate_id"] == arguments.candidate_id)
+    evaluation_id = getattr(arguments,"evaluation_id",None)
+    if getattr(arguments,"engine",None) != "v2" and not selected and not (evaluation_id and repository.get(evaluation_id)):
+        return None
+    common = {"now":now,"report_dir":arguments.report_dir}
+    if command == "replay":
+        if arguments.engine != "v2":
+            raise ValueError("a v2 campaign cannot fall back to v1 replay")
+        result = replay_gate(store,arguments.candidate_id,funding_id=arguments.funding_id,**common)
+    elif command == "start-soak":
+        if not evaluation_id:
+            raise ValueError("v2 start-soak requires --evaluation-id")
+        return start_gate_soak(store,arguments.candidate_id,evaluation_id=evaluation_id,**common)
+    elif command == "evaluate":
+        result = evaluate_gate_soak(store,arguments.candidate_id,funding_id=arguments.funding_id,**common)
+    else:
+        return activate_gate_rule(store,arguments.candidate_id,evaluation_id=evaluation_id,**common)
+    return result.model_dump(mode="json")

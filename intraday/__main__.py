@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 from intraday.assets import ASSET_REGISTRY, asset_spec
 from intraday.asset_readiness import build_asset_readiness, format_asset_readiness
-from intraday.replay_v2.cli import add_replay_parser, dispatch_replay, docker_replay_command
+from intraday.replay_v2.cli import add_replay_parser, dispatch_replay, docker_replay_command, dispatch_gate_command
 from intraday.llm_pipeline import active_llm_client
 from intraday.asset_rule_lifecycle import (
     activate_asset_spot_rule,
@@ -243,6 +243,11 @@ def _parser() -> argparse.ArgumentParser:
         command = asset_rule_commands.add_parser(name)
         command.add_argument("candidate_id")
         command.add_argument("--database", default=None)
+        command.add_argument("--report-dir", type=Path, default=None)
+        if name == "replay":
+            command.add_argument("--engine", choices=("v1","v2"), default="v1")
+        if name in {"replay","evaluate"}:
+            command.add_argument("--funding-id", default=None)
         if name in {"start-soak", "activate"}:
             command.add_argument("--evaluation-id", required=name == "activate")
     setup = commands.add_parser("setup")
@@ -474,6 +479,10 @@ def _assets_cli(arguments) -> None:
         command = arguments.asset_rules_command
         now = datetime.now(timezone.utc)
         try:
+            gate_result = dispatch_gate_command(store,arguments,now=now)
+            if gate_result is not None:
+                print(json.dumps(gate_result,indent=2,allow_nan=False))
+                return
             if command == "status":
                 symbol = store.asset_spec(arguments.symbol).symbol
                 result = {
@@ -1949,7 +1958,7 @@ def main() -> None:
             if code:
                 raise SystemExit(code)
             return
-    if arguments.command == "assets" and arguments.database is None:
+    if arguments.command == "assets" and arguments.database is None and getattr(arguments,"report_dir",None) is None:
         deployment = deployment_cli.load_deployment()
         if deployment is not None:
             code = deployment_cli.execute(

@@ -10,6 +10,7 @@ from intraday.assets import asset_spec
 from intraday.contracts import DecisionScope, PerpRuleParameters, ScopedRuleCandidate
 from intraday.scoped_rule_lifecycle import ScopedRuleEvaluation, rule_allows_answers
 from intraday.rule_preview import RuleGatePreview
+from intraday.replay_v2.compatibility import require_legacy_campaign
 
 
 SCOPE = DecisionScope.PERP_INTRADAY
@@ -35,6 +36,7 @@ def bootstrap_perp_rule(store, symbol: str, *, now: datetime) -> ScopedRuleCandi
 
 
 def start_perp_decision_soak(store, candidate_id: str, *, now: datetime) -> dict:
+    require_legacy_campaign(store,candidate_id)
     candidate = store.load_scoped_rule(candidate_id)
     if candidate is None or candidate.scope is not SCOPE:
         raise ValueError("unknown Perp candidate")
@@ -106,6 +108,7 @@ def preview_perp_bootstrap(store, candidate_id: str, *, now: datetime) -> RuleGa
 
 
 def replay_perp_bootstrap(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
+    require_legacy_campaign(store,candidate_id)
     evaluation = ScopedRuleEvaluation.create(**preview_perp_bootstrap(store, candidate_id, now=now).values)
     store.record_scoped_rule_evaluation(evaluation)
     if evaluation.status == "reject":
@@ -164,6 +167,7 @@ def preview_perp_post_replay(
 
 
 def evaluate_perp_post_replay(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
+    require_legacy_campaign(store,candidate_id)
     evaluation = ScopedRuleEvaluation.create(**preview_perp_post_replay(store, candidate_id, now=now).values)
     store.record_scoped_rule_evaluation(evaluation)
     if evaluation.status == "reject":
@@ -174,6 +178,7 @@ def evaluate_perp_post_replay(store, candidate_id: str, *, now: datetime) -> Sco
 def activate_perp_bootstrap(
     store, candidate_id: str, *, evaluation_id: str, now: datetime,
 ) -> dict:
+    require_legacy_campaign(store,candidate_id)
     candidate = store.load_scoped_rule(candidate_id)
     if candidate is None or candidate.scope is not SCOPE:
         raise ValueError("unknown Perp candidate")

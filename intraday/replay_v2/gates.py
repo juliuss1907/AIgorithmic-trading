@@ -4,9 +4,9 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 
-from intraday.replay_v2.contracts import FrozenModel, ReplayConfig, ExecutionProfile, binance_gate_profile
+from intraday.replay_v2.contracts import FrozenModel, ReplayConfig, ExecutionProfile, binance_gate_profile, utc
 from intraday.replay_v2.metrics import fingerprint
 
 
@@ -58,6 +58,19 @@ class GateEvaluation(FrozenModel):
     reason_codes: tuple[str, ...] = ()
     metrics: dict[str, float | int | None] = Field(default_factory=dict)
 
+    _at = field_validator("evaluated_at")(utc)
+
+    @model_validator(mode="after")
+    def verify_identity(self):
+        if (self.candidate_id != self.replay_config.rule_id
+                or self.profile_hash != profile_fingerprint(self.replay_config.profile)):
+            raise ValueError("gate evaluation binding mismatch")
+        if self.kind == "soak" and not all((self.campaign_id,self.replay_evaluation_id)):
+            raise ValueError("soak evaluation requires a campaign and replay binding")
+        if fingerprint(self.model_dump(mode="json",exclude={"evaluation_id"}))[:32] != self.evaluation_id:
+            raise ValueError("gate evaluation checksum mismatch")
+        return self
+
     @property
     def symbol(self):
         return self.replay_config.symbol
@@ -68,6 +81,8 @@ class GateEvaluation(FrozenModel):
 
     @classmethod
     def create(cls, **values):
+        values["evaluated_at"] = utc(values["evaluated_at"])
+        values["replay_config"] = ReplayConfig.model_validate(values["replay_config"])
         payload = cls.model_construct(evaluation_id="0"*32, **values).model_dump(mode="json", exclude={"evaluation_id"})
         return cls(evaluation_id=fingerprint(payload)[:32], **values)
 

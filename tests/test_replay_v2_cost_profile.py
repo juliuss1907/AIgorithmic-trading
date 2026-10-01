@@ -41,6 +41,14 @@ def test_legacy_profile_wire_shape_and_defaults_are_unchanged():
     }
 
 
+def test_ideal_quantity_rounding_does_not_exceed_approved_notional():
+    config = ReplayConfig(symbol="ETH", market="spot", rule_id="r", start=NOW,
+                          end=NOW+timedelta(days=1), profile=binance_gate_profile())
+    book = Ledger(config)
+    assert book.enter(NOW, Decimal("163.1"), Decimal(300), side=1, stop_distance=Decimal(".1"))
+    assert book.quantity*Decimal("163.1") <= 300
+
+
 def test_split_cost_profile_requires_source_metadata_and_rejects_ambiguous_costs():
     with pytest.raises(ValueError):
         ExecutionProfile(version="2")

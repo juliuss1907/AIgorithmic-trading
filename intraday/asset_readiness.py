@@ -20,6 +20,7 @@ PHASE_LABELS = {
     "awaiting_decision_soak": "Chờ start Perp soak", "decision_soak": "Perp decision soak",
     "spot_soak": "Spot decision soak", "post_replay_validation": "Validation sau replay",
     "awaiting_promotion": "Chờ operator promote",
+    "awaiting_v2_validation": "Chờ start validation Perp v2",
 }
 ACTION_LABELS = {
     "bootstrap": "Chuẩn bị baseline", "none": "Không có thao tác rule",
@@ -93,7 +94,13 @@ def _asset_row(reader, symbol, market, scope, now):
         "started_at": None, "replay_cutoff": None, "earliest_evaluation_at": None,
         "legacy_champion": False, "venue": dict(route) if route else None,
         "venue_blockers": [] if route else ["venue_not_selected"],
+        "gate_version": "v1", "cost_profile": None,
     }
+    from intraday.replay_v2.readiness import project_gate_readiness
+    if not registry_invalid and project_gate_readiness(reader,row,now=now):
+        row["phase_label"] = PHASE_LABELS[row["phase"]]
+        row["next_action_label"] = ACTION_LABELS[row["next_action"]]
+        return row
     if row["lifecycle"] == "disabled":
         row.update(phase="disabled", blockers=["scope_disabled"], next_action="none")
     elif registry_invalid:
@@ -225,6 +232,10 @@ def format_asset_readiness(report):
         lines.append(" | ".join((row["symbol"], "Spot" if row["market"] == "spot" else "Perp",
                                 row["phase_label"], f'{venue["venue"]}/{venue["environment"]}' if venue else "chưa chọn",
                                 row["next_action_label"])))
+        lines.append("  Gate: " + row.get("gate_version","v1"))
+        if row.get("cost_profile"):
+            profile, market = row["cost_profile"],row["market"]
+            lines.append(f"  Costs/fill: fee {profile[market+'_fee_bps']} bps + slippage {profile[market+'_slippage_bps']} bps; funding separate")
         if row["gates"]:
             lines.append("  Gates: " + "; ".join(
                 f'{g["key"]}: {g["value"]:.4g} {g["comparison"]} {g["required"]:g} [{g["status"]}]'
