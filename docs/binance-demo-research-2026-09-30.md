@@ -1,5 +1,10 @@
 # Binance Demo execution feasibility
 
+> Research snapshot 2026-09-30, không phải đặc tả capability hoặc operational status hiện tại.
+> Xem [kiến trúc chuẩn](crypto-intraday-system-design.md) và
+> [Demo runbook](binance-demo-execution-runbook.md) để vận hành code hiện có.
+
+
 Checked on 2026-09-30 against official Binance documentation and the current checkout.
 Scope: research and integration recommendations. No credentials were requested or read;
 no account was connected, order submitted, or service deployed.

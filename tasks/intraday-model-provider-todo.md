@@ -1,5 +1,10 @@
 # Intraday model-provider checklist
 
+> Provider-module implementation history. Current cadence/Spot-Perp lifecycle/execution
+> boundaries: [canonical architecture](../docs/crypto-intraday-system-design.md).
+> These build checks do not establish live provider health or trading activation.
+
+
 - [x] Add provider/report contracts and additive SQLite migrations.
 - [x] Add atomic 0600 secret profile store and CLI CRUD.
 - [x] Add provider preflight, activation, redacted metadata, and model-call audit.

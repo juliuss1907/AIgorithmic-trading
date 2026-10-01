@@ -1,52 +1,83 @@
-# Kế hoạch multi-cadence AI paper trading
+# Plan hiện hành — AIGT multi-asset và execution modules
 
-Ngày cập nhật: 2026-09-25. Trạng thái: **đang chạy decision-only soak trên VPS**.
+Cập nhật 2026-10-01; implementation baseline `29f05c8`, source schema v23.
+[Kiến trúc chuẩn](../docs/crypto-intraday-system-design.md) ·
+[Roadmap](roadmap.md) · [Checklist](todo.md).
 
-## Mục tiêu
+## Mục tiêu và hợp đồng hiện hành
 
-Xây hệ thống BTCUSDT paper trading có hai scope Spot Donchian và Perp intraday. Risk engine luôn
-deterministic; Jev ra quyết định theo lịch; LLM phân tích evidence và đề xuất rule nhưng không có quyền
-thay đổi hard-risk hoặc tự kích hoạt rule.
+- Dynamic catalog, lifecycle/rule/evaluation theo `(symbol, scope)`; add/scan/select riêng Spot/Perp.
+- Spot trigger UTC 4h, native 8h/1d context; dashboard history UTC+7.
+- Perp Jev primary 30s; LLM hourly evidence analysis và daily eligibility-based bounded proposals.
+- Rule/risk deterministic; không auto-promote, auto-activation hoặc auto-rebalance.
+- Decision-only soak không tạo fill. Simulator paper và Binance Demo là execution paths khác nhau.
+- Demo supports USDT Spot/USD-M Perp của coin catalog mà sàn hỗ trợ; source read-only,
+  execution journal/credentials riêng. Binance live/Hyperliquid execution chưa có.
+- Multi Perp default isolated 3x, verified từng cặp 1–10x qua Confirm/read-back.
+  Legacy BTC Demo fixed 3x. Spot emergency stop 10%, Donchian exit riêng.
+- Shared Demo allocation 60/40 budget, effective caps 30/20% operator capital; actual margin
+  và loss guards theo runtime. Không dùng các tranche/margin limits standalone cũ cho Demo.
 
-## Hợp đồng đã khóa
+## Các phase nền tảng đã hoàn thành
 
-- Binance BTCUSDT là venue paper chính; Hyperliquid chỉ cung cấp shadow evidence.
-- Perp dùng isolated 3x. Không có endpoint đặt lệnh thật hoặc ví on-chain trong v1.
-- Risk/mark 5 giây; order book 15 giây; Perp Jev numeric 30 giây; derivatives 60 giây.
-- Compact Jev shadow 15 phút trên cùng snapshot với numeric primary.
-- Spot chỉ gọi Jev khi có nến ngày đã đóng mới và Donchian setup đủ điều kiện.
-- News ingest 30 phút; LLM thesis 60 phút khi evidence đổi; retrospective 09:00 Việt Nam.
-- Rule proposal qua replay và 72 giờ decision-only soak; kích hoạt thủ công.
-- Mọi signal, trade, model call, outcome và evaluation được lưu append-only trong SQLite.
+Các số phase bên dưới giữ lineage của kế hoạch multi-cadence trước đây:
 
-## Các phase
+1. System Plan và thiết kế nền.
+2. Scheduler đa nhịp, market cache, deterministic risk.
+3. Compact shadow A/B contracts và paired evidence.
+4. Forward outcome engine.
+5. A/B evaluation và deterministic retrospective.
+6. Hourly thesis/daily proposal, manual rule lifecycle.
+7. Dashboard/doctor/provider operations.
+8. Operator API và Hermes distribution, rollout add-on riêng.
+9. Unified source-dashboard/legacy routes.
+10. Read-only soak readiness report và private artifact.
+11. `aigt positions` cho **BTC simulated parent**, chưa cho Demo.
 
-1. Chốt tài liệu và trang System Plan.
-2. Tách scheduler đa nhịp, market cache và deterministic risk loop.
-3. Thêm compact-state shadow A/B với contract variant/mode/pair.
-4. Tính forward outcomes từ snapshot đã lưu.
-5. Đánh giá A/B và tạo retrospective deterministic lúc 09:00.
-6. Tách hourly thesis khỏi daily rule proposal; thêm rule lifecycle thủ công.
-7. Bổ sung dashboard vận hành, doctor và chạy paper soak.
-8. Thêm Operator API và Hermes `trading-ops` distribution; rollout VPS tách riêng sau khi
-   repo và Hermes đã được cài trên máy đích.
-9. Hợp nhất dashboard `/` với read-model của portfolio worker; giữ `/portfolio` cho chi tiết
-   và chuyển intraday legacy sang `/legacy-intraday`.
-10. Thêm soak readiness report read-only cho CLI native/global Docker, JSON stdout và optional
-    private artifact; không persist evaluation hoặc tự thực thi recommended action.
-11. Thêm `aigt positions` read-only để xem toàn bộ Spot/Perp paper position đang mở bằng
-    latest scoped market marks, có global Docker routing nhưng không khởi động dependencies.
+Các phase này mô tả code đã xây; không khẳng định tất cả jobs/add-ons đang chạy trong soak mode.
 
-## Điều kiện hoàn thành
+## Phần mở rộng đã xây
 
-- Risk loop tiếp tục hoạt động khi AI hoặc nguồn phụ lỗi.
-- Không AI job nào chạy trùng sau restart.
-- Shadow decision không thể tạo fill hoặc notification.
-- Migration bảo toàn journal cũ và append-only triggers.
-- Rule/compact state không tự động promotion.
-- Full test suite pass và hệ thống chạy paper ổn định tối thiểu 72 giờ.
-- Hermes/Telegram không nằm trong hot path; mất gateway không được dừng Jev, LLM hoặc risk loop.
+- Multi-symbol collectors/catalog, schema v20→v23 compatibility và bảo toàn evidence.
+- Generalized baseline/proposal/lifecycle cho Spot 4h và Perp, không còn ETH-only.
+- Binance Demo execution modules đa coin; separate journal, durable unknown reconciliation,
+  native protection, owned-only Spot inventory và shared allocation.
+- CLI/dashboard onboarding và confirmed per-pair Perp controls; profiles opt-in.
+- Fake-exchange/security/regression/browser checks có evidence trong các feature plans.
+  Không thay thế credentialed Demo order/settings acceptance.
 
-## Git policy
+## Trình tự gate vận hành
 
-Mỗi phase có một local commit độc lập. Không push cho tới khi chủ dự án xem kết quả và yêu cầu rõ ràng.
+**Spot:** ≥365 ngày replay history → passing replay ID → operator start soak →
+≥14 ngày/đủ heartbeat/setup/outcome → passing soak → promote → execution activation riêng.
+
+**Perp bootstrap:** decision soak ≥14 ngày/100 outcomes/95% coverage →
+pre-cutoff replay → post-replay validation ≥72 giờ/100 outcomes/95% →
+promote → activation riêng. BTC Perp legacy giữ exception portfolio evaluation của nó.
+
+Không bắt đầu Spot soak khi replay reject, không copy BTC pass sang coin khác.
+Replay Spot hiện chỉ Donchian next-open/costs, chưa full Demo risk parity.
+
+## Rollout đã ghi nhận và việc tiếp theo
+
+Snapshot VPS 2026-10-01 05:30 UTC: worker/web baseline `29f05c8`, v23, health OK;
+BTC + 5 Perp tiếp tục soak, campaign starts giữ nguyên; BTC Spot 30/8 replay reject;
+Demo không bật. Snapshot có thể stale, xem report mới trước action.
+Nguồn: `XDG_STATE_HOME/aigorithmic-trading/reports/vps-rollout-20261001T043018/final-health.json`.
+
+Việc vận hành còn mở trong checklist: Perp pre/post-replay gates, Spot passing candidate,
+supervised Demo acceptance, Hermes/Telegram read-only rollout và compact eligibility.
+Backlog build theo roadmap: replay risk parity, per-asset readiness, unified Demo positions,
+automated backup/alerts, rồi adapter Hyperliquid.
+
+## Đợt đồng bộ tài liệu 2026-10-01
+
+- [x] Chốt scope toàn bộ README/design/roadmap/runbooks/System Plan/diagram.
+- [x] Đồng bộ code-truth và giữ historical evidence, không xóa open tasks.
+- [x] Đồng bộ JSON/HTML/DOT và kiểm tra browser; xuất lại PDF/DOCX/PNG.
+- [x] Validate links/CLI/help, regression, review; không đổi runtime hoặc source data.
+
+[Biên bản kiểm chứng](../docs/documentation-refresh-2026-10-01.md).
+
+Đợt này chỉ tài liệu/template/generated artifact/tests; không key/order/activation/VPS write.
+Không push/merge/redeploy cho tới khi operator yêu cầu riêng.

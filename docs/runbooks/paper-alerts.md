@@ -1,5 +1,9 @@
 # Runbook: BTC paper Telegram alerts
 
+> Phạm vi: Cảnh báo cho BTC daily `lab/` legacy; không chứng minh Demo alerts đang hoạt động.
+> Xem [kiến trúc AIGT hiện hành](../crypto-intraday-system-design.md) cho source v23, multi-asset và execution modules.
+
+
 ## Điều đó có nghĩa gì
 
 - Không có summary sau 09:20 Việt Nam: timer chưa chạy, worker còn retry hoặc Telegram delivery lỗi.

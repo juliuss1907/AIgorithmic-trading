@@ -2,7 +2,19 @@
 
 ## Phòng thử nghiệm trading
 
-## BTC shared-AI portfolio — paper only
+## AIGT hiện hành — multi-asset Spot/Perp và Binance Demo opt-in
+
+Cập nhật 2026-10-01, implementation baseline `29f05c8`, source schema **v23**.
+[Kiến trúc chuẩn](docs/crypto-intraday-system-design.md) · [Roadmap](tasks/roadmap.md) ·
+[Plan/checklist](tasks/plan.md). Code hỗ trợ không đồng nghĩa trading đang bật.
+
+Catalog động seed BTC, ETH, HYPE, NEAR, ZEC, SOL và cho phép coin mới được đăng ký.
+Add → scan volume/liquidity → chọn venue **riêng cho Spot và Perp**; không tự activation.
+Source worker ghi evidence/decision-only soak. Simulator legacy và Binance Demo runtime
+là hai execution paths riêng; Demo đọc source DB chỉ-đọc và ghi execution journal riêng.
+Binance live, Hyperliquid và các DEX execution khác chưa được triển khai.
+
+### BTC shared-AI portfolio — simulator legacy
 
 Package `intraday/` chạy một parent portfolio 10.000 USDT gồm spot 60% budget và
 perp intraday 40% budget. Spot dùng Donchian + ATR volatility sizing rồi mới hỏi Jev;
@@ -10,8 +22,9 @@ perp dùng rule intraday + Jev. Một LLM profile tạo market thesis hai horizo
 candidate có schema riêng cho từng sleeve. Hard-risk coordinator vẫn là lớp có quyền cuối:
 gross ≤50%, |net BTC delta| ≤50%, isolated margin ≤10%, daily loss −1,5%, drawdown −8%.
 
-Perp cố định isolated 3×. Spot không được short; perp không được flip trong cùng tick.
-Deterministic exit luôn chạy được khi Jev/LLM lỗi. Hệ thống **không có code đặt lệnh thật**.
+Đoạn này mô tả simulator BTC legacy với isolated 3×; không áp giới hạn đó cho multi Demo.
+Spot không được short; perp không flip cùng tick. Deterministic exit không cần model.
+AIGT **có code gửi lệnh Binance Demo**, nhưng không có đường đặt lệnh tiền thật/mainnet.
 Promoted Donchian campaign trong `lab/` vẫn là control độc lập và không bị migration này sửa đổi.
 Hyperliquid được thu thập như evidence liên thị trường ở chế độ `shadow`: WebSocket cho
 L2 book, REST 30 giây cho funding/OI/mark/oracle. Mất dữ liệu DEX không chặn Binance.
@@ -62,8 +75,9 @@ unrealized P&L. Lệnh tự route tới deployment Docker đã đăng ký, khôn
 không thay đổi portfolio state.
 
 Binance Demo execution có namespace riêng `aigt execution demo` với `preflight`,
-`status`, `activate`, `pause`, `run`, `flatten`. Bản đầu hỗ trợ BTC Perp, mặc định
-chưa gửi lệnh, đọc database soak chỉ-đọc và lưu journal thực thi riêng. Không tự
+`status`, `activate`, `pause`, `run`, `flatten`, cùng `configure` cho multi-route.
+Hỗ trợ USDT Spot và USD-M Perp của coin catalog mà Binance Demo hỗ trợ; mặc định
+chưa gửi lệnh, đọc source DB chỉ-đọc và lưu journal riêng. Không tự
 route vào worker Docker hiện tại. Xem [runbook Binance Demo](docs/binance-demo-execution-runbook.md)
 trước khi cung cấp key hoặc activation. `aigt positions` chưa hiển thị vị thế Demo.
 
@@ -71,10 +85,10 @@ Nhập và quản lý key bằng `aigt connect bnb demo`: nhập ẩn; key đã 
 Keep/Replace/Clear. Lệnh chỉ kiểm tra API đọc, không tự bật trade hay đổi leverage.
 `connect bnb`, `connect hl demo`, `connect hl` dành sẵn cho tích hợp sau, hiện chưa hỗ trợ.
 
-Registry theo dõi BTC, ETH, HYPE, NEAR, ZEC và SOL trên cả Spot/Perp. BTC/ETH có
-capability `full`; HYPE/NEAR/ZEC/SOL chỉ được decision soak. Paper worker hiện vẫn
-chỉ giao dịch BTC và chưa bật paper cho ETH hay bốn coin còn lại. Worker tự tạo
-baseline riêng theo `(symbol, scope)`; không tự activate.
+Catalog v23 cho phép tài sản động; không còn capability gate theo ticker BTC/ETH.
+Mỗi coin/scope vẫn cần lifecycle, champion và passing evidence riêng. Parent simulator
+chỉ quản lý BTC; multi-route Demo quản lý coin đã phân bổ/activate, không tự bật vì add.
+Worker tạo baseline riêng theo `(symbol, scope)`; không tự activate.
 Spot 4h backfill nến native UTC 4h/8h/1d tối đa 1000 nến mỗi trang. Có thể kiểm tra
 và chạy thủ công từng bước:
 
@@ -128,7 +142,8 @@ lệnh từ chối ghi đè file có sẵn. Trường `recommended_action` chỉ
 (`wait`, `investigate`, `run_evaluation`, `request_paper_activation` hoặc `none`),
 không tự chạy evaluation hay activation.
 
-Sau 72 giờ và evaluation pass, activation phải dùng đúng ID rồi mới chạy paper worker:
+Riêng parent simulator BTC legacy: sau 72 giờ và evaluation pass, dùng đúng ID để bật
+simulator. Bước này không thay per-asset gates và không bật Binance Demo:
 
 ```bash
 aigt portfolio activate-paper --evaluation-id EVALUATION_ID
@@ -162,7 +177,7 @@ SHA-256 đi kèm. Hãy copy cả file `.sqlite3` và `.manifest.json` sang máy/
 MVP này chưa tự lên lịch, retention hoặc restore. Dùng `--output-dir` để chọn nơi lưu khác,
 hoặc `--database` khi backup một database native ngoài deployment Docker đã đăng ký.
 
-Trước khi triển khai bản có schema v22, có thể diễn tập nâng cấp hoàn toàn offline trên
+Trước khi triển khai bản có source schema v23, có thể diễn tập nâng cấp hoàn toàn offline trên
 backup đã xác minh (giữ cả file `.manifest.json` cùng thư mục):
 
 ```bash
@@ -176,9 +191,10 @@ worker hoặc trạng thái kích hoạt giao dịch. `--work-dir /path/to/dir` 
 có sẵn và đủ dung lượng. Report có quyền 0600, không ghi đè file cũ; exit code 0 chỉ
 khi mọi kiểm tra đều pass. Diễn tập restore trên bản sao không tự restore hệ thống thật.
 
-Mở `http://127.0.0.1:8081/` để xem trạng thái worker, tiến độ soak 72 giờ,
+Mở `http://127.0.0.1:8081/` để xem trạng thái worker, parent-soak readiness legacy,
 heartbeat Spot/Perp, model calls và các Jev signal gần nhất. Trang
 `http://127.0.0.1:8081/portfolio` giữ phần chi tiết portfolio/rule/evaluation;
+`/assets` cho catalog multi-asset và onboarding, `/system-plan` cho kiến trúc hiện hành;
 dashboard intraday legacy nằm tại `/legacy-intraday`. Mặc định dữ liệu nằm tại
 `${XDG_STATE_HOME:-~/.local/state}/aigorithmic-trading/intraday.sqlite3`; không dùng
 chung paper account với `lab/`. Để copy paper database cũ mà không xóa nguồn:
@@ -210,10 +226,10 @@ aigt doctor
 aigt status
 ```
 
-Port dashboard chỉ publish trên loopback. Worker mặc định chạy `soak`; chuyển
-`PORTFOLIO_WORKER_MODE=paper` chỉ sau evaluation 72 giờ pass và manual activation.
-Jev được phép đề xuất quyết định cho **paper account**; LLM chỉ tạo report/thesis và bounded
-rule candidate. Không có đường đặt lệnh thật.
+Port dashboard chỉ publish trên loopback. Worker mặc định chạy `soak`; đổi sang `paper`
+là luồng simulator legacy, không khởi động Demo. BTC parent gate 72 giờ không thay gate
+per-asset Spot/Perp. Demo và settings controller dùng profile opt-in riêng, activation riêng.
+Jev đề xuất decision; LLM tạo thesis/bounded proposal. Không có mainnet execution.
 Cross-venue overlay cũng không thể chuyển sang `active` chỉ bằng sửa `.env`: SQLite phải
 có evaluation record `promote` sau tối thiểu 14 ngày, coverage 95%, 100 quyết định khác
 Hold và 30 closed trades. Replay baseline-vs-overlay dùng:
@@ -224,6 +240,18 @@ aigt cross-venue-replay \
 aigt cross-venue-evaluate \
   --evidence evidence/cross-venue-evaluation.json
 ```
+
+### Thông tin Perp và leverage từng cặp
+
+```bash
+aigt perp ETH
+aigt perp ETH -leverage
+```
+
+Lệnh leverage nhập integer 1–10, preview rồi Confirm/Cancel và read-back từ Demo;
+chỉ khi paused/flat/reconciled. Default 3x, legacy BTC Demo vẫn fixed 3x.
+Tăng leverage không tăng notional allocation. Dashboard cần controller opt-in riêng;
+settings confirmation không activate trading. Xem [Demo runbook](docs/binance-demo-execution-runbook.md).
 
 ### Kết nối Jev và LLM qua CLI
 
@@ -272,12 +300,11 @@ News worker hiện allowlist RSS của SEC, CFTC, Fed, CoinDesk, Decrypt và Coi
 The Block, Wu Blockchain và Binance announcements được hiện là `disabled` kèm lý do
 thay vì dùng scraper hoặc nguồn mirror không được xác minh.
 
-Hệ thống hiện là **bot thuật toán BTCUSDT + Jev paper-active + LLM có gate**. Jev đề xuất
-hướng đi nhưng deterministic risk kernel mới có quyền tạo paper fill; LLM chỉ tạo evidence
-và candidate bị giữ sau replay/promotion. Binance integration chỉ dùng public market-data API;
-dự án không có endpoint giao dịch thật.
+AIGT hiện là **multi-asset evidence/soak + Jev + LLM có gate**, với simulator legacy
+và Binance Demo adapter opt-in. Model activation không tạo exchange order.
+Supervised Demo order/stop/close acceptance vẫn là bước riêng sau gate và approval.
 
-## Kết quả BTC hiện tại
+## Kết quả nghiên cứu BTC daily — subsystem `lab/` độc lập
 
 Ba chiến lược mặc định đã chạy trên 3.059 nến thật (2017-08-17 → 2025-12-31), tám fold 2018–2025,
 với target tối đa 50%, taker fee 10 bps và slippage 0/5/10 bps. Cả ba qua điều kiện số năm có lãi
@@ -301,8 +328,9 @@ risk target 20%/năm, trần 50%, rồi giữ nguyên tới lúc thoát.
 
 Gate mới đã khóa chọn **Donchian** và candidate contract đã được gắn với run/checksum bất biến. Holdout
 2026-01-01 → 2026-08-31 sau đó đạt **+7,67% return** với **−7,98% max drawdown** ở mức 5 bps, nên qua
-cổng đã đăng ký trước. Promoted paper account đã được tạo từ đúng contract này và chạy một chu kỳ mỗi
-ngày lúc **09:00 Việt Nam**; account hiện giữ cash, không có quyền đặt lệnh thật. Xem
+cổng đã đăng ký trước. Promoted paper account của `lab/` đã được tạo từ contract này, với timer daily
+**09:00 Việt Nam**. Đây là evidence/control nghiên cứu, không phải trạng thái realtime
+của VPS hoặc Binance Demo; subsystem này không có quyền đặt lệnh thật. Xem
 [runbook BTC](docs/btc-paper-runbook.md)
 và [kế hoạch hiện tại](tasks/plan.md).
 

@@ -1,5 +1,10 @@
 # Binance auxiliary agent tools research
 
+> Research snapshot 2026-09-30, không phải đặc tả capability hoặc operational status hiện tại.
+> Xem [kiến trúc chuẩn](crypto-intraday-system-design.md) và
+> [Demo runbook](binance-demo-execution-runbook.md) để vận hành code hiện có.
+
+
 Checked on 2026-09-30. Scope: the two auxiliary links supplied by the operator. Research only; no tools installed, accounts connected, keys inspected, or orders submitted.
 
 ## Trading Signal: on-chain context

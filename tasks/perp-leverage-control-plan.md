@@ -1,5 +1,12 @@
 # Perp information and per-pair leverage control
 
+> Handoff update 2026-10-01: implementation is merged into baseline `29f05c8`;
+> source worker/web v23 deployment is recorded in the [current architecture](../docs/crypto-intraday-system-design.md).
+> Demo execution/settings profiles were not started in that rollout. Credentialed order/stop/close
+> and settings-write acceptance remain unproven. The dated slice restrictions and results below
+> are historical evidence, not the current branch/deployment status.
+
+
 Approved 2026-10-01. Implement on the existing feature branch; no VPS deployment,
 live settings change, trading activation, push or merge. Preserve all soak evidence.
 

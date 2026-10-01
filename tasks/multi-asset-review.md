@@ -1,5 +1,12 @@
 # Multi-asset rollout review
 
+> Trạng thái hiện hành 2026-10-01: catalog/lifecycle đã generalized, schema v23;
+> không còn ETH-only hoặc 4 coin data-only. Xem [kiến trúc chuẩn](../docs/crypto-intraday-system-design.md).
+> Các quyết định seed/v20/ETH canary bên dưới là lịch sử triển khai, không phải quyền trading hiện tại.
+
+## Lịch sử multi-asset shadow v20
+
+
 Reviewed `main...feature/multi-asset-shadow` on 2026-09-28 before push or deployment.
 
 ## Resolved during review

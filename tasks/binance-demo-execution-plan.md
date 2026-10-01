@@ -1,5 +1,12 @@
 # Modular Binance Demo execution
 
+> Handoff update 2026-10-01: implementation is merged into baseline `29f05c8`;
+> source worker/web v23 deployment is recorded in the [current architecture](../docs/crypto-intraday-system-design.md).
+> Demo execution/settings profiles were not started in that rollout. Credentialed order/stop/close
+> and settings-write acceptance remain unproven. The dated slice restrictions and results below
+> are historical evidence, not the current branch/deployment status.
+
+
 Scope accepted 2026-09-30: a small common execution interface, the existing paper
 simulator as one adapter, and Binance Demo as another. Start with BTC USD-M Perp;
 future venues implement the same order/account contracts. No automatic rollout or

@@ -1,4 +1,8 @@
-# Checklist multi-cadence AI paper trading
+# Checklist AIGT hiện hành — build, rollout và nghiệm thu
+
+Cập nhật 2026-10-01, baseline `29f05c8`, schema v23.
+[Kiến trúc chuẩn](../docs/crypto-intraday-system-design.md) · [Roadmap](roadmap.md).
+Checkbox code không thay cho quyền activation hoặc bằng chứng vận hành.
 
 ## Đang triển khai
 
@@ -18,11 +22,44 @@
 
 ## Sau khi build
 
-- [ ] Clone/cài repo lên VPS trước khi tích hợp Hermes.
+- [x] Repo/core đã cài và deploy lên VPS; Hermes add-on vẫn là rollout riêng.
 - [ ] Tạo Telegram bot riêng cho `trading-ops`; tách Unix user trước khi bật actions.
 - [ ] Chạy Hermes read-only 72 giờ; chỉ sau đó mới bật pause/resume.
-- [ ] Chạy paper soak liên tục 72 giờ.
+- [ ] Chạy simulator paper acceptance liên tục 72 giờ; decision-only soak pass không chứng minh fill/reconciliation.
 - [ ] Thu thập ít nhất 14 ngày và 1.000 numeric/compact pairs.
 - [ ] Đánh giá compact eligibility; không auto-activate.
-- [ ] Theo dõi rule challenger đủ 72 giờ trước manual activation.
+- [ ] Theo dõi rule challenger theo đúng scope gate: Spot ≥14 ngày; Perp ≥14 ngày trước replay + ≥72 giờ validation.
 - [ ] Chỉ push khi chủ dự án yêu cầu.
+
+## Multi-asset/Demo đã xây
+
+- [x] Dynamic catalog v23, independent Spot/Perp add/scan/select.
+- [x] Generalized Spot 4h và Perp baseline/proposal/lifecycle.
+- [x] Binance Demo đa coin, allocation/risk và execution journal riêng.
+- [x] Per-pair leverage CLI/dashboard confirmation/controller opt-in.
+- [x] VPS source worker/web v23 rollout, bảo toàn evidence (snapshot 2026-10-01 05:30 UTC).
+
+## Nghiệm thu và vận hành còn mở
+
+- [ ] Hoàn tất 5 Perp decision soak ≥14 ngày/100 matured outcomes/coverage.
+- [ ] Perp replay cutoff và validation độc lập ≥72 giờ trước promotion.
+- [ ] Spot candidate pass replay rồi operator start soak ≥14 ngày và đủ setup.
+- [ ] Supervised Demo order → native protection → reconcile → close, approval riêng.
+- [ ] Demo per-pair settings write/read-back acceptance khi paused/flat.
+- [ ] Chỉ activate route đúng champion/passing evaluation sau acceptance được phê duyệt.
+
+## Backlog build — chưa triển khai
+
+- [ ] Replay Spot full-risk parity/versioned evaluator (không rewrite evidence).
+- [ ] Readiness theo symbol/scope và blockers pre/post-replay.
+- [ ] Unified multi-coin Demo positions/orders/protection projection.
+- [ ] Scheduled backup/retention/restore drill và Demo operational alerts.
+- [ ] Hyperliquid execution adapter; live/multi-venue allocation cần spec riêng.
+
+## Đồng bộ tài liệu hiện hành
+
+- [x] README/design/roadmap/runbooks phân biệt current, legacy và historical.
+- [x] System Plan/JSON/HTML/DOT và PDF/DOCX/PNG theo cùng code-truth.
+- [x] Link/CLI/render/browser/regression checks pass; không runtime/data/secret change.
+
+[Biên bản kiểm chứng](../docs/documentation-refresh-2026-10-01.md).

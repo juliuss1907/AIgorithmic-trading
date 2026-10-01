@@ -1,5 +1,9 @@
 # Kiến trúc và quy tắc thí nghiệm
 
+> Phạm vi: Kiến trúc research workbench `lab/` (SPY/QQQ), không phải kiến trúc crypto/execution hiện hành.
+> Xem [kiến trúc AIGT hiện hành](crypto-intraday-system-design.md) cho source v23, multi-asset và execution modules.
+
+
 ## Phạm vi
 
 Release 0.1 hỗ trợ hợp đồng SPY/QQQ, dữ liệu ngày và chiến lược SMA crossover, giữ vị thế mua

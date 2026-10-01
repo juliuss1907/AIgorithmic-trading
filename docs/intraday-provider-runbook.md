@@ -2,9 +2,14 @@
 
 ## Safety boundary
 
-This system is paper-only. Provider activation can change Jev paper decisions and can
-produce LLM rule candidates, but it cannot place an exchange order. Isolated leverage
-stays fixed at 3× and deterministic risk checks remain authoritative.
+This runbook controls model providers, not exchange execution. Provider activation changes
+scoped Jev decisions or LLM thesis/candidates; it never activates trading. AIGT has a
+separate opt-in multi-asset Binance Demo execution module. Multi Perp leverage is confirmed
+per pair (1–10x, default 3x); legacy BTC execution stays fixed 3x. Deterministic risk remains authoritative.
+
+Current schema/cadence/lifecycle: [canonical architecture](crypto-intraday-system-design.md).
+Spot uses UTC 4h plus native 8h/1d context, Perp primary 30s, LLM analysis hourly when
+evidence changes. UI history is UTC+7; source timestamps remain UTC.
 
 Credentials live only in the provider TOML file. SQLite, dashboard responses, command
 payloads, model-call telemetry, and logs contain redacted metadata or hashes. The file
@@ -68,7 +73,7 @@ aigt doctor
 ```
 
 Preflight success expires after 10 minutes. Jev activation is observed atomically at
-the next five-second tick. LLM activation is captured once at the beginning of an
+the next applicable scoped decision tick (Perp primary defaults to 30 seconds). LLM activation is captured once at the beginning of an
 hourly analysis cycle, so all five roles use the same profile and model.
 
 To rotate a key, run `provider add ... --replace`, preflight the new fingerprint, then
@@ -151,6 +156,14 @@ aigt doctor
 aigt provider list
 aigt analysis
 ```
+
+## Per-asset gate boundary
+
+Any legacy 90-day replay / 14-day-30-trade cases above apply to their legacy rule path,
+not the generalized Spot 4h/Perp bootstrap. Spot: >=365-day history replay, then operator
+starts >=14-day soak. Perp: >=14-day decision soak, pre-cutoff replay, then >=72-hour
+independent validation. Neither provider activation nor proposal promotes a rule.
+See [rule architecture](../tasks/asset-rule-architecture.md) and [Demo runbook](binance-demo-execution-runbook.md).
 
 ## Protocol references
 

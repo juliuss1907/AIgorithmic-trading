@@ -2,6 +2,12 @@
 
 ## Current state
 
+This is an optional operator integration, not the execution architecture. See
+[current AIGT architecture](../crypto-intraday-system-design.md). Operator snapshots
+and pause/resume refer to the parent simulator/source control plane; they are not
+unified multi-asset Demo account views or Demo execution activation. The Hermes
+72-hour read-only acceptance is separate from scoped rule replay/soak gates.
+
 Hermes is an optional operator add-on. `aigt setup` always boots the AIGT core without Hermes;
 `aigt setup --with-hermes` additionally installs the read-only `trading-ops` profile. Setup never
 starts a Hermes gateway, configures Telegram, creates cron jobs, or enables actions.

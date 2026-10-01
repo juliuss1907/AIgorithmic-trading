@@ -1,215 +1,73 @@
-# Roadmap tổng thể: Hệ thống nghiên cứu và giao dịch thuật toán
+# Roadmap hiện hành — AIGT multi-asset Spot/Perp
 
-> Cập nhật 2026-09-16: hướng triển khai hiện tại là BTCUSDT spot trước. Hạ tầng strategy,
-> walk-forward, paper ledger và AI read-only đã có. Risk overlay v1 đã chọn và khóa Donchian;
-> holdout 2026 đã qua với +7,67% return và −7,98% max drawdown. Paper account chưa được tạo;
-> live vẫn bị chặn có chủ đích. Xem
-> [plan.md](plan.md) và [todo.md](todo.md) để biết trạng thái chuẩn.
+Cập nhật 2026-10-01; baseline code `29f05c8`, source schema v23.
+[Kiến trúc chuẩn](../docs/crypto-intraday-system-design.md) ·
+[Plan](plan.md) · [Checklist](todo.md).
 
-Ngày chốt: 2026-09-14. Nền hiện có: pilot SPY SMA 20/50 đã chạy,
-được kiểm toán số dư độc lập và tái lập trên Vibe-Trading 0.1.15.
+**Đã xây ≠ đã deploy ≠ đã nghiệm thu/kích hoạt.** Không dùng checkbox build làm quyền trade.
+Roadmap này thay hướng SPY/ETF/BTC-only trước đây; bản gốc nằm ở
+[research roadmap lịch sử](../docs/history/research-roadmap-2026-09-16.md).
+Subsystem `lab/` vẫn giữ dữ liệu, control và tests độc lập.
 
-## Đích đến
+## 1. Nền tảng đã xây
 
-Xây một hệ thống cá nhân cho chứng khoán Mỹ, đưa một ý tưởng qua vòng đời:
+| Hạng mục | Code hiện có | Giới hạn / nghiệm thu còn lại |
+| --- | --- | --- |
+| Market/news plane | Multi-symbol Binance; DEX/context/news collectors, provenance/TTL | DEX là evidence, không phải execution adapter |
+| Jev + LLM | Perp primary, Spot setup, hourly thesis, bounded proposals | Không model nào tự promote hoặc activate |
+| Rule lifecycle | Baseline/champion/challenger theo symbol/scope; replay và soak gates | Passing evaluation phải thuộc đúng coin/scope |
+| Catalog/onboarding | Add → scan volume/liquidity → chọn venue, Spot/Perp riêng; v23 | Route selection không bật trading |
+| Binance Demo module | USDT Spot và USD-M Perp đa coin, journal và allocation riêng | Supervised order/stop/close acceptance chưa hoàn tất |
+| Per-pair leverage | CLI/dashboard confirmation, controller opt-in, read-back | Real Demo setting-write acceptance chưa hoàn tất |
+| Operations | Dashboard, readiness report, backup/verify và upgrade rehearsal | Chưa tự schedule/retain/restore backup |
+| Simulator / research | BTC parent paper và `lab/` | Không đại diện cho vị thế Demo đa coin |
 
-```text
-Giả thuyết → quy tắc → dữ liệu có phiên bản → backtest → kiểm định
-          → so sánh → giải thích AI → paper trading → cân nhắc giao dịch thật
-```
+Code supports coin mới nếu catalog và Binance Demo hỗ trợ, không còn ETH-only bootstrap.
+[Demo plan](binance-demo-execution-plan.md) và
+[leverage plan](perp-leverage-control-plan.md) giữ bằng chứng từng slice.
 
-Web app tiếng Việt là giao diện chính. Người dùng không cần sửa code để chạy các chiến lược
-được hỗ trợ. CLI và code vẫn là đường kiểm toán và tái lập.
+## 2. Trạng thái rollout đã kiểm chứng
 
-Hệ thống không hứa tìm được chiến lược có lợi nhuận. Kết quả loại bỏ một giả thuyết cũng hợp lệ.
-Mỗi giai đoạn chỉ được nâng cấp khi qua cổng kiểm chứng của giai đoạn đó.
+Snapshot **2026-10-01 05:30 UTC**, không phải realtime:
 
-## Quyết định nền tảng
+- VPS worker/web chạy baseline `29f05c8`, source schema v23; migration giữ evidence.
+- BTC và ETH/HYPE/NEAR/ZEC/SOL Perp tiếp tục decision-only soak; starts không reset.
+- BTC Spot 4h candidate 30/8 bị replay reject (DD 11,03%); không start soak cho candidate đó.
+- Demo execution và leverage controller **không được start trong rollout này**; không gửi order.
+- Report: `XDG_STATE_HOME/aigorithmic-trading/reports/vps-rollout-20261001T043018/final-health.json`.
 
-- Chứng khoán/ETF Mỹ, dữ liệu ngày, long hoặc cash, không đòn bẩy trong các release đầu.
-- Tiếp tục dùng Vibe-Trading qua adapter đã kiểm chứng; không fork toàn bộ repo.
-- Python 3.12, FastAPI, Jinja2, JavaScript nhỏ, SQLite và artifact trên filesystem.
-- SQLite giữ metadata/trạng thái/ghi chú; snapshot và kết quả là tệp bất biến có checksum.
-- Web process và worker process riêng; worker chạy tuần tự để cô lập engine và artifact.
-- AI v1 chỉ giải thích bằng chứng; sau đó mới chuyển mô tả thành cấu hình mẫu được kiểm soát.
-- ML chỉ bắt đầu sau khi rule-based, dữ liệu đa tài sản và walk-forward hoạt động đúng.
-- Chạy local, một người dùng. Cloud, multi-user và broker thật không thuộc v1.
+Không hardcode các trạng thái này thành UI realtime. Kiểm tra source DB/journal/service trước action.
 
-## Giai đoạn 0 — Nền kiểm chứng đã hoàn thành
+## 3. Các bước vận hành còn lại — không phải build thêm adapter
 
-SPY SMA 20/50, hai kỳ 2015–2021 và 2022–2025, buy-and-hold, ba mức trượt giá,
-audit lệnh/số dư và replay không mạng. Kết quả này là bộ hồi quy vàng khi refactor.
+1. Theo dõi 5 Perp decision soak ≥14 ngày và đủ outcome/coverage.
+2. Replay Perp tại cutoff rồi validation trên evidence riêng ≥72 giờ; không dùng lại tập replay.
+3. Với Spot, cần candidate pass replay trước khi operator start soak ≥14 ngày và đủ setup.
+4. Supervised Binance Demo acceptance: read/preflight → order → protection → reconcile → close,
+   chỉ sau approval và đúng champion/evaluation. Tách Spot/Perp, không vượt gate để test chiến lược.
+5. Settings-only Demo leverage acceptance khi paused/flat; không activate trading bằng đổi leverage.
+6. Tiếp tục Hermes/Telegram read-only rollout riêng; không đặt add-on vào hot path.
 
-## Giai đoạn 1 — Research Workbench v1
+Các mốc 14 ngày/72 giờ là minimum đánh giá, không phải lời hứa ngày bật giao dịch.
+Không tự activate khi đủ lịch hoặc khi LLM đưa proposal.
 
-Người dùng mở web app, xem pilot, tạo giả thuyết SMA mới, chọn SPY/QQQ, thời gian,
-vốn và chi phí; xác nhận quy tắc; chạy nền; xem trạng thái, đường vốn, drawdown,
-giao dịch và đối chứng; ghi chú và mở lại sau restart.
+## 4. Backlog xây tiếp, chưa triển khai
 
-Mỗi run đóng băng cấu hình, snapshot, engine, code hash và lineage. Run cũ không bị sửa.
-So sánh chỉ xếp hạng hai run khi cùng snapshot, kỳ, vốn và chi phí.
+| Ưu tiên | Hạng mục | Acceptance cần đạt |
+| --- | --- | --- |
+| 1 | Replay Spot gần Demo risk semantics hơn | Version evaluator riêng; ATR/allocation/stop/loss assumptions inspectable; không rewrite evaluation cũ |
+| 2 | Soak readiness theo coin/scope | Thấy blockers, coverage, matured outcomes, pre/post-cutoff và earliest eligible time |
+| 3 | Unified Demo portfolio/positions | Đọc execution journal đa coin, open orders/stop/PnL/reconciliation; tách simulator |
+| 4 | Backup/alerts vận hành | Schedule ngoài volume, verification, retention/restore drill riêng; cảnh báo protection/cash drift/stale |
+| 5 | Hyperliquid execution adapter | Giữ interface/journal isolation; spec/testnet acceptance trước mainnet |
+| Sau | Concurrent multi-venue allocation / live trading | Quyết định mandate, capital, reconciliation, launch approval riêng |
 
-**Cổng G1:** người mới hoàn thành tạo → chạy → đọc một giao dịch → ghi chú mà không dùng terminal;
-pilot không đổi số liệu; audit, replay và restart đều đạt.
+Đây là backlog định hướng, chưa cấp quyền triển khai hoặc deploy các hạng mục đó.
+Không tối ưu tham số để ép một gate pass; rejection là evidence hợp lệ.
 
-## Giai đoạn 2 — Rule Strategy Lab
+## 5. Quy tắc cập nhật roadmap
 
-Ba gia đình chiến lược trả lời ba giả thuyết riêng:
-
-| Gia đình | Chỉ báo | Quy tắc mặc định |
-|---|---|---|
-| Trend following | SMA 20/50; filter close/SMA 200 tùy chọn | Long khi SMA20 > SMA50 và filter cho phép; còn lại cash |
-| Mean reversion | RSI 14; Bollinger 20 phiên, 2 độ lệch chuẩn | Vào khi close dưới band dưới và RSI < 30; thoát khi về band giữa hoặc RSI > 50 |
-| Breakout | Donchian 20/10; ATR 14 | Vào khi close phá đỉnh 20 phiên trước; thoát khi thủng đáy 10 phiên trước |
-
-Feature phân tích chung: return 1/5/20/60 phiên, realized volatility 20, ATR/close,
-relative volume 20, drawdown 20/60, SMA20/SMA50 và close/SMA200.
-Mọi giá trị chỉ dùng dữ liệu có sẵn cuối phiên; lệnh sớm nhất ở mở cửa phiên sau.
-
-Không tự tìm bộ tham số tốt nhất. Người dùng nhân bản một giả thuyết và ghi lý do trước khi đổi.
-Evaluation đã xem được gắn nhãn `observed` và không thể trở lại thành holdout.
-
-**Cổng G2:** ba strategy có golden test công thức, test không nhìn tương lai, audit lệnh và báo cáo
-nhất quán trên SPY/QQQ. Không gọi chiến lược “tốt” chỉ vì một backtest thắng.
-
-## Giai đoạn 3 — Universe ETF và walk-forward
-
-Universe nghiên cứu cố định: SPY, QQQ, IWM, DIA, TLT, GLD, XLF, XLK, XLE, XLV.
-Mỗi ETF có snapshot, ngày bắt đầu thực tế và checksum riêng; không điền dữ liệu trước niêm yết.
-
-Walk-forward dùng các fold thời gian liên tiếp; mỗi fold chỉ dùng quá khứ để chuẩn bị tham số/model
-và đánh giá trên đoạn kế tiếp. Báo cáo hiện dispersion theo tài sản/fold, turnover, exposure,
-tác động 0/5/10 bps và buy-and-hold tương ứng.
-
-**Cổng G3:** mọi kết quả truy ngược được về snapshot/run; walk-forward không shuffle thời gian,
-không dùng observation tương lai và tái lập được khi chặn mạng.
-
-## Giai đoạn 4 — Machine Learning Lab
-
-ML là một loại strategy mới; không thay engine hoặc audit.
-
-- Feature set đầu tiên được cố định từ bộ chỉ báo G2.
-- Nhãn: forward return 20 phiên lớn hơn round-trip cost 10 bps.
-- Baseline: always-long, ba rule strategy và Logistic Regression.
-- Challenger: HistGradientBoostingClassifier.
-- LightGBM chỉ được thêm nếu challenger hiện tại thiếu chất lượng hoặc tốc độ theo phép đo cụ thể.
-- Vị thế long khi xác suất vượt threshold chọn chỉ từ train fold; ngược lại cash.
-- Imputation, scaling, model và threshold đều fit riêng trong từng train fold.
-- Đánh giá cả log loss, Brier/calibration và metric trading sau chi phí.
-
-Không dùng random split, feature expansion hàng trăm biến, LSTM, Transformer hoặc reinforcement
-learning ở giai đoạn này. Không chọn model chỉ theo Sharpe cao nhất.
-
-**Cổng G4:** challenger phải tốt hơn Logistic Regression và rule baseline trên đa số fold theo metric
-dự báo, không làm xấu đáng kể drawdown/turnover sau chi phí, và ổn định khi đổi nhẹ threshold/chi phí.
-Không qua cổng thì giữ ML ở research-only.
-
-## Giai đoạn 5 — AI Research Copilot
-
-Hai khả năng được mở tuần tự:
-
-1. **Giải thích:** AI chỉ nhận evidence packet gồm cấu hình, metric, audit, indicator tại tín hiệu
-   và giao dịch liên quan. Mọi con số có tham chiếu tới artifact.
-2. **Idea-to-template:** AI chuyển mô tả thành typed schema của SMA, RSI/Bollinger hoặc Donchian/ATR.
-   Người dùng xem quy tắc chuẩn hóa trước khi tạo run; schema validation quyết định điều được chạy.
-
-AI không nhận quyền thực thi Python hoặc thay đổi run đã đóng băng. Chưa cấu hình AI vẫn dùng được
-toàn bộ workbench. Tin tức/sentiment và nhiều agent là nhánh sau: mỗi event phải có nguồn,
-`published_at`, `available_at` và snapshot; agent output chỉ là feature có phiên bản.
-
-**Cổng G5:** lời giải thích đúng run và không bịa số liệu trong bộ câu hỏi biết trước;
-provider lỗi không làm mất backtest; idea-to-template không thể thoát khỏi allowlist schema.
-
-## Giai đoạn 6 — Paper Trading
-
-Paper trading dùng cùng Strategy interface, execution assumptions và audit, chạy theo lịch sau phiên:
-
-```text
-Cập nhật snapshot → tính signal → order intent → risk gate
-                  → fill giả lập → ledger → reconciliation
-```
-
-Risk gate: allowlist tài sản, long-only, không đòn bẩy, cap notional/vị thế/ngày,
-giá stale thì từ chối, idempotency key, kill switch, audit log và không retry lệnh mù.
-Run nghiên cứu và paper account tách riêng.
-
-**Cổng G6:** shadow ít nhất 8 tuần thị trường; không có duplicate/missing order không giải thích;
-tiền mặt/vị thế đối soát mỗi phiên; lỗi dữ liệu hoặc trạng thái dừng tạo lệnh mới.
-
-## Giai đoạn 7 — Giao dịch thật cần quyết định riêng
-
-Roadmap này không tự kích hoạt broker integration. Trước khi xây cần chọn broker, vốn,
-mandate rủi ro và quy trình phê duyệt. Bản live đầu yêu cầu người dùng xác nhận order intent.
-Chỉ cân nhắc tự động hóa sau khi G6 đạt và có runbook/rollback riêng.
-
-## Kiến trúc đích
-
-```text
-Web UI tiếng Việt
-  ├── Library / Builder / Compare / Notes
-  ├── Indicator & trade inspector
-  └── AI explanation panel
-             ↓
-FastAPI application
-  ├── Contract + validation
-  ├── Experiment/run service
-  ├── Dataset catalog
-  └── Evidence builder / AI adapter
-             ↓
-SQLite metadata + immutable files
-  ├── DatasetSnapshot
-  ├── Experiment + Run + lineage
-  ├── ResearchNote + AIExplanation
-  └── ModelRun + PaperAccount ở giai đoạn sau
-             ↓
-Sequential worker
-  ├── Rule strategy / ML strategy
-  ├── Vibe-Trading adapter
-  ├── Independent audit
-  └── Report/artifact writer
-```
-
-API nội bộ: `/api/datasets`, `/api/experiments`, `/api/runs`,
-`/api/runs/{id}/results`, `/api/runs/{id}/notes`, `/api/runs/{id}/explanations`.
-ML và paper trading chỉ thêm namespace sau khi qua cổng trước đó.
-
-## Hợp đồng dữ liệu cốt lõi
-
-- **DatasetSnapshot:** ID, symbol, calendar, source, price semantics, range, retrieval time,
-  row count, checksums, status và lỗi.
-- **Experiment:** title, hypothesis, strategy family/version, typed parameters, dataset ID,
-  learning/evaluation windows, capital/costs, holdout state và parent ID.
-- **Run:** frozen experiment, engine/code/dependency versions, trạng thái, artifact manifest,
-  audit status và timestamps.
-- **RunResult:** metrics, equity reference, trades/fills, indicator evidence, benchmark và warnings.
-- **ModelRun:** feature/label hashes, folds, preprocessing/model/threshold, predictions và metrics.
-- **AIExplanation:** run ID, question, evidence references, answer, provider/model/usage và timestamp.
-- **PaperAccount:** mandate, cash/positions, signal/order/fill ledger, reconciliation và halt state.
-
-Server đổi ID thành path nội bộ; API không nhận filesystem path hoặc mã Python từ browser.
-Secret chỉ đọc phía server và không nằm trong run artifact.
-
-## Tiêu chuẩn nghiên cứu xuyên suốt
-
-- Tín hiệu cuối phiên chỉ khớp từ phiên kế tiếp; mỗi strategy có truncated-history test.
-- Snapshot chỉ `ready` sau validation/checksum; run không tự tải dữ liệu mới.
-- Data, feature, label, model, threshold, chi phí và code đều có version/hash.
-- Evaluation đã xem không được tái sử dụng như dữ liệu chưa nhìn thấy.
-- Mỗi strategy có đối chứng trên cùng dữ liệu và giả định.
-- Báo cáo tách metric tính bằng code khỏi diễn giải AI.
-- Không kết luận từ một mã, fold hoặc metric; hiển thị thất bại và dispersion.
-- Không paper/live khi audit lỗi, data stale, artifact thiếu hoặc model chưa qua cổng.
-
-## Các release
-
-| Release | Kết quả bàn giao |
-|---|---|
-| 0.1 | Workbench web cho SMA, SPY/QQQ, library, compare và notes |
-| 0.2 | RSI/Bollinger, Donchian/ATR và indicator inspector |
-| 0.3 | Universe 10 ETF và walk-forward evaluator |
-| 0.4 | Logistic Regression, HistGradientBoosting; LightGBM có điều kiện |
-| 0.5 | AI giải thích và idea-to-template |
-| 0.6 | Paper trading với ledger, reconciliation và risk gate |
-| 1.0 | Chỉ cân nhắc sau paper; broker/live có spec và phê duyệt riêng |
-
-Kế hoạch chi tiết release 0.1 và task list nằm tại [plan.md](plan.md) và [todo.md](todo.md).
+- Kiến trúc lấy từ code; operational snapshot phải có timestamp và report.
+- Checklist tách build, deploy, credentialed acceptance và activation.
+- Không xóa nhiệm vụ chưa xong, đổi kết quả backtest hoặc ghi trạng thái chạy từ một plan cũ.
+- Tài liệu nghiên cứu lịch sử gắn scope/nhãn, không được dùng làm runbook crypto hiện hành.

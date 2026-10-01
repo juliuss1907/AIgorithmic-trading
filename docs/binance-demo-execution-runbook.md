@@ -1,5 +1,12 @@
 # Binance Demo execution module
 
+Updated 2026-10-01; [canonical architecture](crypto-intraday-system-design.md).
+Source schema v23 code is deployed in the dated worker/web rollout checkpoint;
+that rollout did not start Demo execution or the settings controller. This is not
+live account status. Multi-asset/settings implementation tests do not prove
+credentialed order/protection/close or settings-write acceptance.
+
+
 Supports dynamically registered **USDT Spot and USD-M USDT Perpetual** instruments
 listed on Binance Demo. Perp requires One-way, Single-asset and Isolated margin.
 The multi-route runtime defaults to 3x and supports verified per-pair leverage

@@ -1,5 +1,10 @@
 # Intraday model-provider milestone
 
+> Provider-module implementation history. Current cadence/Spot-Perp lifecycle/execution
+> boundaries: [canonical architecture](../docs/crypto-intraday-system-design.md).
+> These build checks do not establish live provider health or trading activation.
+
+
 Implement secure CLI-managed provider profiles, paper-active Jev decisions, an hourly
 structured LLM analyst pipeline, bounded rule candidates, redacted web operations, and
 model-call telemetry. Provider credentials stay outside Git and SQLite. Jev failures

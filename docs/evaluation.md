@@ -1,5 +1,9 @@
 # Đánh giá sau thí nghiệm đầu tiên
 
+> Phạm vi: Đánh giá research/pilot Vibe-Trading; kết quả lịch sử không phải gate Binance Demo.
+> Xem [kiến trúc AIGT hiện hành](crypto-intraday-system-design.md) cho source v23, multi-asset và execution modules.
+
+
 Ngày thực hiện: 2026-09-14. Engine: Vibe-Trading 0.1.15, Python 3.12.13.
 
 ## Kết luận về công cụ

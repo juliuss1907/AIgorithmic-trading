@@ -1,7 +1,60 @@
-# Shared AI paper portfolio runbook
+# AIGT portfolio/soak runbook — hiện hành và simulator legacy
+
+Cập nhật 2026-10-01. [Kiến trúc chuẩn](crypto-intraday-system-design.md) ·
+[Demo execution runbook](binance-demo-execution-runbook.md).
+Source schema v23; native/XDG path khác Docker volume path. Không dùng journal Demo làm source DB.
+
+## Luồng vận hành hiện hành
+
+- Source worker mặc định `portfolio soak run`: BTC và các catalog coin theo lifecycle riêng,
+  lưu evidence nhưng **không tạo fill**.
+- Spot dùng UTC 4h với native 8h/1d context; Perp numeric primary 30s. Shadow không gọi Jev;
+  Spot chỉ gọi khi candidate/champion có setup đủ điều kiện. Dashboard history UTC+7.
+- Spot cần passing replay trước operator start soak ≥14 ngày; Perp cần decision soak ≥14 ngày,
+  replay pre-cutoff rồi validation riêng ≥72 giờ. Đủ thời gian không đồng nghĩa pass.
+- `assets rules activate` chỉ promote champion, không activate execution.
+- Binance Demo đa coin là worker/profile/journal/key riêng, không phải `PORTFOLIO_WORKER_MODE=paper`.
+  Demo supports USDT Spot/USD-M Perp của coin registered/supported; leverage từng cặp
+  1–10x verified (default 3x), Spot emergency stop 10%. Legacy BTC Demo vẫn fixed 3x.
+- LLM hourly analysis và daily bounded proposal eligibility không tự start Spot soak hoặc activate.
+
+### Kiểm tra read-only trước action
+
+```bash
+aigt status
+aigt assets list
+aigt assets rules status ETHUSDT
+aigt portfolio soak report
+aigt execution demo status
+aigt perp ETH
+```
+
+`execution demo`/`perp` là native commands, không tự route vào registered admin container.
+Không suy ra journal native là journal VPS/container; truyền đúng execution path khi cần.
+`aigt positions` chỉ BTC parent simulator; không chứng minh tài khoản Demo flat.
+Parent `soak report` không thay exact per-asset replay/soak evaluations.
+
+### Rollout và backup
+
+Dùng `aigt backup create`, `backup verify` và `upgrade preflight` trên verified copy.
+Preflight target v23 không migrate database sống. Source rollout đầy đủ có thể restart worker;
+web-only rollout phải giữ worker. Cả hai phải giữ evidence và campaign start times.
+Source và execution DB backup/restore riêng; chưa có scheduler/retention/restore production tự động.
+Không rollback bằng cách ghi đè source DB sau khi có evidence mới.
+
+Snapshot 2026-10-01 05:30 UTC: source worker/web v23 chạy, BTC + 5 Perp soak tiếp tục,
+BTC Spot candidate 30/8 replay reject; Demo không bật trong rollout.
+Kiểm tra mới trước mọi action, không dùng snapshot làm realtime status.
+
+## Compatibility: BTC parent paper simulator
+
+**Phần bên dưới chỉ cho parent simulator BTC**, không phải Demo đa coin.
+Gate 72 giờ là parent-health legacy, không thay Spot/Perp lifecycle ở trên.
+Entry Spot simulator hiện dùng `spot_4h` champion; daily legacy chỉ exit vị thế cũ.
+Không chạy các lệnh activate-paper nếu mục tiêu là Binance Demo.
 
 This runbook operates one 10,000 USDT parent paper portfolio. It allocates a 60% budget to
-the daily BTC spot sleeve and 40% to the intraday BTC perpetual sleeve. The maximum target
+the BTC Spot sleeve (4h entry; daily compatibility exits) and 40% to the intraday BTC perpetual sleeve. The maximum target
 inside each sleeve is 50%, so the parent caps are 30% spot and 20% perp notional. Perpetual
 margin is isolated 3×. Parent hard limits are 50% gross exposure, ±50% BTC delta, 10%
 isolated margin, −1.5% daily entry stop, and −8% drawdown flatten/halt.
@@ -44,8 +97,9 @@ The default operating contract is deliberately multi-cadence:
 | Compact Jev shadow pair | 15 minutes | Jev, observation only |
 | News ingest | 30 minutes | No; scripts ingest and normalize feeds |
 | Evidence-aware market thesis | 60 minutes, only when evidence changes | LLM |
-| Retrospective and rule proposal | 09:00 Asia/Ho_Chi_Minh | Deterministic review, then LLM proposal |
-| Spot daily decision | New closed daily candle and eligible Donchian setup | Jev |
+| Legacy paper retrospective | 09:00 Asia/Ho_Chi_Minh | Deterministic review in paper loop; proposal has separate eligibility scheduler |
+| Spot 4h entry | New closed UTC 4h candle and eligible Donchian setup | Jev |
+| Legacy Spot daily soak observation | New closed daily candle and eligible setup | Jev; compatibility evidence, not new paper entry |
 
 Confirm the effective values before starting a worker:
 
@@ -109,8 +163,8 @@ aigt portfolio status
 aigt portfolio paper run
 ```
 
-The paper worker fetches Binance public market data only. A spot entry requires both a causal
-daily Donchian breakout and Jev approval. Perp entry requires the active bounded rule and Jev
+The simulator fetches Binance public market data only. A new Spot entry requires a promoted
+4h rule, native context, a causal Donchian breakout and Jev approval; daily legacy is exit-only. Perp entry requires the active bounded rule and Jev
 direction. Donchian exits, perp stops, loss limits, and parent flattening execute without an
 LLM/Jev response. The ledger refuses a same-tick perp flip.
 
@@ -191,11 +245,11 @@ pre-cutoff evidence; a separate post-replay validation needs at least 72 hours, 
 outcomes, 95% coverage, positive after-cost score, and no hard risk violation. The
 worker may automatically ask for a bounded LLM challenger after rejection or champion
 deterioration with fresh evidence, at most three calls per asset/scope in 90 days and
-one open candidate. It never auto-promotes. BTC/ETH have `full` capability, but this
-worker still creates BTC paper fills only; ETH paper execution is not enabled here.
-HYPE/NEAR/ZEC/SOL are decision-soak-only. UI timestamps are UTC+7, while
-SQLite/API timestamps and trading candles remain UTC. This code has not been deployed
-to the VPS by this change.
+one open candidate. It never auto-promotes. Source v23 removes ticker capability gates;
+this legacy simulator still creates BTC paper fills only, while Demo multi-route is
+a separate opt-in runtime. UI timestamps are UTC+7; SQLite/API and candles remain UTC.
+Deployment is recorded as a dated snapshot at the top of this runbook, not inferred
+from the presence of these commands.
 
 ## 6. Export the immutable trade journal
 
@@ -244,7 +298,7 @@ schedule backups, prune old artifacts, restore state, encrypt files, or upload o
 secrets are deliberately excluded. Use `--output-dir` for another host directory and
 `--database` only for a native database that is not inside the registered Docker deployment.
 
-For a schema-v22 release, rehearse the upgrade offline against the exact verified artifact:
+For a source-schema-v23 release, rehearse the upgrade offline against the exact verified artifact:
 
 ```bash
 aigt upgrade preflight \
@@ -252,7 +306,7 @@ aigt upgrade preflight \
   --output /absolute/path/to/upgrade-preflight.json
 ```
 
-The command accepts schema v19–v22, needs the sibling manifest, and copies the backup into a
+The command accepts source schema v19–v23, needs the sibling manifest, and copies the backup into a
 private temporary workspace. It checks migration integrity, foreign keys, pre-existing data and
 schema objects, idempotence, and a restore from the original backup into a separate temporary
 copy. `--work-dir /existing/path` selects a temporary workspace with at least 256 MiB free or

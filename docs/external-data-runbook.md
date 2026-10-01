@@ -2,16 +2,22 @@
 
 ## Safety model
 
-Binance remains the paper reference venue. Hyperliquid, Aster, Variational, Lighter,
+Binance public/mainnet data remains the research/signal reference venue.
+Demo discovery/execution uses separate Demo/Testnet quotes without mainnet fallback. Hyperliquid, Aster, Variational, Lighter,
 CryptoRank, and Leviathan are read-only evidence sources. Their observations are stored
 and shown on the dashboard, but they do not change portfolio decisions or hard-risk
 gates. A missing, stale, malformed, or rate-limited source degrades only that source.
+
+Dynamic catalog source schema v23 controls enabled symbols/scopes and venue mappings;
+missing support is reported, not invented. Read-only collectors do not imply execution
+support. Only Binance Demo execution is currently selectable. System boundaries:
+[canonical architecture](crypto-intraday-system-design.md).
 
 ## Sources and cadence
 
 | Source | Data | Default cadence |
 | --- | --- | --- |
-| Hyperliquid | BTC book, mark/oracle, funding, OI | live book + 30 s metadata |
+| Hyperliquid | Per-symbol book, mark/oracle, funding, OI for supported mappings | live book + 30 s metadata |
 | Aster | mark/index basis, funding, book depth, latest liquidation | 60 s + liquidation stream |
 | Variational | long/short OI, funding, TVL, executable spreads by size | 5 min |
 | Lighter | mark/index, base and USD OI, funding, spread, volume | 60 s |

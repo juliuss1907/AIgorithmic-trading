@@ -1,5 +1,9 @@
 # Runbook BTCUSDT research và paper bot
 
+> Phạm vi: Runbook BTC daily research/control trong `lab/`, không phải AIGT Spot 4h hay Binance Demo.
+> Xem [kiến trúc AIGT hiện hành](crypto-intraday-system-design.md) cho source v23, multi-asset và execution modules.
+
+
 ## Trạng thái hiện tại
 
 Snapshot learning: `c225bc7732a0cc1d347adc7925a923b41fb3b12150db1b0ac137b9cf0cf775a2`,
