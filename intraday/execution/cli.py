@@ -28,7 +28,7 @@ def add_execution_parser(commands):
     venues = execution.add_subparsers(dest="execution_venue", required=True)
     demo = venues.add_parser("demo", help="Binance Demo; legacy BTC or explicit multi-route portfolio")
     actions = demo.add_subparsers(dest="execution_action", required=True)
-    for name in ("preflight", "status", "activate", "pause", "run", "flatten"):
+    for name in ("preflight", "status", "activate", "pause", "run", "flatten", "control"):
         command = actions.add_parser(name)
         command.add_argument("--execution-database", type=Path, default=DEFAULT_EXECUTION_DATABASE)
         command.add_argument("--multi", action="store_true", help="shared multi-asset Spot/Perp portfolio (manual activation)")
@@ -44,7 +44,7 @@ def add_execution_parser(commands):
             command.add_argument("--capital", type=Decimal, help="legacy BTC capital; multi portfolio uses allocation configuration")
         if name == "pause":
             command.add_argument("--account-id", help="local account fingerprint shown in status")
-        if name == "run":
+        if name in {"run", "control"}:
             command.add_argument("--once", action="store_true")
             command.add_argument("--interval-seconds", type=float, default=15)
     configure = actions.add_parser("configure", help="set manual coin weights; portfolio stays paused")
@@ -120,7 +120,7 @@ def dispatch_execution(arguments):
     action = arguments.execution_action
     now = datetime.now(timezone.utc)
     try:
-        if action == "run" and not 10 <= arguments.interval_seconds <= 300:
+        if action in {"run", "control"} and not 10 <= arguments.interval_seconds <= 300:
             raise ValueError("execution interval must be between 10 and 300 seconds")
         if action not in {"status", "pause"}:
             source = EvidenceSource(arguments.source_database) if action != "flatten" else None
@@ -131,6 +131,14 @@ def dispatch_execution(arguments):
                 raise ValueError("credential file must be separate from databases")
             credentials = DemoCredentials.load(arguments.secrets_file)
         journal = ExecutionJournal(arguments.execution_database)
+        if action == "control":
+            from intraday.execution.control_worker import run_control_cycle
+            while True:
+                started = time.monotonic()
+                _print(run_control_cycle(source, journal, credentials))
+                if arguments.once:
+                    return
+                time.sleep(max(0, arguments.interval_seconds-(time.monotonic()-started)))
         if action == "status":
             _print(journal.status())
             return

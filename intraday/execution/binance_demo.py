@@ -32,6 +32,7 @@ READ_ROUTES = {
     "/fapi/v3/account", "/fapi/v1/accountConfig", "/fapi/v3/positionRisk", "/fapi/v1/symbolConfig", "/fapi/v1/positionSide/dual",
     "/fapi/v1/multiAssetsMargin", "/fapi/v1/openOrders", "/fapi/v1/openAlgoOrders", "/fapi/v1/income",
     "/fapi/v1/order", "/fapi/v1/algoOrder", "/fapi/v1/userTrades",
+    "/fapi/v1/leverageBracket", "/fapi/v1/leverage",
 }
 SPOT_READ_ROUTES = {"/api/v3/time", "/api/v3/exchangeInfo", "/api/v3/ticker/bookTicker",
                     "/api/v3/account", "/api/v3/openOrders", "/api/v3/order", "/api/v3/myTrades"}
@@ -92,7 +93,7 @@ def _send(request):
 
 
 class DemoTransport:
-    def __init__(self, credentials: DemoCredentials, *, send=None, clock=None, writes_enabled=False, market="perp"):
+    def __init__(self, credentials: DemoCredentials, *, send=None, clock=None, writes_enabled=False, settings_enabled=False, market="perp"):
         if market not in {"spot", "perp"}:
             raise ValueError("invalid Demo market")
         self.market = market
@@ -100,16 +101,22 @@ class DemoTransport:
         self._send = send or _send
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.writes_enabled = writes_enabled
+        self.settings_enabled = settings_enabled
 
     def request(self, method, path, parameters=None, *, signed=False):
         routes = SPOT_READ_ROUTES if self.market == "spot" else READ_ROUTES
         mutations = {"/api/v3/order"} if self.market == "spot" else {"/fapi/v1/order", "/fapi/v1/algoOrder"}
         if method not in {"GET", "POST", "DELETE"} or path not in routes:
             raise ValueError("invalid Demo API route")
+        if path == "/fapi/v1/leverage":
+            if method != "POST" or not signed:
+                raise ValueError("leverage settings require signed POST")
+            if not self.settings_enabled:
+                raise ExecutionUnavailable("Demo settings submission disabled")
         if method != "GET":
-            if not signed or path not in mutations:
+            if not signed or path not in mutations and path != "/fapi/v1/leverage":
                 raise ValueError("Demo mutation outside order interface")
-            if not self.writes_enabled:
+            if path != "/fapi/v1/leverage" and not self.writes_enabled:
                 raise ExecutionUnavailable("Demo order submission disabled")
         values = dict(parameters or {})
         headers = {}
@@ -317,7 +324,8 @@ class BinanceDemoAdapter:
             account=self.account_ref, wallet_balance=account["totalWalletBalance"],
             equity=account["totalMarginBalance"], available_balance=account["availableBalance"],
             positions=tuple(Position(symbol=row["symbol"], quantity=row["positionAmt"],
-                                     entry_price=row["entryPrice"], mark_price=row["markPrice"])
+                                     entry_price=row["entryPrice"], mark_price=row["markPrice"],
+                                     initial_margin=row.get("positionInitialMargin"))
                             for row in positions if Decimal(row["positionAmt"])),
             open_orders=tuple(OpenOrder(symbol=row["symbol"], client_id=row["clientOrderId"], order_type=row["type"])
                               for row in orders) + tuple(OpenOrder(symbol=row["symbol"], client_id=row["clientAlgoId"],
@@ -327,6 +335,33 @@ class BinanceDemoAdapter:
             leverage=setting["leverage"], observed_at=self.transport.clock(),
             symbol_settings={item["symbol"]: item for item in config},
         )
+
+    def leverage_limit(self, notional=Decimal(0)):
+        rows = self.transport.request("GET", "/fapi/v1/leverageBracket", {"symbol": self.symbol}, signed=True)
+        rows = rows if isinstance(rows, list) else [rows]
+        matches = [r for r in rows if r.get("symbol") == self.symbol]
+        if len(matches) != 1 or not notional.is_finite() or notional < 0:
+            raise ExecutionUnavailable("Perp leverage bracket unavailable")
+        row = matches[0]
+        coefficient = Decimal(str(row.get("notionalCoef", 1)))
+        if not coefficient.is_finite() or coefficient <= 0:
+            raise ExecutionUnavailable("invalid Perp leverage bracket coefficient")
+        for bracket in row["brackets"]:
+            floor, cap = Decimal(str(bracket["notionalFloor"]))*coefficient, Decimal(str(bracket["notionalCap"]))*coefficient
+            limit = bracket["initialLeverage"]
+            if not floor.is_finite() or not cap.is_finite() or type(limit) is not int or not 1 <= limit <= 125:
+                raise ExecutionUnavailable("invalid Perp leverage bracket")
+            if floor <= notional < cap:
+                return limit
+        raise ExecutionUnavailable("Perp notional exceeds venue leverage brackets")
+
+    def set_leverage(self, leverage):
+        if type(leverage) is not int or not 1 <= leverage <= 10:
+            raise ValueError("operator leverage must be an integer from 1 to 10")
+        result = self.transport.request("POST", "/fapi/v1/leverage",
+                                        {"symbol": self.symbol, "leverage": leverage}, signed=True)
+        if result.get("symbol") != self.symbol or type(result.get("leverage")) is not int or result["leverage"] != leverage:
+            raise ExecutionUnavailable("Perp leverage acknowledgement mismatch")
 
     def check_clock(self, *, now: datetime):
         server = self.transport.request("GET", "/fapi/v1/time")

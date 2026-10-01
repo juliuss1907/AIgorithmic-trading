@@ -14,8 +14,13 @@ from intraday.execution.contracts import AccountRef, ExecutionAdapter, Execution
 
 
 class ExecutionJournal:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, read_only=False):
         self.path = Path(path).resolve()
+        self.read_only = read_only
+        if read_only:
+            if not self.path.is_file():
+                raise ValueError("execution journal unavailable")
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -40,12 +45,24 @@ class ExecutionJournal:
                 CREATE TABLE IF NOT EXISTS execution_portfolios (
                     account TEXT PRIMARY KEY, payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS execution_perp_settings (
+                    account TEXT NOT NULL, symbol TEXT NOT NULL, payload TEXT NOT NULL,
+                    PRIMARY KEY(account, symbol)
+                );
+                CREATE TABLE IF NOT EXISTS execution_settings_requests (
+                    id TEXT PRIMARY KEY, account TEXT NOT NULL, symbol TEXT NOT NULL,
+                    request_hash TEXT NOT NULL, payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS execution_perp_snapshots (
+                    account TEXT NOT NULL, symbol TEXT NOT NULL, payload TEXT NOT NULL,
+                    PRIMARY KEY(account, symbol)
+                );
             """)
         self.path.chmod(0o600)
 
     @contextmanager
     def connect(self):
-        connection = sqlite3.connect(self.path, timeout=10)
+        connection = sqlite3.connect(self.path.as_uri()+"?mode=ro", uri=True, timeout=10) if self.read_only else sqlite3.connect(self.path, timeout=10)
         connection.row_factory = sqlite3.Row
         try:
             with connection:
@@ -55,6 +72,8 @@ class ExecutionJournal:
 
     @contextmanager
     def lock(self):
+        if self.read_only:
+            raise ValueError("read-only journal cannot execute operations")
         descriptor = os.open(str(self.path) + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             try:
@@ -69,6 +88,71 @@ class ExecutionJournal:
         with self.connect() as connection:
             row = connection.execute("SELECT payload FROM execution_control WHERE account=?", (account.key,)).fetchone()
         return json.loads(row[0]) if row else None
+
+    def _optional_table(self, table):
+        with self.connect() as c:
+            return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
+
+    def perp_setting(self, account, symbol):
+        if not self._optional_table("execution_perp_settings"):
+            return {"leverage": 3, "revision": 0}
+        with self.connect() as c:
+            row = c.execute("SELECT payload FROM execution_perp_settings WHERE account=? AND symbol=?", (account.key, symbol)).fetchone()
+        return json.loads(row[0]) if row else {"leverage": 3, "revision": 0}
+
+    def settings_request(self, request_id):
+        if not self._optional_table("execution_settings_requests"):
+            return None
+        with self.connect() as c:
+            row = c.execute("SELECT payload FROM execution_settings_requests WHERE id=?", (request_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def settings_requests(self, account, *, pending_only=True):
+        if not self._optional_table("execution_settings_requests"):
+            return []
+        with self.connect() as c:
+            rows = c.execute("SELECT payload FROM execution_settings_requests WHERE account=? ORDER BY rowid", (account.key,)).fetchall()
+        items = [json.loads(r[0]) for r in rows]
+        return [r for r in items if not pending_only or r["status"] in {"queued", "applying", "unknown"}]
+
+    def queue_settings_request(self, item, request_hash):
+        # Atomic claim, including competing requests from different web processes.
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            previous = c.execute("SELECT request_hash,payload FROM execution_settings_requests WHERE id=?", (item["id"],)).fetchone()
+            if previous:
+                if previous[0] != request_hash:
+                    raise ValueError("idempotency key reused with different request")
+                return json.loads(previous[1])
+            pending = c.execute("SELECT payload FROM execution_settings_requests WHERE account=? AND symbol=?", (item["account"], item["symbol"])).fetchall()
+            if any(json.loads(r[0])["status"] in {"queued", "applying", "unknown"} for r in pending):
+                raise ValueError("pending leverage request must be reconciled first")
+            c.execute("INSERT INTO execution_settings_requests VALUES (?,?,?,?,?)",
+                      (item["id"], item["account"], item["symbol"], request_hash, json.dumps(item)))
+        return item
+
+    def save_settings_request(self, item, *, now, verified_leverage=None):
+        with self.connect() as c:
+            c.execute("UPDATE execution_settings_requests SET payload=? WHERE id=?", (json.dumps(item), item["id"]))
+            if verified_leverage is not None:
+                row = c.execute("SELECT payload FROM execution_perp_settings WHERE account=? AND symbol=?", (item["account"], item["symbol"])).fetchone()
+                revision = json.loads(row[0])["revision"] if row else 0
+                setting = {"leverage": verified_leverage, "revision": revision+1, "verified_at": now.isoformat()}
+                c.execute("INSERT INTO execution_perp_settings VALUES (?,?,?) ON CONFLICT(account,symbol) DO UPDATE SET payload=excluded.payload",
+                          (item["account"], item["symbol"], json.dumps(setting)))
+            c.execute("INSERT INTO execution_events(account,at,kind,payload) VALUES (?,?,?,?)",
+                      (item["account"], now.isoformat(), "perp_leverage_"+item["status"], json.dumps(item)))
+
+    def save_perp_snapshot(self, account, symbol, payload):
+        with self.connect() as c:
+            c.execute("INSERT INTO execution_perp_snapshots VALUES (?,?,?) ON CONFLICT(account,symbol) DO UPDATE SET payload=excluded.payload",
+                      (account.key, symbol, json.dumps(payload)))
+
+    def perp_snapshots(self):
+        if not self._optional_table("execution_perp_snapshots"):
+            return []
+        with self.connect() as c:
+            return [json.loads(r[0]) for r in c.execute("SELECT payload FROM execution_perp_snapshots")]
 
     def portfolio(self, account: AccountRef):
         with self.connect() as connection:

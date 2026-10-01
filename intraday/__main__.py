@@ -150,6 +150,7 @@ from intraday.soak_report import (
 from intraday.upgrade_preflight import preflight_upgrade_backup
 from intraday.execution.cli import add_execution_parser, dispatch_execution
 from intraday.execution.connect import add_exchange_connect_parsers, dispatch_connect
+from intraday.execution.perp_cli import add_perp_parser, dispatch_perp
 from intraday.asset_onboarding import AssetOnboarding
 
 
@@ -167,6 +168,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command")
     add_execution_parser(commands)
+    add_perp_parser(commands)
     for name in (
         "doctor", "status", "collect", "news", "analysis", "run", "cross-venue-status",
         "cross-venue-replay", "cross-venue-evaluate",
@@ -182,6 +184,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.choices["cross-venue-evaluate"].add_argument("--evidence", required=True)
     serve = commands.add_parser("serve")
     serve.add_argument("--database", default=None)
+    serve.add_argument("--execution-database", type=Path, default=None, help="opt-in Perp controller journal; never exchange credentials")
     positions = commands.add_parser("positions")
     positions.add_argument("--database", default=None)
     assets = commands.add_parser("assets")
@@ -1822,6 +1825,9 @@ def main() -> None:
     if arguments.command == "execution":
         dispatch_execution(arguments)
         return
+    if arguments.command == "perp":
+        dispatch_perp(arguments)
+        return
     if arguments.command == "connect" and arguments.connect_role in {"bnb", "hl"}:
         dispatch_connect(arguments)
         return
@@ -2041,6 +2047,7 @@ def main() -> None:
                 operator_action_token=config.operator_action_token,
                 operator_actions_enabled=config.operator_actions_enabled,
                 operator_request_ttl_seconds=config.operator_request_ttl_seconds,
+                execution_database=arguments.execution_database,
             ),
             host=config.dashboard_host,
             port=config.dashboard_port,
