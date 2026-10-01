@@ -1,7 +1,9 @@
 # Binance Demo execution module
 
 Supports dynamically registered **USDT Spot and USD-M USDT Perpetual** instruments
-listed on Binance Demo. Perp requires One-way, Single-asset, isolated 3x per coin.
+listed on Binance Demo. Perp requires One-way, Single-asset and Isolated margin.
+The multi-route runtime defaults to 3x and supports verified per-pair leverage
+from 1–10x, subject to venue limits. The legacy BTC runtime remains fixed at 3x.
 Hyperliquid and other DEX execution remain unavailable. This module does not turn
 on the current paper worker, deploy to the VPS, or submit an order just because a
 key exists. The older BTC-only commands are retained as an explicitly legacy path.
@@ -148,6 +150,86 @@ routing. Run from an installed checkout (`uv run aigt ...`), with an explicit so
 database path. Do not start them inside the existing soak container. A dedicated VPS
 service/Compose profile is a subsequent rollout, after credentialed acceptance.
 
+## Perp information and confirmed leverage controls
+
+From the installed checkout, after connecting and selecting a Binance Demo Perp
+route, use the short commands:
+
+```bash
+aigt perp ETH
+aigt perp ETH -leverage
+# --leverage is an equivalent spelling.
+```
+
+The first command is read-only: market/account state, actual and configured
+leverage, Isolated margin, open orders, Long/Short positions, entry/mark prices and
+unrealized PnL in USDT. PnL excludes fees/funding. External positions are labelled
+unmanaged, never adopted. Display times are UTC+7. Defaults use the configured
+source database and `state/execution/binance-demo.sqlite3`; pass
+`--source-database`, `--execution-database`, or `--secrets-file` for other paths.
+
+`-leverage` opens an interactive integer input (1–10x). Enter shows a preview such
+as `ETHUSDT · Binance Demo · Isolated · Leverage: 3x → 5x`. Cancel is the default;
+only Confirm records and submits a settings request. No headless/automatic confirm
+option exists. The execution portfolio must be paused, and the target pair flat
+with no regular/algo orders or unresolved journal orders. Other account modes are
+never changed, positions never closed, orders never cancelled by this command.
+
+The effective setting is stored independently per account and pair, only after
+exchange read-back verifies it. A lost acknowledgement/crash leaves `unknown`:
+reconciliation uses GET only, never blind POST resubmission. `aigt perp ETH` shows
+pending request IDs. Fix/reconcile unknown results before creating another request.
+Legacy BTC non-3x requires migration to the multi-route runtime while paused/flat.
+Increasing leverage does not increase strategy weights or notional caps; aggregate
+isolated margin remains capped at 10% of allocated strategy equity. Settings drift
+pauses entries while retaining native stops and operator flatten.
+
+### Dashboard controller (opt-in, separate from trading)
+
+The `/assets` Perp tab reads an authenticated journal projection, not exchange
+keys. To enable it locally, start these in separate terminals:
+
+```bash
+aigt execution demo control --source-database state/intraday/intraday.sqlite3
+aigt serve --database state/intraday/intraday.sqlite3 \
+  --execution-database state/execution/binance-demo.sqlite3
+```
+
+Configure `INTRADAY_CONTROL_TOKEN`, then enter that token in `/assets`.
+It is **not** a Binance API key. Choose Perp, enter the coin, read information and
+choose **Đổi leverage**. Enter advances to Cancel/Confirm. Snapshots older than
+60 seconds, changed routes, pending requests and unavailable accounts block changes.
+Fresh controller timestamps alone do not invalidate an otherwise unchanged preview.
+After Confirm, the settings controller rechecks all preconditions, applies and
+reads back the leverage. It runs even while trading is paused, has settings-only
+permission, and cannot submit orders. Without it, the dashboard reports unavailable
+instead of zero balances/positions. Closing the tab after Confirm does not cancel
+an already queued request.
+
+### Future Compose rollout — do not start during a normal web-only update
+
+`deploy/intraday/compose.perp-control.yaml` is an explicit override. Prepare existing
+execution/journal and credential directories first with ownership matching
+`AIGT_EXECUTION_UID/GID` (defaults 1000:1000), directory mode 700 and credential file
+mode 600. Keep the journal directory dedicated: it is mounted into the web container
+for queue writes; credentials are mounted **only** into the settings controller.
+Wrong ownership must be corrected deliberately, never by making credentials public.
+
+After backup, route/schema rehearsal and explicit rollout approval:
+
+```bash
+docker compose --env-file .env.intraday -f deploy/intraday/compose.yaml \
+  -f deploy/intraday/compose.perp-control.yaml --profile perp-control \
+  up -d --build --no-deps web perp-control
+```
+
+Do not include `worker` or `demo-execution` in this command. Verify the soak worker's
+container ID/start time before and after; they must be unchanged. This starts only
+the keyless web queue and settings controller, not trading. Stopping the controller
+does not undo queued requests: inspect their status before restarting it. All source
+soak evidence remains unchanged. Credentialed Demo settings acceptance and VPS
+deployment are separate operator-controlled steps, not performed by local tests.
+
 ## Credentials — provision locally, never paste into chat
 
 Create a **Binance Demo** API key with USD-M Futures trading permission, not a live
@@ -155,8 +237,9 @@ Binance key and not merely a read-only key. No withdrawal permission is needed.
 See [Demo API management](https://demo.binance.com/en/my/settings/api-management).
 This adapter accepts HMAC API key/secret pairs, not RSA/Ed25519 credentials.
 
-Set account modes/margin/leverage manually in Binance Demo. Preflight checks these
-settings and **does not change them**. Use only this strategy on the account;
+Set account modes/margin manually in Binance Demo; leverage can be changed through
+the confirmed Perp controls below. Preflight checks these settings and **does not
+change them**. Use only this strategy on the account;
 manual trading, deposits, balance resets, or non-USDT commissions cause drift checks
 to pause entries. Rotating the key changes the local account fingerprint: pause,
 reconcile, and flatten before rotation; retain the previous execution journal.
