@@ -42,6 +42,7 @@ def test_dashboard_and_status_are_available_without_control_credentials(tmp_path
 
 def test_system_plan_and_architecture_are_public_read_only_pages(tmp_path):
     client = TestClient(create_app(database=tmp_path / "intraday.sqlite"))
+    counts_before = client.get("/api/status").json()["counts"]
 
     plan = client.get("/system-plan")
     architecture = client.get("/static/system-trading-architecture.html")
@@ -50,13 +51,22 @@ def test_system_plan_and_architecture_are_public_read_only_pages(tmp_path):
 
     assert plan.status_code == 200
     assert "System plan" in plan.text
-    assert "Một bot paper-trading an toàn" in plan.text
+    assert "Một hệ thống đa coin" in plan.text
+    assert "Source schema v23" in plan.text
+    assert "Đã xây ≠ đã deploy ≠ đã kích hoạt/nghiệm thu" in plan.text
+    assert "Binance Demo" in plan.text
+    assert "validation độc lập ≥72 giờ" in plan.text
+    assert "chưa đầy đủ ATR/allocation/emergency stop/shared Demo risk" in plan.text
+    assert "không phải vị thế Demo đa coin" in plan.text
+    assert "Target blueprint" not in plan.text
+    assert "BTC/USDT · Binance paper · isolated 3×" not in plan.text
     assert "system-trading-architecture.html" in plan.text
     assert 'http-equiv="refresh"' not in plan.text
     assert architecture.status_code == 200
     assert "AIgorithmic Trading" in architecture.text
     assert 'href="/system-plan"' in dashboard.text
     assert 'href="/system-plan"' in portfolio.text
+    assert client.get("/api/status").json()["counts"] == counts_before
 
 
 def test_control_endpoint_is_token_protected_and_deduplicated(tmp_path):

@@ -1,74 +1,30 @@
+// Current AIGT code architecture, source v23. Capability is not activation.
 digraph TradingArchitecture {
-  graph [
-    rankdir=LR,
-    bgcolor="white",
-    pad="0.25",
-    nodesep="0.35",
-    ranksep="0.65",
-    fontname="Helvetica Neue"
-  ];
-  node [
-    shape=box,
-    style="rounded,filled",
-    color="#223047",
-    fillcolor="#F5F7FA",
-    fontcolor="#172033",
-    fontname="Helvetica Neue",
-    fontsize=10,
-    margin="0.14,0.09"
-  ];
-  edge [color="#65738A", penwidth=1.2, arrowsize=0.7];
-
-  subgraph cluster_sources {
-    label="EXTERNAL SOURCES";
-    color="#CBD3DE";
-    fontcolor="#65738A";
-    fontsize=10;
-    ws [label="Binance\nWebSocket"];
-    rest [label="Binance REST\nCCXT"];
-    intel [label="RSS + social\n(optional feeds)"];
-  }
-
-  subgraph cluster_data {
-    label="MARKET DATA PLANE";
-    color="#CBD3DE";
-    fontcolor="#65738A";
-    cache [label="Timestamped\nfeature cache"];
-    snapshot [label="FeatureSnapshot\nevery 5 seconds", fillcolor="#E8F0FC"];
-  }
-
-  subgraph cluster_cold {
-    label="COLD PATH — 60 MINUTES";
-    color="#CBD3DE";
-    fontcolor="#65738A";
-    analysts [label="Market · News ·\nSentiment analysts"];
-    manager [label="Research\nmanager"];
-    rules [label="Bounded rule\ngenerator"];
-    eval [label="Validation · replay ·\nchampion/challenger", fillcolor="#F5EFD9"];
-  }
-
-  subgraph cluster_hot {
-    label="HOT PATH — 5 SECONDS";
-    color="#CBD3DE";
-    fontcolor="#65738A";
-    jev [label="Jev typed\ndecision", fillcolor="#E8F0FC"];
-    gate [label="Deterministic\nrisk gate", fillcolor="#F7E5E5"];
-    paper [label="3x isolated\npaper engine", fillcolor="#E7F4EC"];
-  }
-
-  db [shape=cylinder, label="SQLite WAL\naudit + ledger", fillcolor="#EEF1F5"];
-  ops [label="Private dashboard\n+ Telegram", fillcolor="#EEF1F5"];
-
-  ws -> cache;
-  rest -> cache;
-  cache -> snapshot;
-  snapshot -> analysts;
-  intel -> analysts;
-  analysts -> manager -> rules -> eval;
-  snapshot -> jev -> gate -> paper;
-  eval -> gate;
-  paper -> db;
-  gate -> db;
-  analysts -> db;
-  db -> ops;
+  graph [rankdir=TB, bgcolor="white", pad="0.25", nodesep="0.4", ranksep="0.65", fontname="Helvetica Neue"];
+  node [shape=box, style="rounded,filled", color="#223047", fillcolor="#F5F7FA", fontname="Helvetica Neue", fontsize=10, margin="0.14,0.09"];
+  edge [color="#65738A", penwidth=1.2, arrowsize=0.7, fontname="Helvetica Neue", fontsize=9];
+  sources [label="Binance research data\nDEX / context / news (read-only)"];
+  collectors [label="Multi-asset collectors\nClosed UTC 4h/8h/1d, Perp 1h"];
+  jev [label="Scoped rule + Jev\nPerp 30s / Spot setup", fillcolor="#E8F0FC"];
+  llm [label="Hourly LLM analysis\nBounded per-asset proposals"];
+  lifecycle [label="Replay / soak / manual promotion\nIndependent symbol + scope", fillcolor="#F5EFD9"];
+  source [shape=cylinder, label="Source SQLite v23\nCatalog / signals / evaluations"];
+  operator [label="Operator approval\nSeparate execution activation"];
+  web [label="Dashboard / CLI\nUI UTC+7 / guarded controls"];
+  runtime [label="Multi Demo runtime (opt-in)\nAllocation / reconcile / protect / risk", fillcolor="#F7E5E5"];
+  adapter [label="ExecutionAdapter\nBinance Demo Spot / USD-M Perp"];
+  demo [label="Binance Demo account\nNo mainnet execution", fillcolor="#E7F4EC"];
+  journal [shape=cylinder, label="Separate execution journal\nDurable intents / orders / fills"];
+  legacy [label="Legacy BTC paper simulator\nNo exchange orders"];
+  future [label="Hyperliquid execution\nNot implemented", style="rounded,dashed"];
+  sources -> collectors -> jev -> source;
+  collectors -> llm -> lifecycle -> source;
+  operator -> lifecycle [label="approve"];
+  source -> web [label="projection"];
+  source -> runtime [label="read-only"];
+  operator -> runtime [label="activation"];
+  runtime -> journal [label="persist before submit"];
+  runtime -> adapter -> demo [label="Demo API"];
+  source -> legacy [label="separate simulated path"];
+  future -> adapter [style=dashed, label="future module; no route today"];
 }

@@ -2,303 +2,322 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "AIgorithmic Trading — Kiến trúc mục tiêu",
+    "title": "AIgorithmic Trading — Kiến trúc hiện hành",
     "quality_profile": "showcase",
-    "viewBox": [1348, 740],
+    "viewBox": [
+      1380,
+      740
+    ],
     "views": [
       {
-        "id": "trade-flow",
-        "label": "Luồng giao dịch",
-        "focus": ["market_sources", "collectors", "snapshot_cache", "spot_setup", "jev_primary", "risk_gate", "paper_portfolio"],
-        "note": "Theo dõi dữ liệu thị trường đi qua quyết định, risk gate và paper portfolio."
+        "id": "evidence",
+        "label": "Dữ liệu và quyết định",
+        "focus": [
+          "market",
+          "collectors",
+          "jev",
+          "source",
+          "llm",
+          "rules"
+        ],
+        "note": "Spot 4h và Perp độc lập; model không tự promote hoặc bật trading."
       },
       {
-        "id": "learning-loop",
-        "label": "Vòng học",
-        "focus": ["jev_primary", "jev_shadow", "journal", "retrospective", "llm_analysis", "manual_approval"],
-        "note": "Mọi quyết định trở thành evidence; rule mới chỉ được đề xuất và duyệt thủ công."
+        "id": "execution",
+        "label": "Binance Demo opt-in",
+        "focus": [
+          "source",
+          "runtime",
+          "adapter",
+          "demo",
+          "journal"
+        ],
+        "note": "Runtime chỉ đọc evidence; journal thực thi và tài khoản Demo tách riêng."
       },
       {
-        "id": "safety-boundary",
-        "label": "Ranh giới an toàn",
-        "focus": ["risk_gate", "paper_portfolio", "journal", "manual_approval"],
-        "note": "Model không thể vượt hard-risk, đặt lệnh thật hoặc tự kích hoạt rule."
+        "id": "operator",
+        "label": "Operator và kiểm chứng",
+        "focus": [
+          "operator",
+          "dashboard",
+          "rules",
+          "source"
+        ],
+        "note": "Đã xây không đồng nghĩa đã kích hoạt. Giao diện hiển thị lịch sử UTC+7."
       }
     ]
   },
   "components": [
     {
-      "id": "market_sources",
+      "id": "market",
       "type": "external",
       "label": "Nguồn thị trường",
-      "sublabel": "Binance · Hyperliquid · RSS",
-      "tag": "hiện có",
-      "pos": [38, 284],
-      "size": [150, 68]
+      "sublabel": "Binance · DEX · news",
+      "tag": "read-only",
+      "pos": [
+        40,
+        270
+      ],
+      "size": [
+        210,
+        76
+      ]
     },
     {
       "id": "collectors",
       "type": "backend",
-      "label": "Collectors đa nhịp",
-      "sublabel": "5s · 15s · 60s · 30m",
-      "tag": "kế tiếp",
-      "pos": [218, 284],
-      "size": [160, 68]
+      "label": "Collectors đa coin",
+      "sublabel": "Snapshot · nến UTC",
+      "tag": "Spot / Perp",
+      "pos": [
+        320,
+        270
+      ],
+      "size": [
+        210,
+        76
+      ]
     },
     {
-      "id": "snapshot_cache",
+      "id": "jev",
+      "type": "backend",
+      "label": "Jev + rule gate",
+      "sublabel": "Perp 30s · Spot setup",
+      "tag": "decision-only soak",
+      "pos": [
+        600,
+        270
+      ],
+      "size": [
+        210,
+        76
+      ]
+    },
+    {
+      "id": "source",
       "type": "database",
-      "label": "Snapshot cache",
-      "sublabel": "freshness + checksum",
-      "tag": "kế tiếp",
-      "pos": [407, 284],
-      "size": [150, 68]
+      "label": "Source DB v23",
+      "sublabel": "Catalog · signal · soak",
+      "tag": "evidence",
+      "pos": [
+        880,
+        270
+      ],
+      "size": [
+        210,
+        76
+      ]
     },
     {
-      "id": "spot_setup",
+      "id": "llm",
       "type": "backend",
-      "label": "Spot Donchian",
-      "sublabel": "event-driven · daily close",
-      "tag": "hiện có",
-      "pos": [596, 100],
-      "size": [158, 68]
+      "label": "LLM phân tích",
+      "sublabel": "Thesis · bounded rule",
+      "tag": "cold path",
+      "pos": [
+        600,
+        80
+      ],
+      "size": [
+        210,
+        76
+      ]
     },
     {
-      "id": "jev_primary",
-      "type": "cloud",
-      "label": "Jev numeric",
-      "sublabel": "Perp primary · 30 giây",
-      "tag": "hiện có",
-      "pos": [596, 284],
-      "size": [158, 68]
-    },
-    {
-      "id": "jev_shadow",
-      "type": "cloud",
-      "label": "Jev compact",
-      "sublabel": "shadow A/B · 15 phút",
-      "tag": "kế tiếp",
-      "pos": [596, 468],
-      "size": [158, 68]
-    },
-    {
-      "id": "risk_gate",
+      "id": "rules",
       "type": "security",
-      "label": "Deterministic gate",
-      "sublabel": "risk · sizing · exits",
-      "tag": "hard boundary",
-      "pos": [785, 284],
-      "size": [166, 68]
+      "label": "Rule lifecycle",
+      "sublabel": "Replay · soak · approve",
+      "tag": "theo coin / scope",
+      "pos": [
+        880,
+        80
+      ],
+      "size": [
+        210,
+        76
+      ]
     },
     {
-      "id": "paper_portfolio",
+      "id": "dashboard",
+      "type": "frontend",
+      "label": "Dashboard + CLI",
+      "sublabel": "Thông tin · control token",
+      "tag": "UI UTC+7",
+      "pos": [
+        1160,
+        270
+      ],
+      "size": [
+        210,
+        76
+      ]
+    },
+    {
+      "id": "operator",
+      "type": "external",
+      "label": "Operator",
+      "sublabel": "Xác nhận riêng từng bước",
+      "tag": "không auto-activation",
+      "pos": [
+        1160,
+        80
+      ],
+      "size": [
+        210,
+        76
+      ]
+    },
+    {
+      "id": "runtime",
+      "type": "security",
+      "label": "Demo risk runtime",
+      "sublabel": "Allocation · reconciliation",
+      "tag": "opt-in; mặc định tắt",
+      "pos": [
+        880,
+        450
+      ],
+      "size": [
+        210,
+        76
+      ]
+    },
+    {
+      "id": "adapter",
       "type": "backend",
-      "label": "Paper portfolio",
-      "sublabel": "Spot + Perp isolated 3×",
-      "tag": "paper only",
-      "pos": [979, 284],
-      "size": [166, 68]
+      "label": "Execution adapter",
+      "sublabel": "Spot / Perp · native stop",
+      "tag": "Binance Demo",
+      "pos": [
+        600,
+        450
+      ],
+      "size": [
+        210,
+        76
+      ]
+    },
+    {
+      "id": "demo",
+      "type": "external",
+      "label": "Tài khoản Demo",
+      "sublabel": "USDT Spot / USD-M Perp",
+      "tag": "không phải mainnet",
+      "pos": [
+        320,
+        450
+      ],
+      "size": [
+        210,
+        76
+      ]
     },
     {
       "id": "journal",
       "type": "database",
-      "label": "Journal + outcomes",
-      "sublabel": "append-only evidence",
-      "tag": "kế tiếp",
-      "pos": [1175, 284],
-      "size": [150, 68]
-    },
-    {
-      "id": "llm_analysis",
-      "type": "cloud",
-      "label": "LLM analysis",
-      "sublabel": "thesis mỗi 60 phút",
-      "tag": "hiện có",
-      "pos": [785, 580],
-      "size": [166, 68]
-    },
-    {
-      "id": "retrospective",
-      "type": "backend",
-      "label": "Retrospective",
-      "sublabel": "09:00 Asia/Ho_Chi_Minh",
-      "tag": "kế tiếp",
-      "pos": [979, 580],
-      "size": [166, 68]
-    },
-    {
-      "id": "manual_approval",
-      "type": "security",
-      "label": "Manual approval",
-      "sublabel": "replay + 72h soak",
-      "tag": "bắt buộc",
-      "pos": [1175, 580],
-      "size": [150, 68]
-    }
-  ],
-  "boundaries": [
-    {
-      "kind": "region",
-      "label": "HOT PATH · quyết định và quản trị rủi ro",
-      "wraps": ["collectors", "snapshot_cache", "spot_setup", "jev_primary", "jev_shadow", "risk_gate", "paper_portfolio"],
-      "pad": 22
-    },
-    {
-      "kind": "region",
-      "label": "COLD PATH · phân tích và đề xuất rule",
-      "wraps": ["llm_analysis", "retrospective", "manual_approval"],
-      "pad": 20
-    },
-    {
-      "kind": "security-group",
-      "label": "EVIDENCE · append-only",
-      "wraps": ["journal"],
-      "pad": 14
+      "label": "Execution journal",
+      "sublabel": "Intent · order · fill · audit",
+      "tag": "tách khỏi source DB",
+      "pos": [
+        880,
+        640
+      ],
+      "size": [
+        210,
+        76
+      ]
     }
   ],
   "connections": [
     {
-      "id": "source_to_collectors",
-      "from": "market_sources",
-      "to": "collectors",
-      "label": "REST + RSS",
-      "variant": "emphasis",
-      "labelAt": [195, 280]
+      "from": "market",
+      "to": "collectors"
     },
     {
-      "id": "collectors_to_cache",
       "from": "collectors",
-      "to": "snapshot_cache",
-      "label": "normalize + cache",
-      "variant": "emphasis",
-      "labelAt": [384, 368]
+      "to": "jev"
     },
     {
-      "id": "cache_to_spot",
-      "from": "snapshot_cache",
-      "to": "spot_setup",
-      "label": "daily close",
-      "variant": "emphasis",
-      "labelAt": [562, 214]
+      "from": "jev",
+      "to": "source",
+      "label": "ghi signal"
     },
     {
-      "id": "cache_to_primary",
-      "from": "snapshot_cache",
-      "to": "jev_primary",
-      "label": "numeric_v1",
-      "variant": "emphasis",
-      "labelAt": [630, 260]
+      "from": "llm",
+      "to": "rules",
+      "label": "candidate"
     },
     {
-      "id": "cache_to_shadow",
-      "from": "snapshot_cache",
-      "to": "jev_shadow",
-      "label": "compact_v1",
-      "variant": "dashed",
-      "labelAt": [562, 446]
+      "from": "rules",
+      "to": "source",
+      "label": "registry",
+      "labelDy": 24
     },
     {
-      "id": "spot_to_gate",
-      "from": "spot_setup",
-      "to": "risk_gate",
-      "label": "eligible setup",
-      "variant": "emphasis",
-      "labelAt": [761, 210]
+      "from": "operator",
+      "to": "rules",
+      "label": "duyệt",
+      "variant": "security"
     },
     {
-      "id": "primary_to_gate",
-      "from": "jev_primary",
-      "to": "risk_gate",
-      "label": "typed decision",
-      "variant": "emphasis",
-      "labelAt": [761, 368]
+      "from": "operator",
+      "to": "dashboard",
+      "label": "CLI / UI",
+      "labelDy": 24
     },
     {
-      "id": "gate_to_portfolio",
-      "from": "risk_gate",
-      "to": "paper_portfolio",
-      "label": "approved paper fill",
+      "from": "source",
+      "to": "dashboard",
+      "label": "projection"
+    },
+    {
+      "from": "source",
+      "to": "runtime",
+      "label": "chỉ đọc",
       "variant": "security",
-      "labelAt": [957, 368]
+      "labelDy": 24
     },
     {
-      "id": "portfolio_to_journal",
-      "from": "paper_portfolio",
+      "from": "runtime",
+      "to": "adapter",
+      "label": "intent"
+    },
+    {
+      "from": "adapter",
+      "to": "demo",
+      "label": "Demo API"
+    },
+    {
+      "from": "runtime",
       "to": "journal",
-      "label": "signals + trades",
-      "variant": "emphasis",
-      "labelAt": [1053, 260]
-    },
-    {
-      "id": "shadow_to_journal",
-      "from": "jev_shadow",
-      "to": "journal",
-      "label": "observation only",
-      "variant": "dashed",
-      "fromSide": "right",
-      "toSide": "left",
-      "via": [[1155, 502], [1155, 318]],
-      "labelAt": [945, 528]
-    },
-    {
-      "id": "sources_to_llm",
-      "from": "market_sources",
-      "to": "llm_analysis",
-      "label": "ingested evidence",
-      "variant": "dashed",
-      "labelAt": [403, 656]
-    },
-    {
-      "id": "journal_to_retro",
-      "from": "journal",
-      "to": "retrospective",
-      "label": "mature outcomes",
-      "variant": "dashed",
-      "labelAt": [1071, 472]
-    },
-    {
-      "id": "llm_to_retro",
-      "from": "llm_analysis",
-      "to": "retrospective",
-      "label": "thesis + proposal",
-      "variant": "dashed",
-      "labelAt": [957, 664]
-    },
-    {
-      "id": "retro_to_manual",
-      "from": "retrospective",
-      "to": "manual_approval",
-      "label": "challenger",
-      "variant": "security",
-      "labelAt": [1142, 664]
+      "label": "durable",
+      "labelDy": 24
     }
   ],
   "cards": [
     {
-      "dot": "emerald",
-      "title": "An toàn trước tiên",
-      "items": [
-        "Risk loop 5 giây không phụ thuộc AI",
-        "Provider lỗi luôn fail-closed về hold",
-        "Không có live-order path trong giai đoạn này"
-      ]
-    },
-    {
       "dot": "cyan",
-      "title": "Hai nhịp AI",
+      "title": "Spot và Perp",
       "items": [
-        "Jev xử lý hot path mỗi 30 giây",
-        "LLM phân tích tối đa một lần mỗi giờ",
-        "Compact Jev chỉ tạo evidence A/B"
+        "Catalog động; chọn venue riêng từng market.",
+        "Spot UTC 4h + 8h/1d; Perp Jev 30s."
       ]
     },
     {
-      "dot": "amber",
-      "title": "Promotion có kiểm soát",
+      "dot": "emerald",
+      "title": "Quyền thực thi",
       "items": [
-        "Rule mới bắt đầu ở trạng thái shadow",
-        "Replay và 72 giờ soak trước khi xem xét",
-        "Kích hoạt luôn cần người vận hành phê duyệt"
+        "Paper simulator là đường legacy độc lập.",
+        "Demo cần champion, evidence và activation riêng."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Ranh giới",
+      "items": [
+        "Model không đổi hard-risk hoặc tự promote.",
+        "Hyperliquid execution chưa triển khai."
       ]
     }
   ]

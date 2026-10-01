@@ -1,38 +1,27 @@
+// Decision-only soak and Demo execution are different paths.
 digraph DecisionSequence {
-  graph [
-    rankdir=LR,
-    bgcolor="white",
-    pad="0.2",
-    nodesep="0.25",
-    ranksep="0.55",
-    fontname="Helvetica Neue"
-  ];
-  node [
-    shape=box,
-    style="rounded,filled",
-    color="#223047",
-    fillcolor="#F5F7FA",
-    fontcolor="#172033",
-    fontname="Helvetica Neue",
-    fontsize=10,
-    margin="0.13,0.08"
-  ];
-  edge [color="#65738A", penwidth=1.15, arrowsize=0.68, fontname="Helvetica Neue", fontsize=8];
-
-  tick [label="1 · Decision tick\nUTC 5-second bucket"];
-  snap [label="2 · Build snapshot\nvalidate freshness"];
-  jev [label="3 · Jev decision\ntyped answers", fillcolor="#E8F0FC"];
-  gate [label="4 · Risk gate\npolicy + margin", fillcolor="#F7E5E5"];
-  fill [label="5 · Atomic fill\nledger + outbox", fillcolor="#E7F4EC"];
-  hold [label="Persist blocked / HOLD\nwith reason codes", fillcolor="#F5EFD9"];
-  notify [label="6 · Async notify\nno rollback on failure"];
-
-  tick -> snap;
-  snap -> jev [label="healthy"];
-  snap -> hold [label="stale"];
-  jev -> gate [label="valid"];
-  jev -> hold [label="timeout / invalid"];
-  gate -> fill [label="authorized"];
-  gate -> hold [label="rejected"];
-  fill -> notify;
+  graph [rankdir=TB, bgcolor="white", pad="0.2", nodesep="0.3", ranksep="0.6"];
+  node [shape=box, style="rounded,filled", color="#223047", fillcolor="#F5F7FA", fontname="Helvetica Neue", fontsize=10];
+  edge [color="#65738A", fontname="Helvetica Neue", fontsize=9];
+  tick [label="Scoped UTC tick\nPerp 30s / Spot closed 4h"];
+  snapshot [label="Closed-bar snapshot\nValidate scope + freshness"];
+  jev [label="Jev decision\nSpot only eligible setup", fillcolor="#E8F0FC"];
+  source [shape=cylinder, label="Persist source evidence\nDecision-only soak: NO fills"];
+  hold [label="Hold / skipped / error\nPersist reason, no entry", fillcolor="#F5EFD9"];
+  runtime [label="Demo runtime opt-in\nRead exact champion/evaluation"];
+  reconcile [label="Reconcile account / protection\nDeterministic exits before entries"];
+  gate [label="Fresh provenance + Demo quote\nAllocation / leverage / risk / filters", fillcolor="#F7E5E5"];
+  intent [label="Persist immutable order intent\nSeparate execution journal"];
+  submit [label="Demo adapter submit\nSpot / USD-M Perp"];
+  confirm [label="GET reconcile order + fill + stop\nUNKNOWN: no blind resubmit"];
+  tick -> snapshot;
+  snapshot -> jev [label="healthy / setup"];
+  snapshot -> hold [label="stale / no setup"];
+  jev -> source [label="decision metadata"];
+  jev -> hold [label="invalid / timeout"];
+  source -> runtime [label="read-only; separate activated worker"];
+  runtime -> reconcile -> gate;
+  gate -> hold [label="blocked"];
+  gate -> intent [label="authorized"];
+  intent -> submit -> confirm;
 }

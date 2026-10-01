@@ -12,6 +12,7 @@ import shutil
 from pathlib import Path
 
 from docx import Document
+from docx.image.image import Image
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_LINE_SPACING
 from docx.oxml import OxmlElement
@@ -198,18 +199,18 @@ def add_cover(document: Document) -> None:
 
     title = document.add_paragraph(style="Title")
     title.paragraph_format.space_after = Pt(3)
-    add_inline(title, "Crypto Intraday Trading System", color=INK)
+    add_inline(title, "AIGT — Multi-Asset Trading System", color=INK)
 
     subtitle = document.add_paragraph(style="Title")
     subtitle.paragraph_format.space_after = Pt(18)
-    run = subtitle.add_run("Jev + Multi-Agent LLM")
+    run = subtitle.add_run("Spot / Perp · Jev + LLM")
     run.font.color.rgb = RGBColor(47, 111, 163)
 
     strap = document.add_paragraph()
     strap.paragraph_format.space_after = Pt(18)
     add_inline(
         strap,
-        "Paper-only architecture for BTCUSDT perpetual futures · isolated 3x · deterministic risk control",
+        "Scoped replay/soak · Binance Demo execution opt-in · deterministic risk control",
         color=MUTED,
         size=10,
     )
@@ -218,9 +219,9 @@ def add_cover(document: Document) -> None:
     metadata.alignment = WD_TABLE_ALIGNMENT.CENTER
     for index, (label, value) in enumerate(
         (
-            ("STATUS", "M1 foundation"),
+            ("STATUS", "Current code architecture · v23"),
             ("OWNER", "Julius"),
-            ("LAST UPDATED", "September 22, 2026"),
+            ("LAST UPDATED", "October 1, 2026"),
         )
     ):
         cell = metadata.cell(0, index)
@@ -241,9 +242,9 @@ def add_cover(document: Document) -> None:
     details.alignment = WD_TABLE_ALIGNMENT.CENTER
     detail_rows = (
         ("Authors", "Julius; OpenAI Codex"),
-        ("Reviewers", "Risk, engineering, and operations reviewers before implementation"),
-        ("Related docs", "docs/architecture.md · docs/evaluation.md · docs/btc-paper-runbook.md"),
-        ("Scope", "Standalone BTCUSDT perpetual paper system; the daily Donchian bot remains unchanged."),
+        ("Reviewers", "Engineering and operations; execution acceptance remains a separate gate"),
+        ("Related docs", "tasks/roadmap.md · docs/binance-demo-execution-runbook.md"),
+        ("Scope", "Multi-asset Spot/Perp; source schema v23; code capability is not trading activation."),
     )
     for row, (label, value) in zip(details.rows, detail_rows):
         prevent_row_split(row)
@@ -267,10 +268,10 @@ def add_cover(document: Document) -> None:
 
 def configure_document(document: Document) -> None:
     properties = document.core_properties
-    properties.title = "Crypto Intraday Trading System — Jev + Multi-Agent LLM"
-    properties.subject = "Proposed architecture for a paper-only BTCUSDT perpetual trading system"
+    properties.title = "AIGT — Multi-Asset Spot/Perp Architecture"
+    properties.subject = "Current v23 architecture with scoped evidence and opt-in Binance Demo execution"
     properties.author = "Julius; OpenAI Codex"
-    properties.keywords = "system design, paper trading, Jev, LLM, BTCUSDT, perpetual futures"
+    properties.keywords = "system design, multi-asset, Spot, Perp, Jev, LLM, Binance Demo, v23"
     properties.comments = "Generated from docs/crypto-intraday-system-design.md"
 
     normal = document.styles["normal"]
@@ -293,7 +294,7 @@ def configure_document(document: Document) -> None:
         for paragraph in footer.paragraphs:
             for run in paragraph.runs:
                 if "Organization Name" in run.text or "System Design RFC" in run.text:
-                    run.text = "Crypto Intraday Trading System | Proposed System Design"
+                    run.text = "AIGT | Current Architecture · source schema v23"
                     run.font.color.rgb = MUTED
 
 
@@ -343,7 +344,9 @@ def add_figure(document: Document, path: Path, caption: str) -> None:
     paragraph = document.add_paragraph()
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     paragraph.paragraph_format.keep_together = True
-    paragraph.add_run().add_picture(str(path), width=Inches(7.0))
+    image = Image.from_file(str(path))
+    width = min(7.0, 7.8 * image.px_width / image.px_height)
+    paragraph.add_run().add_picture(str(path), width=Inches(width))
     caption_paragraph = document.add_paragraph()
     caption_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     caption_paragraph.paragraph_format.space_after = Pt(8)
@@ -390,13 +393,19 @@ def render_body(document: Document, markdown: str) -> None:
             continue
 
         if stripped.startswith("## "):
+            if stripped.startswith("## 2."):
+                document.add_page_break()
+                add_figure(document, ARCHITECTURE_IMAGE, "Figure 1. Current components and trust boundaries; capability is not activation.")
+                document.add_page_break()
+                add_figure(document, SEQUENCE_IMAGE, "Figure 2. Decision-only soak and separately activated Demo execution.")
+                document.add_page_break()
             paragraph = document.add_paragraph(style="Heading 1")
             add_inline(paragraph, stripped[3:], color=RGBColor(14, 49, 82))
             index += 1
             continue
 
         if stripped.startswith("### "):
-            paragraph = document.add_paragraph(style="Heading 3")
+            paragraph = document.add_paragraph(style="Heading 2")
             add_inline(paragraph, stripped[4:], color=RGBColor(14, 49, 82))
             index += 1
             continue
