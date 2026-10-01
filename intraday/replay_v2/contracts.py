@@ -8,7 +8,7 @@ from decimal import Decimal
 import math
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, model_serializer
 
 from intraday.assets import ticker_symbol
 from intraday.contracts import DecisionScope, JevDecision, ScopedRuleCandidate
@@ -70,13 +70,31 @@ class FundingHistory(FrozenModel):
 
 class ExecutionProfile(FrozenModel):
     profile_id: Literal["bnb-demo"] = "bnb-demo"
-    version: Literal["1"] = "1"
+    version: Literal["1", "2"] = "1"
     spot_cost_bps: Decimal = Field(default=Decimal(15), ge=0, le=1000)
     perp_cost_bps: Decimal = Field(default=Decimal(5), ge=0, le=1000)
     instrument: InstrumentRules | None = None
     instrument_observed_at: datetime | None = None
     instrument_source: str | None = Field(default=None, min_length=1, max_length=200)
     funding: FundingHistory | None = None
+    spot_fee_bps: Decimal | None = Field(default=None, ge=0, le=1000)
+    spot_slippage_bps: Decimal | None = Field(default=None, ge=0, le=1000)
+    perp_fee_bps: Decimal | None = Field(default=None, ge=0, le=1000)
+    perp_slippage_bps: Decimal | None = Field(default=None, ge=0, le=1000)
+    spot_fee_source: str | None = None
+    perp_fee_source: str | None = None
+    fee_observed_at: datetime | None = None
+
+    _fee_time = field_validator("fee_observed_at")(lambda v: utc(v) if v else None)
+
+    @model_serializer(mode="wrap")
+    def serialize_profile(self, handler):
+        payload = handler(self)
+        if self.version == "1":
+            for key in ("spot_fee_bps", "spot_slippage_bps", "perp_fee_bps",
+                        "perp_slippage_bps", "spot_fee_source", "perp_fee_source", "fee_observed_at"):
+                payload.pop(key, None)
+        return payload
 
     @field_validator("instrument_observed_at")
     @classmethod
@@ -87,10 +105,33 @@ class ExecutionProfile(FrozenModel):
     def explicit_metadata(self):
         if self.instrument is not None and (self.instrument_observed_at is None or not self.instrument_source):
             raise ValueError("instrument rules require source and observation timestamp")
+        costs = (self.spot_fee_bps, self.spot_slippage_bps, self.perp_fee_bps, self.perp_slippage_bps)
+        if self.version == "1" and any(v is not None for v in (*costs, self.spot_fee_source,
+                                                              self.perp_fee_source, self.fee_observed_at)):
+            raise ValueError("separated costs require profile version 2")
+        if self.version == "2":
+            if any(v is None for v in costs) or not all((self.spot_fee_source, self.perp_fee_source, self.fee_observed_at)):
+                raise ValueError("version 2 requires separated costs and fee source metadata")
+            if self.spot_cost_bps != self.spot_fee_bps + self.spot_slippage_bps or self.perp_cost_bps != self.perp_fee_bps + self.perp_slippage_bps:
+                raise ValueError("combined costs must match fee plus slippage")
         return self
 
     def cost_bps(self, market: str) -> Decimal:
         return self.spot_cost_bps if market == "spot" else self.perp_cost_bps
+
+    def split_cost_bps(self, market: str) -> tuple[Decimal, Decimal]:
+        if self.version == "1":
+            return Decimal(0), Decimal(0)  # Unknown breakdown; retain combined legacy cost.
+        return ((self.spot_fee_bps, self.spot_slippage_bps) if market == "spot"
+                else (self.perp_fee_bps, self.perp_slippage_bps))
+
+
+def binance_gate_profile(**overrides) -> ExecutionProfile:
+    return ExecutionProfile(version="2", spot_cost_bps=15, perp_cost_bps=10,
+        spot_fee_bps=10, spot_slippage_bps=5, perp_fee_bps=5, perp_slippage_bps=5,
+        spot_fee_source="https://www.binance.com/en/fee/trading",
+        perp_fee_source="https://www.binance.com/en/fee/futureFee",
+        fee_observed_at=datetime(2026, 10, 1, tzinfo=timezone.utc), **overrides)
 
 
 class ReplayConfig(FrozenModel):

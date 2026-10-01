@@ -44,8 +44,9 @@ def build_result(config, data, book, limitations):
     exits = Counter(trade["exit_reason"] for trade in book.trades)
     config_payload = config.model_dump(mode="json")
     digest = dataset_fingerprint(data)
-    result_id = fingerprint({"evaluator": EVALUATOR_VERSION, "config": config_payload, "dataset": digest})
-    return {"schema_version": "2", "evaluator_version": EVALUATOR_VERSION,
+    version = EVALUATOR_VERSION if config.profile.version == "1" else "replay-v2.2"
+    result_id = fingerprint({"evaluator": version, "config": config_payload, "dataset": digest})
+    result = {"schema_version": "2", "evaluator_version": version,
         "result_id": result_id, "research_only": True, "activation_allowed": False,
         "status": "insufficient_data" if not book.curve else "limited" if limitations else "complete",
         "config": config_payload,
@@ -77,3 +78,8 @@ def build_result(config, data, book, limitations):
         "v1_reference": {"evaluation": data.v1_reference,
             "comparison": "reference only; v1 folds/outcomes are not comparable account replay metrics"},
         "equity_curve": book.curve, "trades": book.trades, "events": book.events}
+    if config.profile.version == "2":
+        result["summary"].update(exchange_fee_known=float(book.exchange_fees),
+                                  slippage_cost_known=float(book.slippage_costs))
+        result["methodology"]["costs"] = "published regular-user fee plus assumed cash-charged slippage per fill; quote spread implicit and funding separate"
+    return result

@@ -25,6 +25,8 @@ class Ledger:
         self.entered_at = None
         self.stop = None
         self.realized = self.costs = self.funding = ZERO
+        self.exchange_fees = self.slippage_costs = ZERO
+        self.entry_fee = self.entry_slippage = ZERO
         self.peak = self.day_start = self.last_equity = config.capital
         self.day = config.start.date()
         self.halted = False
@@ -79,6 +81,13 @@ class Ledger:
         self._event(at, "entry_blocked", reason, mark, **values)
         return False
 
+    def _charge(self, notional):
+        fee_bps, slip_bps = self.config.profile.split_cost_bps(self.config.market)
+        fee, slip = notional*fee_bps/10000, notional*slip_bps/10000
+        self.exchange_fees += fee
+        self.slippage_costs += slip
+        return fee, slip
+
     def enter(self, at, price, notional, *, side, stop_distance):
         if self.halted:
             return self.deny(at, price, "portfolio_loss_limit")
@@ -114,6 +123,7 @@ class Ledger:
             return self.deny(at, price, "insufficient_cash")
         self.cash -= debit
         self.costs += cost
+        self.entry_fee, self.entry_slippage = self._charge(notional)
         self.quantity = quantity * side
         self.entry_price, self.stop, self.entered_at = price, stop, at
         self.entry_cost, self.entry_funding = cost, self.funding
@@ -129,6 +139,7 @@ class Ledger:
         self.cash += (quantity * price if self.config.market == "spot" else pnl) - cost
         self.realized += pnl
         self.costs += cost
+        fee, slip = self._charge(abs(quantity)*price)
         funding = self.funding - self.entry_funding
         self.trades.append({"entered_at": self.entered_at.isoformat(), "closed_at": at.isoformat(),
             "side": "long" if quantity > 0 else "short", "quantity": str(abs(quantity)),
@@ -136,6 +147,9 @@ class Ledger:
             "gross_pnl": str(pnl), "execution_cost": str(self.entry_cost + cost), "funding_known": str(funding),
             "net_known_pnl": str(pnl-self.entry_cost-cost-funding),
             "funding_complete": self.funding_complete})
+        if self.config.profile.version == "2":
+            self.trades[-1].update(exchange_fee=str(self.entry_fee+fee),
+                                   slippage_cost=str(self.entry_slippage+slip))
         self.quantity = ZERO
         self.entry_price = self.entered_at = self.stop = None
         self._event(at, "close", reason, price, price=str(price), cost=str(cost), gross_pnl=str(pnl))
