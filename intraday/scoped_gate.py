@@ -54,6 +54,7 @@ class ScopedEntryGate:
         donchian_entry: bool,
         size_multiplier: float = 1,
         scope: DecisionScope = DecisionScope.SPOT_DAILY,
+        projected_isolated_margin_pct: float | None = None,
     ) -> PortfolioAuthorization:
         if scope not in SPOT_SCOPES:
             raise ValueError("spot entry requires a Spot scope")
@@ -87,7 +88,7 @@ class ScopedEntryGate:
         )
         target = min(sleeve_target, gross_room)
         return self.coordinator.authorize_target(
-            state, scope=scope, target_notional=target
+            state, scope=scope, target_notional=target, projected_isolated_margin_pct=projected_isolated_margin_pct
         )
 
     def perp_entry(
@@ -95,6 +96,8 @@ class ScopedEntryGate:
         state: ParentPortfolioState,
         decision: JevDecision,
         rule: PerpRuleParameters,
+        *,
+        projected_isolated_margin_pct: float | None = None,
     ) -> PortfolioAuthorization:
         scope = DecisionScope.PERP_INTRADAY
         current = state.perp_notional
@@ -130,7 +133,7 @@ class ScopedEntryGate:
         )
         target = side * min(sleeve_target, gross_room)
         return self.coordinator.authorize_target(
-            state, scope=scope, target_notional=target
+            state, scope=scope, target_notional=target, projected_isolated_margin_pct=projected_isolated_margin_pct
         )
 
     def deterministic_exit(

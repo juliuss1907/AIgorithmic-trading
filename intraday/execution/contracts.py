@@ -136,6 +136,7 @@ class Position(ExecutionModel):
     quantity: Decimal
     entry_price: Decimal = Field(ge=0)
     mark_price: Decimal = Field(gt=0)
+    initial_margin: Decimal | None = Field(default=None, ge=0)
 
 
 class OpenOrder(ExecutionModel):

@@ -181,3 +181,56 @@ def test_cli_cancel_does_not_create_a_journal_or_change_settings(tmp_path, monke
     perp_cli.dispatch_perp(args)
     assert not venue.changes and not args.execution_database.exists()
     assert "cancel" in capsys.readouterr().out.lower()
+
+
+def test_legacy_running_state_is_visible_and_blocks_change(tmp_path):
+    control, venue = controller(tmp_path)
+    control.journal.save_control(ACCOUNT, {"paused": False}, now=NOW, kind="fixture")
+    assert control.information()["aigt_state"] == "running"
+    with pytest.raises(ValueError, match="pause"):
+        control.preview(5)
+    assert not venue.changes
+
+
+def test_algo_order_blocks_change_and_expired_queue_never_submits(tmp_path):
+    from intraday.execution.contracts import OpenOrder
+    control, venue = controller(tmp_path)
+    venue.open_orders = (OpenOrder(symbol="ETHUSDT", client_id="fixture-stop", order_type="STOP_MARKET"),)
+    with pytest.raises(ValueError, match="flat"):
+        control.preview(5)
+    venue.open_orders = ()
+    item = control.request_change(control.preview(5), request_id="expired-queue")
+    control.clock = lambda: NOW+timedelta(seconds=61)
+    assert control.process(item["id"])["status"] == "failed"
+    assert not venue.changes
+
+
+def test_crash_after_claim_with_wrong_leverage_never_resubmits(tmp_path):
+    control, venue = controller(tmp_path)
+    item = control.request_change(control.preview(5), request_id="crashed-claim")
+    item["status"] = "applying"
+    control.journal.save_settings_request(item, now=NOW)
+    for _ in range(2):
+        assert control.process(item["id"])["status"] == "unknown"
+    assert not venue.changes
+    assert control.journal.perp_setting(ACCOUNT, "ETHUSDT")["leverage"] == 3
+
+
+def test_verified_readback_requires_unchanged_account_modes(tmp_path):
+    control, venue = controller(tmp_path)
+    original = venue.account_snapshot
+    venue.account_snapshot = lambda **kw: original(**kw).model_copy(update={"margin_mode":"CROSSED"}) if venue.changes else original(**kw)
+    item = control.request_change(control.preview(5), request_id="readback-mode-drift")
+    assert control.process(item["id"])["status"] == "unknown"
+    assert control.journal.perp_setting(ACCOUNT, "ETHUSDT")["leverage"] == 3
+
+
+def test_read_only_information_does_not_modify_execution_evidence(tmp_path):
+    import hashlib
+    control, venue = controller(tmp_path)
+    path = control.journal.path
+    before = (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mode)
+    control.journal = ExecutionJournal(path, read_only=True)
+    assert control.information()["actual_leverage"] == 3
+    assert (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mode) == before
+    assert not venue.changes

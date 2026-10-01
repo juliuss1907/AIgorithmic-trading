@@ -28,6 +28,7 @@ class FakeExchange:
         self.hide_query = False
         self.mark = Decimal(100)
         self.leverage = 3
+        self.leverages = {}
 
     def venue(self,symbol,market):
         exchange = self
@@ -54,7 +55,7 @@ class FakeExchange:
                         open_orders=opened,observed_at=now)
                 return AccountSnapshot(account=self.account_ref,wallet_balance=exchange.wallet,equity=exchange.wallet,
                     available_balance=exchange.wallet,can_trade=True,one_way=True,single_asset=True,margin_mode="ISOLATED",
-                    leverage=exchange.leverage,positions=tuple(Position(symbol=s,quantity=q,entry_price=100,mark_price=exchange.mark)
+                    leverage=exchange.leverages.get(symbol, exchange.leverage),positions=tuple(Position(symbol=s,quantity=q,entry_price=100,mark_price=exchange.mark)
                                                            for s,q in exchange.positions.items() if q),open_orders=opened,observed_at=now)
             def submit(self,intent):
                 if intent.order_type != "MARKET":
@@ -112,6 +113,64 @@ def runner(tmp_path,plan):
     runtime = MultiDemoRuntime(ExecutionJournal(tmp_path/"execution.sqlite"),ACCOUNT,exchange.venue,Source,clock=lambda:NOW)
     runtime.configure(plan,now=NOW)
     return runtime,exchange
+
+
+@pytest.mark.parametrize("leverage", [1, 2, 5, 10])
+def test_configured_leverage_changes_margin_not_notional_allocation(tmp_path, leverage):
+    exchange = FakeExchange()
+    exchange.leverage = leverage
+    journal = ExecutionJournal(tmp_path/"execution.sqlite")
+    item = {"id":"fixture-setting", "account":ACCOUNT.key, "symbol":"ETHUSDT", "status":"verified"}
+    journal.save_settings_request(item, now=NOW, verified_leverage=leverage)
+    runtime = MultiDemoRuntime(journal, ACCOUNT, exchange.venue, Source, clock=lambda:NOW)
+    runtime.configure(DemoAllocation(capital=1000, perp_weights={"ETHUSDT":1}), now=NOW)
+    runtime.activate("ETHUSDT", "perp", evaluation_id="ETHUSDT-perp-pass", now=NOW)
+    report = runtime.cycle(now=NOW)
+    assert report["status"] == "running", report
+    notional = abs(exchange.positions.get("ETHUSDT", Decimal(0))) * exchange.mark
+    assert notional > 0
+    assert notional <= 200
+    assert notional / leverage <= 100
+
+
+def test_leverage_drift_keeps_protection_and_allows_flatten(tmp_path):
+    runtime, exchange = runner(tmp_path, DemoAllocation(capital=1000, perp_weights={"ETHUSDT":1}))
+    runtime.activate("ETHUSDT", "perp", evaluation_id="ETHUSDT-perp-pass", now=NOW)
+    assert runtime.cycle(now=NOW)["status"] == "running"
+    exchange.leverage = 5
+    report = runtime.cycle(now=NOW)
+    assert report["status"] == "paused"
+    assert report["reason"] == "perp_settings_drift"
+    assert any(i.order_type == "STOP_MARKET" and not u.terminal for i,u in exchange.orders.values())
+    assert runtime.flatten(now=NOW)["routes"][0]["status"] == "flat"
+    assert not exchange.positions["ETHUSDT"]
+
+
+def test_mixed_pair_leverage_uses_sum_of_margins_not_one_divisor(tmp_path):
+    exchange = FakeExchange()
+    exchange.leverages = {"ETHUSDT":1, "SOLUSDT":5}
+    journal = ExecutionJournal(tmp_path/"execution.sqlite")
+    for symbol, leverage in exchange.leverages.items():
+        journal.save_settings_request({"id":"fixture-"+symbol,"account":ACCOUNT.key,
+            "symbol":symbol,"status":"verified"}, now=NOW, verified_leverage=leverage)
+    runtime = MultiDemoRuntime(journal, ACCOUNT, exchange.venue, Source, clock=lambda:NOW)
+    runtime.configure(DemoAllocation(capital=1000, perp_weights={"ETHUSDT":".4", "SOLUSDT":".6"}), now=NOW)
+    for symbol in exchange.leverages:
+        runtime.activate(symbol, "perp", evaluation_id=symbol+"-perp-pass", now=NOW)
+    report = runtime.cycle(now=NOW)
+    assert report["status"] == "running", report
+    assert all(exchange.positions.get(s, 0) > 0 for s in exchange.leverages)
+    margin = sum(abs(q)*exchange.mark/exchange.leverages[s] for s,q in exchange.positions.items())
+    assert margin <= Decimal(report["equity"])*Decimal(".10")
+
+
+def test_reported_initial_margin_is_respected(tmp_path):
+    runtime, exchange = runner(tmp_path, DemoAllocation(capital=1000, perp_weights={"ETHUSDT":1}))
+    venue = exchange.venue("ETHUSDT", "perp")
+    snapshot = venue.account_snapshot(now=NOW).model_copy(update={"positions":(
+        Position(symbol="ETHUSDT", quantity=1, entry_price=100, mark_price=100, initial_margin=80),)})
+    quote = venue.quote("ETHUSDT", now=NOW)
+    assert runtime._perp_margin({("ETHUSDT","perp"):(venue,snapshot,quote)}) == 80
 
 
 def test_shared_multi_coin_caps_and_spot_inventory_does_not_adopt_seeded_balance(tmp_path):

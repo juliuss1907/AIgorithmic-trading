@@ -60,12 +60,24 @@ class MultiDemoRuntime:
             return self.journal.spot_inventory(venue.account_ref,venue.symbol,require_valued_fees=False)["quantity"]
         return sum((u.executed_quantity*(1 if i.side == "BUY" else -1) for i,u in self._orders(venue)),Decimal(0))
 
-    def _account_check(self,venue,market,snapshot):
+    def _leverage(self, symbol):
+        value = self.journal.perp_setting(self.account, symbol)["leverage"]
+        if type(value) is not int or not 1 <= value <= 10:
+            raise ValueError("invalid operator Perp leverage configuration")
+        return value
+
+    def _settings_match(self, venue, snapshot):
+        return snapshot.margin_mode.upper() == "ISOLATED" and snapshot.leverage == self._leverage(venue.symbol)
+
+    def _account_check(self,venue,market,snapshot,*,require_settings=True):
         if snapshot.account != venue.account_ref or snapshot.can_trade is not True:
             raise ExecutionUnavailable("Demo account or trading permission mismatch")
-        if market == "perp" and (not snapshot.one_way or not snapshot.single_asset
-                                  or snapshot.margin_mode.upper() != "ISOLATED" or snapshot.leverage != 3):
-            raise ValueError("Perp requires One-way, Single-asset, isolated 3x for this coin; change manually")
+        if market == "perp" and (not snapshot.one_way or not snapshot.single_asset):
+            raise ValueError("Perp requires One-way and Single-asset account modes")
+        if market == "perp" and require_settings and not self._settings_match(venue, snapshot):
+            raise ValueError("Perp requires Isolated and the verified configured leverage for this pair")
+        if market == "perp" and require_settings and any(r["symbol"] == venue.symbol for r in self.journal.settings_requests(self.account)):
+            raise ValueError("pending Perp settings request requires reconciliation")
         known = {i.intent_id:i for i,u in self.journal.orders(venue.account_ref)}
         if any(o.client_id not in known or known[o.client_id].symbol != o.symbol for o in snapshot.open_orders):
             raise ExecutionUnavailable("unmanaged Demo open order")
@@ -193,7 +205,7 @@ class MultiDemoRuntime:
                 venue = self.venue_factory(symbol,market)
                 self._reconcile(venue)
                 snapshot = venue.account_snapshot(now=now)
-                self._account_check(venue,market,snapshot)
+                self._account_check(venue,market,snapshot,require_settings=False)
                 if self._pending(venue):
                     raise ExecutionUnavailable("unresolved market order requires reconciliation")
                 quote = venue.quote(symbol,now=now)
@@ -226,6 +238,20 @@ class MultiDemoRuntime:
         if total <= 0 or total <= Decimal(p["day_start_equity"])*Decimal(".985") or total <= Decimal(p["high_water_mark"])*Decimal(".92"):
             raise ExecutionUnavailable("portfolio_loss_limit")
         return total,spot_gross,perp_gross,markets
+
+    def _perp_margin(self, markets):
+        total = Decimal(0)
+        for (symbol,market),(venue,snapshot,quote) in markets.items():
+            if market != "perp":
+                continue
+            position = snapshot.position(symbol)
+            if position:
+                projected = abs(position.quantity)*quote.mark/snapshot.leverage
+                total += max(projected, position.initial_margin or Decimal(0))
+            for intent,update in self._orders(venue):
+                if intent.order_type == "MARKET" and not intent.reduce_only and not update.terminal:
+                    total += max(Decimal(0),intent.quantity-update.executed_quantity)*quote.ask/snapshot.leverage
+        return total
 
     def _clean_stops(self,venue):
         coordinator = OrderCoordinator(self.journal,venue)
@@ -289,7 +315,7 @@ class MultiDemoRuntime:
         amount = rules.round_quantity(abs(qty))
         rules.validate_quantity(amount,quote.bid if qty>0 else quote.ask,reducing=market=="perp")
         snapshot = venue.account_snapshot(now=now)
-        self._account_check(venue,market,snapshot)
+        self._account_check(venue,market,snapshot,require_settings=False)
         if market=="spot" and snapshot.balance(symbol[:-4]).free<amount:
             raise ExecutionUnavailable("managed Spot free balance unavailable after stop cancellation")
         prior = [i for i,u in self._orders(venue) if i.source_id=="close:"+reason]
@@ -360,8 +386,7 @@ class MultiDemoRuntime:
                         if (not saved or saved[1].status != "UNKNOWN" or not position
                                 or self._quantity(venue,"perp") != 0 or abs(position.quantity)>saved[0].quantity
                                 or (position.quantity>0)!=(saved[0].side=="BUY") or not snapshot.can_trade
-                                or not snapshot.one_way or not snapshot.single_asset
-                                or snapshot.margin_mode.upper()!="ISOLATED" or snapshot.leverage!=3):
+                                or not snapshot.one_way or not snapshot.single_asset):
                             continue
                         self._protect(p,route,venue,snapshot,venue.quote(route["symbol"],now=self.clock()),
                                       now=self.clock(),observed_perp_quantity=position.quantity)
@@ -384,6 +409,11 @@ class MultiDemoRuntime:
                 self._save(p,"protection_failure")
                 self._close(p,route,venue,now=now,reason="protection_failure")
                 return {"status":"paused","reason":"protection_failed"}
+        if any(market == "perp" and (not self._settings_match(venue, snapshot)
+               or any(r["symbol"] == symbol for r in self.journal.settings_requests(self.account)))
+               for (symbol,market),(venue,snapshot,quote) in markets.items()):
+            p.update(paused=True,reason="perp_settings_drift")
+            self._save(p,"perp_settings_drift")
         if p["paused"]:
             self._save(p,"paused_reconciled")
             return {"status":"paused","reason":p["reason"]}
@@ -432,17 +462,22 @@ class MultiDemoRuntime:
                 perp_quantity=float(perp_gross),perp_entry_price=1 if perp_gross else None,
                 mark_price=1,spot_price=1,perp_mark_price=1,day_start_equity=float(p["day_start_equity"]),
                 high_water_mark=float(p["high_water_mark"]),entries_paused=False,paper_active=True,updated_at=now)
-            auth = (self.gate.spot_entry(state,decision,rule.parameters,donchian_entry=observation.entry,
-                                       size_multiplier=observation.size_multiplier,scope=DecisionScope.SPOT_4H) if market=="spot"
-                    else self.gate.perp_entry(state,decision,rule.parameters))
-            if not auth.allowed or not auth.target_notional:
-                continue
             cap = plan.target_cap(symbol,market)
             if market=="spot":
                 cap *= Decimal(str(observation.size_multiplier))
-            cap = min(cap,abs(Decimal(str(auth.target_notional))), max(Decimal(0),equity*Decimal(".50")-spot_gross-perp_gross))
+            cap = min(cap, max(Decimal(0),equity*Decimal(".50")-spot_gross-perp_gross))
+            margin = self._perp_margin(markets)
             if market=="perp":
-                cap = min(cap,max(Decimal(0),equity*Decimal(".30")-perp_gross))
+                cap = min(cap,max(Decimal(0),equity*Decimal(".30")-perp_gross),
+                          max(Decimal(0),equity*Decimal(".10")-margin)*snapshot.leverage)
+            projected_margin = float((margin+(cap/snapshot.leverage if market=="perp" else Decimal(0)))/equity)
+            auth = (self.gate.spot_entry(state,decision,rule.parameters,donchian_entry=observation.entry,
+                                       size_multiplier=observation.size_multiplier,scope=DecisionScope.SPOT_4H,
+                                       projected_isolated_margin_pct=projected_margin) if market=="spot"
+                    else self.gate.perp_entry(state,decision,rule.parameters,projected_isolated_margin_pct=projected_margin))
+            if not auth.allowed or not auth.target_notional:
+                continue
+            cap = min(cap,abs(Decimal(str(auth.target_notional))))
             rules = venue.instrument(symbol)
             amount = rules.round_quantity(cap/quote.ask)
             try:
@@ -454,7 +489,9 @@ class MultiDemoRuntime:
                 continue
             if market=="spot" and amount*quote.ask*Decimal("1.002")>snapshot.balance("USDT").free:
                 continue
-            if market=="perp" and amount*quote.ask*Decimal(".335")>snapshot.available_balance:
+            if market=="perp" and amount*quote.ask*(Decimal(1)/snapshot.leverage+Decimal(".002"))>snapshot.available_balance:
+                continue
+            if market=="perp" and hasattr(venue,"leverage_limit") and snapshot.leverage > venue.leverage_limit(abs(amount*quote.ask)):
                 continue
             entry_id = identity(p["campaign_id"],symbol,market,decision.decision_id,"entry")
             if self.journal.order(venue.account_ref,entry_id):

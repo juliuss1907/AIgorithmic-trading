@@ -72,7 +72,8 @@ class PerpController:
                 "mark_price": str(position.mark_price),
                 "unrealized_pnl": str(position.quantity*(position.mark_price-position.entry_price)),
                 "managed_by_aigt": expected == position.quantity})
-        portfolio = self.journal.portfolio(self.account) if self.journal else None
+        controls = [c for c in (self.journal.portfolio(self.account), self.journal.control(self.account)) if c is not None] if self.journal else []
+        state = "not_activated" if not controls else "paused" if all(c.get("paused") is True for c in controls) else "running"
         setting = self.journal.perp_setting(self.account, self.venue.symbol) if self.journal else {"leverage": 3, "revision": 0}
         blockers = self._blockers(snapshot, setting["leverage"])
         requests = [r for r in self.journal.settings_requests(self.account) if r["symbol"] == self.venue.symbol] if self.journal else []
@@ -86,7 +87,7 @@ class PerpController:
             "leverage_requests": [{"id":r["id"], "status":r["status"], "target":r["preview"]["target"]} for r in requests],
             "positions": positions, "pnl_currency": "USDT", "pnl_basis": "mark_to_entry_excluding_fees_and_funding",
             "open_orders": sum(o.symbol == self.venue.symbol for o in snapshot.open_orders),
-            "aigt_state": "not_activated" if not portfolio else "paused" if portfolio["paused"] else "running",
+            "aigt_state": state,
             "observed_at": snapshot.observed_at.isoformat(), "trading_activated": False}
 
     def _blockers(self, snapshot, target):
@@ -116,6 +117,8 @@ class PerpController:
             raise ValueError("leverage must be an integer from 1 to 10")
         info = self.information()
         snapshot = self.venue.account_snapshot(now=self.clock())
+        if snapshot.account != self.venue.account_ref:
+            raise ValueError("Perp account identity mismatch")
         blockers = self._blockers(snapshot, target)
         if blockers:
             raise ValueError("; ".join(blockers))
@@ -174,7 +177,9 @@ class PerpController:
                 if preview.previous != preview.target:
                     self.venue.set_leverage(preview.target)
                 snapshot = self.venue.account_snapshot(now=self.clock())
-                if snapshot.account != self.venue.account_ref or snapshot.leverage != preview.target:
+                if (snapshot.account != self.venue.account_ref or snapshot.leverage != preview.target
+                        or snapshot.margin_mode.upper() != "ISOLATED" or not snapshot.one_way
+                        or not snapshot.single_asset or not snapshot.can_trade):
                     raise ExecutionUnavailable("settings read-back mismatch")
                 item.update(status="verified", reason=None)
                 self.journal.save_settings_request(item, now=self.clock(), verified_leverage=preview.target)
