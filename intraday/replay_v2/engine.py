@@ -7,6 +7,7 @@ from intraday.portfolio_coordinator import ParentPortfolioCoordinator, ParentPor
 from intraday.replay_v2.contracts import ReplayConfig, ReplayDataset
 from intraday.replay_v2.ledger import Ledger, DAILY_LOSS, MAX_DRAWDOWN, ONE
 from intraday.replay_v2.metrics import build_result
+from intraday.replay_v2.perp import replay_perp
 from intraday.spot_signal import evaluate_donchian
 
 
@@ -111,5 +112,6 @@ def simulate(config: ReplayConfig, data: ReplayDataset) -> dict:
                                 "spot_intrabar_timestamps_estimated"})
             _spot(config, data, book, limitations)
         else:
-            raise NotImplementedError("Perp replay slice not implemented yet")
+            limitations.add("perp_risk_and_stops_sampled_at_recorded_quotes")
+            replay_perp(config, data, book, limitations)
         return build_result(config, data, book, limitations)

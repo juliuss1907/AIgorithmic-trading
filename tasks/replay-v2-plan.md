@@ -8,7 +8,7 @@ v1 gates, soak or execution acceptance; no activation, VPS deploy or API keys.
 
 - [x] Immutable contracts, versioned profile, read-only consistent input loader.
 - [x] Spot ledger: next open, ATR/allocation, Donchian/10% stop, portfolio guard.
-- [ ] Perp ledger: recorded decisions, quotes, isolated margin, stop/funding.
+- [x] Perp ledger: recorded decisions, quotes, isolated margin, stop/funding.
 - [ ] Atomic artifacts and separate replay CLI namespace/Docker routing.
 - [ ] Read-only dashboard/API, UTC+7 display, documented limitations.
 - [ ] Regression, money/provenance/security/browser checks and local commits.

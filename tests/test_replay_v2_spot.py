@@ -74,3 +74,13 @@ def test_identical_inputs_are_deterministic_and_wrong_rule_is_rejected():
     assert simulate(config, data) == simulate(config, data)
     with pytest.raises(ValueError, match="identity"):
         simulate(config.model_copy(update={"symbol": "BTCUSDT"}), data)
+
+
+def test_ten_percent_native_stop_is_separate_from_portfolio_loss_guard():
+    config, data = inputs([bar(22, 110, 111, 109, 110)])
+    volatile = tuple(bar(i, 100, 120, 80, 100) for i in range(21))
+    candles = volatile+(bar(21, 100, 131, 90, 130), bar(22, 130, 131, 110, 130))
+    report = simulate(config, ReplayDataset(rule=data.rule, candles=candles))
+    assert report["trades"][0]["exit_reason"] == "emergency_stop"
+    assert Decimal(report["trades"][0]["exit_price"]) == 117
+    assert not report["summary"]["halted"]

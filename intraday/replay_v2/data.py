@@ -50,8 +50,10 @@ def _recorded_decision(row, snapshots, calls, profiles, config):
             entry_quality=parsed[4], risk_level=parsed[5], model_ref=model_ref, created_at=at)
         valid = all(snap.freshness.get(name) is True and f"{name}_missing" not in snap.quality_flags
                     for name in REQUIRED_PERP)
-        return RecordedDecision(decision, available, Decimal(str(snap.features["reference_price"])),
-                                valid, call.call_id)
+        reference = Decimal(str(snap.features["reference_price"]))
+        if not reference.is_finite() or reference <= 0:
+            raise ValueError("invalid recorded reference price")
+        return RecordedDecision(decision, available, reference, valid, call.call_id)
     raise ValueError("historical model-backed provenance unavailable")
 
 
