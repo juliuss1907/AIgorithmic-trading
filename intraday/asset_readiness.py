@@ -1,12 +1,13 @@
 """Read-only per-asset rule/venue readiness. Never an execution authorization."""
 
 from datetime import datetime, timedelta, timezone
+import operator
 from zoneinfo import ZoneInfo
 
 from intraday.assets import ticker_symbol
 from intraday.contracts import DecisionScope
 from intraday.perp_bootstrap_lifecycle import preview_perp_bootstrap, preview_perp_post_replay
-from intraday.spot_4h_lifecycle import MIN_BARS, WIDTH, preview_spot_4h_soak
+from intraday.spot_4h_lifecycle import MIN_BARS, WIDTH, preview_spot_4h_soak, spot_4h_history_progress
 from intraday.store import IntradayStore
 
 
@@ -65,7 +66,15 @@ def _asset_row(reader, symbol, market, scope, now):
     candidate = next((r for r in active if r["id"] == registry.get("challenger_id")), None)
     candidate = candidate or (active[0] if len(active) == 1 else None)
     rejected = next((r for r in rules if r["status"] == "rejected"), None)
-    selected = candidate or rejected
+    selected = candidate or (rejected if not registry.get("champion_id") else None)
+    champion = next((r for r in rules if r["id"] == registry.get("champion_id")), None)
+    registry_invalid = (
+        len(active) > 1
+        or bool(registry.get("challenger_id") and (candidate is None or candidate["status"] != "challenger"))
+        or bool(candidate and candidate["status"] == "challenger" and candidate["id"] != registry.get("challenger_id"))
+        or bool(registry.get("champion_id") and (champion is None or champion["status"] != "champion"))
+        or any(r["status"] == "champion" and r["id"] != registry.get("champion_id") for r in rules)
+    )
     lifecycle = next((item for item in reader.list_asset_lifecycles(symbol) if item.scope is scope), None)
     with reader._connect() as connection:
         route = connection.execute(
@@ -87,14 +96,16 @@ def _asset_row(reader, symbol, market, scope, now):
     }
     if row["lifecycle"] == "disabled":
         row.update(phase="disabled", blockers=["scope_disabled"], next_action="none")
-    elif len(active) > 1 or (registry.get("challenger_id") and candidate is None):
+    elif registry_invalid:
         row.update(phase="inconsistent", blockers=["inconsistent_rule_registry"], next_action="investigate")
     elif candidate:
         _candidate_progress(reader, candidate, registry, row, now)
     elif row["champion_id"]:
         row.update(phase="champion", next_action="none")
         champion_soak = _saved(reader, row["champion_id"], "soak")
-        row["legacy_champion"] = champion_soak is None
+        row["legacy_champion"] = champion_soak is None and symbol == "BTCUSDT" and market == "perp"
+        if not row["legacy_champion"] and (champion_soak is None or champion_soak["status"] != "pass"):
+            row.update(phase="inconsistent", blockers=["champion_evidence_missing"], next_action="investigate")
     elif rejected:
         latest = row["soak"] or row["replay"]
         row.update(phase="rejected", next_action="await_proposal",
@@ -140,24 +151,22 @@ def _candidate_progress(reader, candidate, registry, row, now):
 
 
 def _gate(key, value, required, unit, *, maximum=False, strict=False):
-    if value is None:
-        status = "unknown"
+    if maximum:
+        comparison, compare = ("<", operator.lt) if strict else ("<=", operator.le)
     else:
-        passed = value < required if maximum and strict else value <= required if maximum else value > required if strict else value >= required
-        status = "pass" if passed else "wait"
+        comparison, compare = (">", operator.gt) if strict else (">=", operator.ge)
+    status = "unknown" if value is None else "pass" if compare(value, required) else "wait"
     return {"key": key, "value": value, "required": required, "unit": unit,
-            "comparison": "<" if maximum and strict else "<=" if maximum else ">" if strict else ">=", "status": status}
+            "comparison": comparison, "status": status}
 
 
 def _spot_replay_progress(reader, row, now):
     candles = reader.list_asset_candles(row["symbol"], "4h", as_of=now)
-    span = (int(candles[-1][0]) - int(candles[0][0])) // WIDTH + 1 if candles else 0
-    coverage = min(1., len(candles) / span) if span else 0.
-    age = (now.timestamp() * 1000 - int(candles[-1][6])) / 1000 if candles else None
+    history = spot_4h_history_progress(candles, now=now)
     row["gates"] = [
-        _gate("history_days", len(candles) / 6, MIN_BARS / 6, "days"),
-        _gate("history_coverage", coverage, .99, "fraction"),
-        _gate("latest_candle_age", age, WIDTH / 1000 + 300, "seconds", maximum=True),
+        _gate("history_days", history["bars"] / 6, MIN_BARS / 6, "days"),
+        _gate("history_coverage", history["coverage"], .99, "fraction"),
+        _gate("latest_candle_age", history["latest_candle_age_seconds"], WIDTH / 1000 + 300, "seconds", maximum=True),
     ]
     replay = row["replay"]
     if row["candidate_status"] == "replay_passed":

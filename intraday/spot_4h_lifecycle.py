@@ -58,6 +58,22 @@ def bootstrap_spot_4h_rule(
     return candidate
 
 
+def spot_4h_history_progress(candles: list, *, now: datetime) -> dict:
+    """Cheap history checks shared by readiness and replay; never runs a backtest."""
+    span = ((int(candles[-1][0]) - int(candles[0][0])) // WIDTH + 1) if candles else 0
+    coverage = min(1.0, len(candles) / span) if span else 0.0
+    age = (int(now.timestamp() * 1000) - int(candles[-1][6])) / 1000 if candles else None
+    waiting = []
+    if len(candles) < MIN_BARS:
+        waiting.append("minimum_365_days_4h_history")
+    if coverage < .99:
+        waiting.append("4h_candle_coverage_below_99pct")
+    if age is not None and age > WIDTH / 1000 + 300:
+        waiting.append("latest_4h_candle_stale")
+    return {"bars": len(candles), "coverage": coverage,
+            "latest_candle_age_seconds": age, "reason_codes": waiting}
+
+
 def replay_spot_4h_rule(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
     candidate = store.load_scoped_rule(candidate_id)
     if candidate is None or candidate.scope is not SCOPE:
@@ -68,20 +84,13 @@ def replay_spot_4h_rule(store, candidate_id: str, *, now: datetime) -> ScopedRul
     if candidate.parent_rule_id != (champion.rule_id if champion else "bootstrap"):
         raise ValueError("candidate lineage does not match champion")
     candles = store.list_asset_candles(candidate.symbol, "4h", as_of=now)
-    span = ((int(candles[-1][0]) - int(candles[0][0])) // WIDTH + 1) if candles else 0
-    coverage = min(1.0, len(candles) / span) if span else 0.0
+    history = spot_4h_history_progress(candles, now=now)
     metrics = _walk_forward(candles, candidate.parameters, first_test_bars=MIN_BARS // 2)
     champion_metrics = (
         _walk_forward(candles, champion.parameters, first_test_bars=MIN_BARS // 2)
         if champion else None
     )
-    waiting = []
-    if len(candles) < MIN_BARS:
-        waiting.append("minimum_365_days_4h_history")
-    if coverage < .99:
-        waiting.append("4h_candle_coverage_below_99pct")
-    if candles and int(now.timestamp() * 1000) - int(candles[-1][6]) > WIDTH + 300_000:
-        waiting.append("latest_4h_candle_stale")
+    waiting = list(history["reason_codes"])
     if metrics["closed_trades"] < 6:
         waiting.append("minimum_6_oos_closed_trades")
     rejected = []
@@ -103,7 +112,7 @@ def replay_spot_4h_rule(store, candidate_id: str, *, now: datetime) -> ScopedRul
     evaluation = ScopedRuleEvaluation.create(
         candidate_id=candidate_id, symbol=candidate.symbol, scope=SCOPE,
         kind="replay", status=status, evaluated_at=now, started_at=None,
-        sample_count=int(metrics["closed_trades"]), coverage=coverage,
+        sample_count=int(metrics["closed_trades"]), coverage=history["coverage"],
         champion_score=float(champion_metrics["risk_score"]) if champion_metrics else 0,
         challenger_score=float(metrics["risk_score"]),
         reason_codes=tuple(waiting or rejected), metrics=metrics,

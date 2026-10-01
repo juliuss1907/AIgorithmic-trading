@@ -202,3 +202,52 @@ def test_readiness_disabled_and_unknown_asset(tmp_path):
     assert row["next_action"] == "none"
     with pytest.raises(ValueError, match="not registered"):
         build_asset_readiness(store.database, symbol="DOGE", now=NOW)
+
+
+def test_non_btc_champion_without_evidence_is_not_a_legacy_exception(tmp_path):
+    from intraday.asset_readiness import build_asset_readiness
+    from intraday.perp_bootstrap_lifecycle import bootstrap_perp_rule
+    from intraday.contracts import DecisionScope
+    store = IntradayStore(tmp_path / "source.sqlite")
+    rule = bootstrap_perp_rule(store, "ETHUSDT", now=NOW)
+    store.activate_scoped_champion(DecisionScope.PERP_INTRADAY, rule.rule_id, symbol="ETH", now=NOW)
+    row = build_asset_readiness(store.database, symbol="ETH", market="perp", now=NOW)["rows"][0]
+    assert row["legacy_champion"] is False
+    assert row["phase"] == "inconsistent"
+    assert row["blockers"] == ["champion_evidence_missing"]
+    assert row["next_action"] == "investigate"
+
+
+def test_missing_champion_registry_target_is_reported_per_scope(tmp_path):
+    from intraday.asset_readiness import build_asset_readiness
+    store = IntradayStore(tmp_path / "source.sqlite")
+    # A damaged/imported database can bypass the normal FK-protected writer.
+    with sqlite3.connect(store.database) as connection:
+        connection.execute("INSERT INTO asset_scoped_rule_registry VALUES (?, ?, ?, NULL, NULL, ?)",
+                           ("ETHUSDT", "perp_intraday", "missing", NOW.isoformat()))
+    report = build_asset_readiness(store.database, symbol="ETH", now=NOW)
+    assert len(report["rows"]) == 2
+    perp = next(row for row in report["rows"] if row["market"] == "perp")
+    assert perp["phase"] == "inconsistent"
+    assert perp["blockers"] == ["inconsistent_rule_registry"]
+
+
+def test_read_snapshot_stays_consistent_across_concurrent_writer(tmp_path):
+    store = IntradayStore(tmp_path / "source.sqlite")
+    reader = IntradayStore(store.database, read_only=True)
+    with reader.read_snapshot():
+        initial = reader.asset_catalog()
+        store.register_asset("DOGE", market="spot", now=NOW)
+        assert reader.asset_catalog() == initial
+    assert "DOGEUSDT" in reader.asset_catalog()
+
+
+def test_spot_history_gate_shared_with_replay_preserves_stale_boundary():
+    from intraday.spot_4h_lifecycle import spot_4h_history_progress, WIDTH
+    close = int(NOW.timestamp() * 1000) - WIDTH - 300_000
+    candle = [close - WIDTH + 1, "1", "1", "1", "1", "1", close]
+    boundary = spot_4h_history_progress([candle], now=NOW)
+    assert boundary["coverage"] == 1
+    assert boundary["reason_codes"] == ["minimum_365_days_4h_history"]
+    stale = spot_4h_history_progress([candle], now=NOW + timedelta(milliseconds=1))
+    assert "latest_4h_candle_stale" in stale["reason_codes"]
