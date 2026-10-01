@@ -86,6 +86,7 @@
   document.querySelectorAll("[data-market]").forEach(button => button.addEventListener("click", () => {
     if (market === button.dataset.market) return;
     market = button.dataset.market; generation++;
+    document.dispatchEvent(new CustomEvent("aigt:market", {detail: market}));
     document.querySelectorAll("[data-market]").forEach(b => b.setAttribute("aria-pressed", String(b === button)));
     $("venue-results").replaceChildren(); message("Đã chuyển nhóm. Quét lại để chọn venue riêng cho " + market + ".");
     catalog().catch(error => message(error.message));

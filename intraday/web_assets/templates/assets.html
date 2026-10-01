@@ -5,6 +5,7 @@
   <title>Coin &amp; venues — AIGT</title>
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/assets.js" defer></script>
+  <script src="/static/perp.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Đến nội dung chính</a>
@@ -37,6 +38,34 @@
     <section class="ledger" aria-labelledby="catalog-heading"><div class="section-head"><h2 id="catalog-heading">Coin đã đăng ký</h2></div>
       <div class="table-wrap"><table><thead><tr><th scope="col">Coin</th><th scope="col">Lifecycle</th><th scope="col">Sàn được chọn</th></tr></thead><tbody id="asset-catalog"></tbody></table></div>
     </section>
+    <section id="perp-controls" class="ledger" aria-labelledby="perp-heading" hidden>
+      <div class="section-head"><h2 id="perp-heading">Perp · tài khoản và leverage</h2></div>
+      <p>Chỉ Binance Demo. Đọc vị thế không nhận quản lý vị thế ngoài AIGT. Control token ở trên dùng để xác thực; không nhập API key Binance vào dashboard.</p>
+      <form id="perp-read-form" class="asset-form">
+        <label>Coin Perp<input id="perp-symbol" value="ETH" maxlength="24" pattern="[A-Za-z0-9]+" required autocomplete="off"></label>
+        <button type="submit">Xem thông tin</button>
+        <button id="perp-edit" type="button" disabled>Đổi leverage</button>
+      </form>
+      <p id="perp-message" role="status" aria-live="polite">Nhập control token và coin đã chọn sàn để đọc thông tin.</p>
+      <dl id="perp-summary" class="metric-rows"></dl>
+      <div class="table-wrap"><table><caption>Vị thế · unrealized PnL USDT theo mark price, chưa bao gồm phí/funding</caption>
+        <thead><tr><th scope="col">Side</th><th scope="col">Số lượng</th><th scope="col">Entry</th><th scope="col">Mark</th><th scope="col">Unrealized PnL</th><th scope="col">Quản lý</th></tr></thead>
+        <tbody id="perp-positions"><tr><td colspan="6">Chưa xác minh vị thế.</td></tr></tbody>
+      </table></div>
+    </section>
+    <dialog id="leverage-dialog" aria-labelledby="leverage-title">
+      <h2 id="leverage-title">Đổi leverage</h2>
+      <form id="leverage-form" class="asset-form">
+        <label>Leverage mong muốn (1–10x)<input id="leverage-value" type="number" min="1" max="10" step="1" value="3" required></label>
+        <button type="submit">Tiếp tục</button>
+        <button id="leverage-input-cancel" type="button">Cancel</button>
+      </form>
+      <div id="leverage-confirmation" hidden>
+        <p id="leverage-preview"></p>
+        <p>Chỉ thay đổi leverage. Không bật trading, tăng allocation hoặc đóng/hủy lệnh.</p>
+        <div class="asset-form"><button id="leverage-cancel" type="button">Cancel</button><button id="leverage-confirm" type="button">Confirm</button></div>
+      </div>
+    </dialog>
   </main>
   <footer><p>Execution mặc định tắt · thời gian hiển thị Asia/Ho_Chi_Minh · không tự chọn sàn hoặc rebalance.</p></footer>
 </body></html>
