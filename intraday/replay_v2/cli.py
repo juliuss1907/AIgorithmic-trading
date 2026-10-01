@@ -31,7 +31,15 @@ def add_replay_parser(commands):
     listing.add_argument("--limit", type=int, default=20)
     show = subcommands.add_parser("show")
     show.add_argument("run_id")
-    for command in (run, listing, show):
+    funding = subcommands.add_parser("funding", help="collect immutable public settlement evidence")
+    funding_commands = funding.add_subparsers(dest="funding_command", required=True)
+    fetch = funding_commands.add_parser("fetch")
+    fetch.add_argument("symbol")
+    fetch.add_argument("--from", dest="start", required=True)
+    fetch.add_argument("--to", dest="end", required=True)
+    run.add_argument("--cost-profile", choices=("legacy", "binance-regular"), default="binance-regular")
+    run.add_argument("--funding-id", help="verified funding snapshot ID in the report directory")
+    for command in (run, listing, show, fetch):
         command.add_argument("--database", type=Path, default=None, help="explicit native source, read-only")
         command.add_argument("--report-dir", type=Path, default=None, help="explicit native report root")
 
@@ -49,12 +57,27 @@ def read_config_file(path):
 def dispatch_replay(arguments):
     try:
         root = resolve_report_dir(arguments.report_dir)
-        if arguments.replay_command == "list":
+        if arguments.replay_command == "funding":
+            from intraday.replay_v2.funding import fetch_funding_snapshot, save_funding_snapshot
+            result = save_funding_snapshot(root, fetch_funding_snapshot(arguments.symbol,
+                datetime.fromisoformat(arguments.start), datetime.fromisoformat(arguments.end)))
+        elif arguments.replay_command == "list":
             result = list_reports(root, offset=arguments.offset, limit=arguments.limit)
         elif arguments.replay_command == "show":
             result = read_report(root, arguments.run_id)
         else:
             overrides = read_config_file(arguments.config) if arguments.config else {}
+            if "profile" not in overrides and arguments.cost_profile == "binance-regular":
+                from intraday.replay_v2.contracts import binance_gate_profile
+                overrides["profile"] = binance_gate_profile()
+            if arguments.funding_id:
+                from intraday.replay_v2.contracts import ExecutionProfile
+                from intraday.replay_v2.funding import read_funding_snapshot
+                profile = overrides.get("profile", ExecutionProfile())
+                if isinstance(profile, dict):
+                    profile = ExecutionProfile.model_validate(profile)
+                overrides["profile"] = profile.model_copy(update={
+                    "funding":read_funding_snapshot(root, arguments.funding_id).history})
             if arguments.capital is not None:
                 overrides["capital"] = arguments.capital
             if arguments.leverage is not None:
