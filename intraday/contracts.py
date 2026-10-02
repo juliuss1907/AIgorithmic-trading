@@ -825,6 +825,8 @@ class RuleParameters(StrictContract):
 class PerpRuleParameters(RuleParameters):
     """Bounded model-tunable filters for the isolated 3x perpetual sleeve."""
 
+    confidence_threshold: float = Field(default=0.85, ge=0.69, le=1.0, allow_inf_nan=False)
+
 
 class SpotRuleParameters(StrictContract):
     """Bounded Donchian/ATR parameters; hard portfolio limits live elsewhere."""
