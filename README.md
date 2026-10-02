@@ -91,6 +91,10 @@ Spot dùng Donchian/ATR và ledger cash; Perp dùng Jev đã lưu, margin và fu
 settlement khi có. `replay run` không gọi model/sàn, không thay gate hay soak. Funding thiếu
 không thành 0/net PnL đầy đủ. Report private lưu ngoài source DB; `/replay` chỉ đọc,
 lịch sử UTC+7. [Runbook và giả định Replay v2](docs/replay-v2-runbook.md).
+Research batch ETH/NEAR/ZEC/SOL có `aigt replay study`, `aigt replay confidence
+review|status COIN`; proposal confidence69–100% (không có trần85%) qua LLM review
+tuần mặc định tắt, đọc tại `/assets` → Perp. Không apply/promotion tự động.
+[Four-coin runbook và kết quả](docs/four-coin-replay-runbook.md).
 Gate operator riêng: `aigt assets rules replay RULE_ID --engine v2`, sau passing
 evaluation mới explicit start validation 14 ngày và promote. Spot fee/slippage
 10/5 bps, Perp 5/5 bps mỗi fill; không rewrite v1 và không tự bật execution.

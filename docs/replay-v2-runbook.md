@@ -7,6 +7,10 @@ V2 mô phỏng một coin/một market mỗi run. Không gửi lệnh, gọi mod
 Gate là luồng operator riêng: `aigt assets rules replay RULE_ID --engine v2` ghi
 evaluation append-only; không tự start validation, promote hoặc bật execution.
 
+Study nhiều setup và LLM confidence theo coin là workflow riêng, có thể tải public
+history/funding và gọi model trên research copy; không đổi tính offline của
+`replay run`. Xem [four-coin runbook](four-coin-replay-runbook.md).
+
 ## Chạy và xem kết quả
 
 Các timestamp phải có timezone; `--from` inclusive, `--to` exclusive. Code chuyển
@@ -54,7 +58,8 @@ Native mặc định:
 Ưu tiên `--report-dir` → `INTRADAY_REPLAY_REPORT_DIR` → mặc định.
 
 Docker: named volume `replay-reports`, mount `/app/state/replay-reports`:
-admin ghi, web chỉ đọc, worker không mount. Thay Compose file không phải deploy;
+admin/worker ghi, web chỉ đọc; worker confidence review vẫn default off.
+Thay Compose file không phải deploy;
 không start/recreate worker hay Demo execution trong triển khai feature local.
 
 Bundle gồm `manifest.json`, `summary.json`, `summary.md`, `equity_curve.jsonl`,
