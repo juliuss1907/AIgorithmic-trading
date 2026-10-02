@@ -1,6 +1,7 @@
 """Isolated account-replay studies. Never registers rules or starts campaigns."""
 
 import calendar
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 import os
@@ -99,8 +100,7 @@ def select_training(items):
 
 def run_variant(data, config, rule, root, *, now):
     config = config.model_copy(update={"rule_id": rule.rule_id})
-    # Validate the new dataset; do not mutate immutable historical rule payloads.
-    data = type(data).model_validate({**data.model_dump(), "rule": rule})
+    data = replace(data, rule=rule)
     report = simulate(config, data)
     saved = publish_report(root, report, now=now)
     status, blockers = economic_status(report)

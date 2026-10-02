@@ -79,11 +79,17 @@ class IntradayConfig:
     aster_interval_seconds: float = 60
     variational_interval_seconds: float = 300
     lighter_interval_seconds: float = 60
+    confidence_review_enabled: bool = False
+    confidence_review_symbols: tuple[str, ...] = ("ETHUSDT", "NEARUSDT", "ZECUSDT", "SOLUSDT")
     telegram_enabled: bool = False
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
 
     def __post_init__(self):
+        if (len(self.confidence_review_symbols) != len(set(self.confidence_review_symbols))
+                or not self.confidence_review_symbols
+                or not set(self.confidence_review_symbols) <= {"ETHUSDT","NEARUSDT","ZECUSDT","SOLUSDT"}):
+            raise ValueError("confidence review supports distinct ETH/NEAR/ZEC/SOL scopes only")
         if self.symbol != "BTCUSDT":
             raise ValueError("v1 only supports BTCUSDT")
         if self.initial_equity <= 0:
@@ -207,6 +213,9 @@ class IntradayConfig:
             lighter_interval_seconds=float(
                 os.getenv("INTRADAY_LIGHTER_INTERVAL_SECONDS", "60")
             ),
+            confidence_review_enabled=_boolean("INTRADAY_CONFIDENCE_REVIEW_ENABLED", False),
+            confidence_review_symbols=tuple(s.strip().upper() for s in os.getenv(
+                "INTRADAY_CONFIDENCE_REVIEW_SYMBOLS", "ETHUSDT,NEARUSDT,ZECUSDT,SOLUSDT").split(",")),
             telegram_enabled=_boolean("TELEGRAM_ENABLED", False),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN") or None,
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID") or None,

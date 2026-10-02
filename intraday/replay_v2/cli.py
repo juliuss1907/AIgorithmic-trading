@@ -2,6 +2,7 @@
 
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -39,7 +40,21 @@ def add_replay_parser(commands):
     fetch.add_argument("--to", dest="end", required=True)
     run.add_argument("--cost-profile", choices=("legacy", "binance-regular"), default="binance-regular")
     run.add_argument("--funding-id", help="verified funding snapshot ID in the report directory")
-    for command in (run, listing, show, fetch):
+    study = subcommands.add_parser("study", help="isolated four-coin research; no rule/campaign writes")
+    study.add_argument("--coins", nargs="+", default=["ETH","NEAR","ZEC","SOL"])
+    study.add_argument("--offline", action="store_true", help="no public history/funding collection")
+    study.add_argument("--secrets-file", type=Path, default=None, help="LLM provider credentials, never exchange keys")
+    confidence = subcommands.add_parser("confidence", help="research proposals, not exchange settings")
+    confidence_commands = confidence.add_subparsers(dest="confidence_command", required=True)
+    review = confidence_commands.add_parser("review")
+    status = confidence_commands.add_parser("status")
+    dismiss = confidence_commands.add_parser("dismiss", help="dismiss pending research; no source rule writes")
+    for command in (review,status,dismiss):
+        command.add_argument("symbol")
+    dismiss.add_argument("--review-id", required=True)
+    review.add_argument("--offline", action="store_true")
+    review.add_argument("--secrets-file", type=Path, default=None)
+    for command in (run, listing, show, fetch, study, review, status, dismiss):
         command.add_argument("--database", type=Path, default=None, help="explicit native source, read-only")
         command.add_argument("--report-dir", type=Path, default=None, help="explicit native report root")
 
@@ -57,7 +72,28 @@ def read_config_file(path):
 def dispatch_replay(arguments):
     try:
         root = resolve_report_dir(arguments.report_dir)
-        if arguments.replay_command == "funding":
+        if arguments.replay_command in {"study","confidence"}:
+            from datetime import timezone
+            from intraday.config import default_provider_secrets_path
+            from intraday.replay_v2.confidence_reviews import ReviewStore
+            from intraday.replay_v2.research import run_research
+            now = datetime.now(timezone.utc)
+            if arguments.replay_command == "confidence" and arguments.confidence_command == "status":
+                result = {"symbol":arguments.symbol,"proposal":ReviewStore(root).latest(arguments.symbol),
+                          "research_only":True,"activation_allowed":False}
+            elif arguments.replay_command == "confidence" and arguments.confidence_command == "dismiss":
+                repository = ReviewStore(root)
+                repository.dismiss(arguments.symbol,arguments.review_id,now=now)
+                result = repository.latest(arguments.symbol)
+            else:
+                is_study = arguments.replay_command == "study"
+                result = run_research(resolve_database_path(arguments.database),
+                    arguments.coins if is_study else [arguments.symbol], root, now=now,
+                    markets=("spot","perp") if is_study else ("perp",),
+                    collect=not arguments.offline,
+                    secrets_file=arguments.secrets_file or Path(os.getenv(
+                        "INTRADAY_PROVIDER_SECRETS_FILE") or default_provider_secrets_path()))
+        elif arguments.replay_command == "funding":
             from intraday.replay_v2.funding import fetch_funding_snapshot, save_funding_snapshot
             result = save_funding_snapshot(root, fetch_funding_snapshot(arguments.symbol,
                 datetime.fromisoformat(arguments.start), datetime.fromisoformat(arguments.end)))

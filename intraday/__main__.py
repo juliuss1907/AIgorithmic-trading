@@ -1765,18 +1765,28 @@ def _asset_rule_bootstrap_loop(config: IntradayConfig) -> None:
         if client is not None:
             proposals = _run_asset_auto_proposal_tick(
                 store, client=client, now=datetime.now(timezone.utc),
+                confidence_review_symbols=config.confidence_review_symbols if config.confidence_review_enabled else (),
             )
             if proposals:
                 print(json.dumps({"asset_auto_proposals": proposals}), flush=True)
+        if config.confidence_review_enabled:
+            from intraday.replay_v2.research import run_weekly_confidence
+            try:
+                reviews = run_weekly_confidence(config, now=datetime.now(timezone.utc))
+                print(json.dumps({"confidence_reviews": reviews}), flush=True)
+            except Exception as error:
+                print(json.dumps({"confidence_reviews": {"status":"error", "code":type(error).__name__}}), flush=True)
         time.sleep(3600)
 
 
 def _run_asset_auto_proposal_tick(
-    store: IntradayStore, *, client, now: datetime,
+    store: IntradayStore, *, client, now: datetime, confidence_review_symbols=(),
 ) -> dict[str, str]:
     results = {}
     for symbol, spec in store.asset_catalog().items():
         for scope in (DecisionScope.SPOT_4H, DecisionScope.PERP_INTRADAY):
+            if scope is DecisionScope.PERP_INTRADAY and symbol in confidence_review_symbols:
+                continue
             if scope not in spec.enabled_scopes:
                 continue
             job = f"asset_proposal_{scope.value}_{symbol.lower()}"
