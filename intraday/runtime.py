@@ -343,7 +343,8 @@ def run_rule_proposal_cycle(
         return {"status": "skipped", "reason": "missing_thesis_or_retrospective"}
     scopes = {
         scope for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY)
-        if should_generate_scoped_rule(store, scope=scope, now=now)
+        if not _selected_v2_proposal_route(store,scope)
+        and should_generate_scoped_rule(store, scope=scope, now=now)
     }
     if not scopes:
         return {"status": "skipped", "reason": "no_eligible_scope"}
@@ -362,3 +363,10 @@ def run_rule_proposal_cycle(
             candidate.scope.value: candidate.rule_id for candidate in candidates
         },
     }
+
+
+def _selected_v2_proposal_route(store,scope):
+    from intraday.replay_v2.automation import route_requires_v2
+    if scope is DecisionScope.SPOT_DAILY:
+        scope = DecisionScope.SPOT_4H  # New Spot routes must not auto-tune via the daily legacy generator.
+    return route_requires_v2(store,'BTCUSDT',scope)

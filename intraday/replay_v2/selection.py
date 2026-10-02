@@ -64,6 +64,8 @@ def select_rule(store, candidate_id, *, now, dry_run=False):
         return existing
     if rule is None or rule.scope not in {DecisionScope.SPOT_4H, DecisionScope.PERP_INTRADAY}:
         raise ValueError('v2 selection requires Spot 4h or Perp candidate')
+    if rule.created_at > now:
+        raise ValueError('cannot select a future rule')
     if rule.scope not in store.asset_spec(rule.symbol).enabled_scopes or store.asset_lifecycle(rule.symbol, rule.scope).stage.value not in {'shadow', 'soak'}:
         raise ValueError('v2 selection requires enabled shadow/soak scope')
     registry = store.scoped_rule_registry(rule.scope, symbol=rule.symbol)
@@ -89,8 +91,8 @@ def select_rule(store, candidate_id, *, now, dry_run=False):
         data = load_dataset(store.database, config)
         if not data.decisions or not data.quotes or any(x.startswith('unverified_recorded_decisions:') for x in data.limitations):
             raise ValueError('Perp collection provenance/quotes incomplete')
-        if min(d.decision.created_at for d in data.decisions)-start > timedelta(seconds=30):
-            raise ValueError('Perp collection anchor precedes recorded evidence')
+        # Model decisions may be sparse. The trusted collection anchor and actual
+        # quote/heartbeat/outcome coverage are audited, not a fabricated first signal.
         checksum = dataset_fingerprint(data)
     selection = GateSelection(candidate_id=rule.rule_id, symbol=rule.symbol, scope=rule.scope,
         rule_hash=rule.content_hash, selected_at=now, collection_started_at=start,

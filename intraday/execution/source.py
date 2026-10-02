@@ -30,6 +30,15 @@ class EvidenceSource:
 
     def evaluation(self, evaluation_id: str, *, now: datetime):
         with self.connect() as connection:
+            versioned = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND "
+                "name IN ('gate_automation_meta','gate_v2_selections')").fetchone()
+        if versioned:
+            from intraday.store import IntradayStore
+            from intraday.replay_v2.automation import route_requires_v2
+            reader = IntradayStore(self.path,read_only=True)
+            if route_requires_v2(reader,'BTCUSDT',DecisionScope.PERP_INTRADAY):
+                raise ValueError('selected BTC route requires v2 scoped execution admission; no v1 fallback')
+        with self.connect() as connection:
             row = connection.execute("SELECT payload_json FROM portfolio_soak_evaluations WHERE id=?", (evaluation_id,)).fetchone()
             latest = connection.execute("SELECT status FROM portfolio_soak_evaluations ORDER BY evaluated_at DESC, id DESC LIMIT 1").fetchone()
         evaluation = PortfolioSoakEvaluation.model_validate_json(row[0]) if row else None

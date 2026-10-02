@@ -161,12 +161,23 @@ def gate_rule_status(store, candidate_id):
     soak = repository.latest(candidate_id,kind="soak",campaign_id=campaign["campaign_id"]) if campaign else None
     from intraday.replay_v2.collection import read_collection_binding
     collection = read_collection_binding(store, candidate_id)
+    from intraday.replay_v2.selection import read_selection
+    selection = read_selection(store,candidate_id)
     return {"replay":replay.model_dump(mode="json") if replay else None,
             "soak":soak.model_dump(mode="json") if soak else None,"campaign":campaign,
-            "collection":collection.model_dump(mode="json") if collection else None}
+            "collection":collection.model_dump(mode="json") if collection else None,
+            "selection":selection.model_dump(mode='json') if selection else None}
 
 
 def dispatch_gate_command(store, arguments, *, now):
+    from intraday.replay_v2.automation_lock import gate_lock
+    if arguments.asset_rules_command not in {'inherit-perp','replay','start-soak','evaluate','activate'}:
+        return None
+    with gate_lock(store.database):
+        return _dispatch_gate_command(store,arguments,now=now)
+
+
+def _dispatch_gate_command(store, arguments, *, now):
     """Return None only when the explicitly selected lifecycle is still v1."""
     from intraday.replay_v2.gate_repository import GateRepository
     from intraday.replay_v2.lifecycle import replay_gate, start_gate_soak, evaluate_gate_soak, activate_gate_rule
@@ -180,9 +191,11 @@ def dispatch_gate_command(store, arguments, *, now):
     repository = GateRepository(store)
     candidate = store.load_scoped_rule(arguments.candidate_id)
     from intraday.replay_v2.selection import read_selection
+    from intraday.replay_v2.automation import route_requires_v2
     binding = read_selection(store, arguments.candidate_id)
     campaign = repository.current(candidate.symbol,candidate.scope) if candidate else None
-    selected = bool(binding or campaign and campaign["candidate_id"] == arguments.candidate_id)
+    selected = bool(binding or campaign and campaign["candidate_id"] == arguments.candidate_id or
+                    candidate and route_requires_v2(store,candidate.symbol,candidate.scope))
     evaluation_id = getattr(arguments,"evaluation_id",None)
     if getattr(arguments,"engine",None) != "v2" and not selected and not (evaluation_id and repository.get(evaluation_id)):
         return None

@@ -15,6 +15,8 @@ def project_gate_readiness(reader, row, *, now):
     replay = (repository.get(campaign["replay_evaluation_id"]) if campaign
               else repository.latest_for_route(row["symbol"],scope))
     latest_route = repository.latest_for_route(row["symbol"],scope)
+    if campaign and campaign['status'] != 'active' and row['candidate_id'] and row['candidate_id'] != campaign['candidate_id']:
+        campaign, replay = None, repository.latest(row['candidate_id'])
     from intraday.replay_v2.collection import read_collection_binding
     collection = read_collection_binding(reader, row["candidate_id"]) if row["candidate_id"] else None
     if collection and not (campaign and campaign["candidate_id"] == collection.candidate_id):

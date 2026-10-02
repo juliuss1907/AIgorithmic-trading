@@ -238,6 +238,18 @@ def _parser() -> argparse.ArgumentParser:
     inherit_perp.add_argument("symbol")
     inherit_perp.add_argument("--collection-from", required=True, help="aware ISO timestamp of recorded collection start")
     inherit_perp.add_argument("--database", default=None)
+    migrate_perp = asset_rule_commands.add_parser('migrate-perp', help='audit/select v2 without resetting collections')
+    migrate_perp.add_argument('symbols', nargs='+')
+    migrate_perp.add_argument('--dry-run', action='store_true')
+    migrate_perp.add_argument('--database', default=None)
+    automation = asset_rule_commands.add_parser('automation', help='opt-in weekly v2 gates; no auto activation')
+    automation_commands = automation.add_subparsers(dest='automation_command', required=True)
+    for name in ('set','pause','status'):
+        command = automation_commands.add_parser(name)
+        command.add_argument('--market', choices=('spot','perp','all'), default='all')
+        command.add_argument('--database', default=None)
+        if name == 'set':
+            command.add_argument('--interval-days', type=int, choices=(7,), default=7)
     asset_rule_propose = asset_rule_commands.add_parser("propose")
     asset_rule_propose.add_argument("symbol")
     asset_rule_propose.add_argument("--scope", required=True, choices=["spot_daily"])
@@ -426,6 +438,10 @@ def _asset_payload(store: IntradayStore, symbol: str) -> dict:
 
 
 def _assets_cli(arguments) -> None:
+    if arguments.assets_command == 'rules' and arguments.asset_rules_command in {'migrate-perp','automation'}:
+        from intraday.replay_v2.automation_cli import dispatch_automation
+        dispatch_automation(arguments)
+        return
     if arguments.assets_command == "readiness":
         try:
             report = build_asset_readiness(resolve_database_path(arguments.database),
@@ -1106,6 +1122,7 @@ def _portfolio_cli(arguments) -> None:
                     threading.Thread(
                         target=_asset_rule_bootstrap_loop, args=(config,), daemon=True
                     ).start()
+                    threading.Thread(target=_gate_automation_loop,args=(config,),daemon=True).start()
                     background_started = True
                 time.sleep(max(1, interval))
         evaluated_at = (
@@ -1167,6 +1184,7 @@ def _portfolio_cli(arguments) -> None:
             threading.Thread(
                 target=_asset_rule_bootstrap_loop, args=(config,), daemon=True
             ).start()
+            threading.Thread(target=_gate_automation_loop,args=(config,),daemon=True).start()
         cached_daily_close = None
         last_spot_check_day = None
         legacy_spot_observation = None
@@ -1380,7 +1398,8 @@ def _portfolio_cli(arguments) -> None:
                             challenger_id = store.scoped_rule_registry(scope).get(
                                 "challenger_id"
                             )
-                            if challenger_id:
+                            from intraday.replay_v2.automation import route_requires_v2
+                            if challenger_id and not route_requires_v2(store,'BTCUSDT',scope):
                                 evaluate_scoped_soak(
                                     store, challenger_id, now=now
                                 )
@@ -1409,6 +1428,9 @@ def _portfolio_cli(arguments) -> None:
         raise SystemExit("parent paper portfolio is not initialized")
     state = latest_parent_market_view(store, state)
     if command == "activate-paper":
+        from intraday.replay_v2.automation import route_requires_v2
+        if any(route_requires_v2(store,'BTCUSDT',scope) for scope in (DecisionScope.SPOT_4H,DecisionScope.PERP_INTRADAY)):
+            raise SystemExit('selected BTC route requires scoped v2 execution admission; no v1 parent activation fallback')
         evaluation = store.portfolio_soak_evaluation(arguments.evaluation_id)
         latest_evaluation = store.latest_portfolio_soak_evaluation()
         if (
@@ -1683,6 +1705,8 @@ def _run_asset_rule_bootstrap_tick(
                 continue
             if not (spec.binance_spot_symbol if scope is DecisionScope.SPOT_4H else spec.binance_perp_symbol):
                 continue
+            from intraday.replay_v2.automation import route_requires_v2
+            selected_v2 = route_requires_v2(store,symbol,scope)
             if scope is DecisionScope.PERP_INTRADAY and symbol == "BTCUSDT":
                 continue  # Existing BTC Perp champion remains on its legacy lifecycle.
             if store.load_active_scoped_rule(scope, symbol=symbol):
@@ -1693,6 +1717,11 @@ def _run_asset_rule_bootstrap_tick(
                 continue
             key = f"{symbol}:{scope.value}"
             try:
+                if selected_v2:
+                    from intraday.replay_v2.preparation import prepare_route
+                    results[key] = prepare_route(store,symbol,scope,now=now,spot_client=spot_client)
+                    store.finish_scheduler_run(job,slot,status='success',finished_at=datetime.now(timezone.utc))
+                    continue
                 rules = store.list_scoped_rules(scope, symbol=symbol)
                 if not rules:
                     if scope is DecisionScope.SPOT_4H:
@@ -1783,12 +1812,28 @@ def _asset_rule_bootstrap_loop(config: IntradayConfig) -> None:
         time.sleep(3600)
 
 
+def _gate_automation_loop(config: IntradayConfig) -> None:
+    from intraday.replay_v2.automation import run_tick
+    store = IntradayStore(config.database)
+    while True:
+        try:
+            result = run_tick(store,now=datetime.now(timezone.utc))
+            if result:
+                print(json.dumps({'gate_automation':result},allow_nan=False),flush=True)
+        except Exception as error:
+            print(json.dumps({'gate_automation':{'status':'error','code':type(error).__name__}}),flush=True)
+        time.sleep(60)
+
+
 def _run_asset_auto_proposal_tick(
     store: IntradayStore, *, client, now: datetime, confidence_review_symbols=(),
 ) -> dict[str, str]:
     results = {}
     for symbol, spec in store.asset_catalog().items():
         for scope in (DecisionScope.SPOT_4H, DecisionScope.PERP_INTRADAY):
+            from intraday.replay_v2.automation import route_requires_v2
+            if route_requires_v2(store,symbol,scope):
+                continue  # Weekly deterministic evaluation never auto-tunes/model-calls.
             if scope is DecisionScope.PERP_INTRADAY and symbol in confidence_review_symbols:
                 continue
             if scope not in spec.enabled_scopes:

@@ -86,6 +86,8 @@ def _score(rule, rows: list[dict]) -> tuple[float, int]:
 
 
 def evaluate_scoped_replay(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
+    from intraday.replay_v2.compatibility import require_legacy_campaign
+    require_legacy_campaign(store,candidate_id)
     candidate = store.load_scoped_rule(candidate_id)
     if candidate is None:
         raise ValueError("unknown scoped rule candidate")
@@ -130,6 +132,8 @@ def evaluate_scoped_replay(store, candidate_id: str, *, now: datetime) -> Scoped
 
 
 def start_scoped_rule_soak(store, candidate_id: str, *, now: datetime) -> dict:
+    from intraday.replay_v2.compatibility import require_legacy_campaign
+    require_legacy_campaign(store,candidate_id)
     evaluation = store.latest_scoped_rule_evaluation(candidate_id, kind="replay")
     if evaluation is None or evaluation.status != "pass":
         raise ValueError("candidate requires a passing replay evaluation")
@@ -141,6 +145,8 @@ def start_scoped_rule_soak(store, candidate_id: str, *, now: datetime) -> dict:
 
 
 def evaluate_scoped_soak(store, candidate_id: str, *, now: datetime) -> ScopedRuleEvaluation:
+    from intraday.replay_v2.compatibility import require_legacy_campaign
+    require_legacy_campaign(store,candidate_id)
     candidate = store.load_scoped_rule(candidate_id)
     registry = store.scoped_rule_registry(candidate.scope, symbol=candidate.symbol) if candidate else {}
     if candidate is None or registry.get("challenger_id") != candidate_id:
@@ -187,6 +193,8 @@ def evaluate_scoped_soak(store, candidate_id: str, *, now: datetime) -> ScopedRu
 def activate_scoped_rule(
     store, candidate_id: str, *, evaluation_id: str, now: datetime
 ) -> dict:
+    from intraday.replay_v2.compatibility import require_legacy_campaign
+    require_legacy_campaign(store,candidate_id)
     evaluation = store.scoped_rule_evaluation(evaluation_id)
     if (
         evaluation is None or evaluation.candidate_id != candidate_id

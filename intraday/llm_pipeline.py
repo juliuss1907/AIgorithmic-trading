@@ -775,9 +775,9 @@ class LLMAnalysisPipeline:
     ) -> list[ScopedRuleCandidate]:
         candidates = []
         for scope in (DecisionScope.SPOT_DAILY, DecisionScope.PERP_INTRADAY):
-            champion = self._ensure_scoped_champion(scope, now)
             if scope not in generate_scopes:
                 continue
+            champion = self._ensure_scoped_champion(scope, now)
             if scope == DecisionScope.SPOT_DAILY:
                 workflow = "spot_daily_rule_generator"
                 response_model = SpotRuleProposal
