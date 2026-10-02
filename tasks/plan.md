@@ -83,3 +83,10 @@ automated backup/alerts, rồi adapter Hyperliquid.
 
 Đợt này chỉ tài liệu/template/generated artifact/tests; không key/order/activation/VPS write.
 Không push/merge/redeploy cho tới khi operator yêu cầu riêng.
+
+## Ưu tiên BTC/ETH gate v2 — 2026-10-02
+
+[Kế hoạch và backlog SOL](btc-eth-gate-v2-plan.md) bổ sung, không thay các task mở.
+BTC Perp explicit inheritance của collection có kiểm chứng; ETH Spot 30/8 gate v2
+trên snapshot riêng. Historical gate/collection không thay validation mới ≥14 ngày.
+Risk policy hiện tại không đổi; local verification không phải VPS activation.

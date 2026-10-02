@@ -202,6 +202,45 @@ funding 0 hay complete. Validation cần snapshot phủ toàn bộ window mới.
 
 ## Compatibility và triển khai
 
+### Explicit Perp champion collection inheritance
+
+Đối với Perp đã có champion, operator có thể giữ nguyên tham số và tái sử dụng
+collection archived đã audit, thay vì tự backdate một challenger mới:
+
+```bash
+aigt assets rules inherit-perp BTC --collection-from 2026-09-25T12:55:46.676811Z
+aigt assets rules status BTC
+aigt assets readiness BTC --market perp
+# Dùng candidate_id mới từ output, không dùng ID champion v1:
+aigt assets rules replay CANDIDATE_ID --engine v2 --funding-id FUNDING_ID
+```
+
+Native/local: thêm `--database /ABS/source.sqlite3` cho từng lệnh và giữ cùng
+`--report-dir /ABS/replay-reports` cho funding/replay/start/evaluate/activate.
+Không copy local snapshot evaluation ID sang live VPS để start soak.
+
+`inherit-perp` là write opt-in riêng; cần enabled shadow/soak route có champion,
+không competing candidate hoặc active validation. Mốc from phải aware, có recorded
+decision trong 30 giây đầu; không đặt trước history để giả đủ 14 ngày. Audit prefix
+kết thúc 15 phút trước clock để tránh in-flight decisions; thiếu archived model-call
+provenance/quotes thì không tạo candidate. Không gọi model hoặc exchange API.
+
+Candidate giữ actual creation clock; immutable `perp_gate_collections` bind
+candidate/champion hashes, source config và dataset checksum. Retry cùng champion/from
+trả cùng binding; replay kiểm chứng lại prefix, từ chối khi evidence/rule thay đổi.
+Champion, v1 registry anchors và evaluations không đổi. Collection proof được ghi
+trong report methodology và status; readiness GET chỉ preview source, không rerun replay.
+
+Coverage/funding/số giao dịch và minimum 14 ngày vẫn được xét trên growing window.
+Historical account replay là ex-post, không phải OOS/Jev validation mới. Passing gate
+chỉ cho phép operator start campaign mới; ít nhất 14 ngày sau campaign start vẫn bắt
+buộc và không tính lại collection cũ. Candidate đã inherit không được fallback v1.
+Extension optional, readers không chạy DDL; nâng CLI/admin/readers trước khi dùng
+luồng mới. Không tự xóa binding để rollback hoặc bật Demo.
+
+Kết quả local BTC/ETH và SOL deferred:
+[verification](btc-eth-gate-v2-verification.md), [plan](../tasks/btc-eth-gate-v2-plan.md).
+
 Optional extension `replay_gate_meta` version 1 chỉ được cài khi operator ghi gate;
 readiness/read-only readers không chạy DDL. Source schema vẫn v23. V1 evaluation,
 raw market data và soak evidence không bị xóa/rewrite. V1-rejected candidate có thể

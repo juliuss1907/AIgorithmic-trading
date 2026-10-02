@@ -66,3 +66,13 @@ Checkbox code không thay cho quyền activation hoặc bằng chứng vận hà
 - [x] Link/CLI/render/browser/regression checks pass; không runtime/data/secret change.
 
 [Biên bản kiểm chứng](../docs/documentation-refresh-2026-10-01.md).
+
+## BTC/ETH gate v2 và SOL deferred — 2026-10-02
+
+- [x] Explicit audited Perp collection inheritance; clone champion, giữ v1 evidence.
+- [x] ETH 30/8 gate v2 trên isolated snapshot; không start validation/trading.
+- [ ] Approval push/redeploy riêng và fresh VPS ETH gate trước khi operator start soak.
+- [ ] BTC đủ collection/funding/coverage/trades rồi xét v2 replay, validation mới ≥14 ngày.
+- [ ] SOL: chốt reset policy rồi nghiên cứu 1.5%/3%; chưa đổi risk hiện tại.
+
+Chi tiết và evidence: [BTC/ETH plan](btc-eth-gate-v2-plan.md).
