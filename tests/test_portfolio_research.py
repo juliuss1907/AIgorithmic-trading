@@ -134,6 +134,9 @@ def test_replay_three_assets_next_open_costs_and_determinism():
     assert sum(t["net_pnl"] for t in report["trades"]) == Decimal("-1.8")
     assert report["activation_allowed"] is False
     assert report["official_gate_eligible"] is False
+    # Reproduction uses the original serialized policy, not rounded percentages.
+    restored = PortfolioConfig.model_validate({k: report["config"][k] for k in PortfolioConfig.model_fields})
+    assert simulate_portfolio(restored, candles(), {}) == report
 
 
 def test_current_candle_does_not_generate_its_own_entry():
@@ -213,3 +216,52 @@ def test_native_daily_gaps_and_corrupt_prices_are_rejected():
     rows[0][4] = "NaN"
     with pytest.raises(ValueError, match="1d values"):
         daily_points(rows)
+
+
+def test_batch_reports_16_variants_and_keeps_verified_source_unchanged(tmp_path):
+    from intraday.backups import create_backup, verify_backup
+    from intraday.replay_v2.artifacts import read_report
+    from intraday.replay_v2.portfolio_study import run_study
+    from intraday.store import IntradayStore
+
+    store = IntradayStore(tmp_path / "input.sqlite3")
+    data = candles()
+    for symbol in MARKS:
+        store.register_asset(symbol, market="spot", now=START)
+        store.record_asset_candles(symbol, "4h", [c.row() for c in data[symbol]])
+        store.record_asset_candles(symbol, "1d", list(daily_rows()[symbol]))
+    source = create_backup(store.database, tmp_path / "source")
+    receipt = run_study(source["backup"], tmp_path / "study", start=START,
+                        end=START + timedelta(hours=4))
+    assert len(receipt["results"]) == 16
+    assert len({r["result_id"] for r in receipt["results"]}) == 16
+    assert len({r["dataset_checksum"] for r in receipt["results"]}) == 1
+    assert receipt["source_unchanged"] and receipt["evidence_unchanged"]
+    assert verify_backup(source["backup"])["sha256"] == source["sha256"]
+    assert receipt["coverage_per_coin"] == 1
+    for result in receipt["results"]:
+        report = read_report(tmp_path / "study" / "reports", result["run_id"])
+        assert report["evaluator_version"] == "portfolio-research-4h-v1"
+        assert report["methodology"]["official_gate_eligible"] is False
+
+
+def test_missing_daily_collection_requests_only_missing_ranges(tmp_path):
+    from intraday.replay_v2.portfolio_study import collect_missing_daily
+    from intraday.store import IntradayStore
+
+    store = IntradayStore(tmp_path / "copy.sqlite3")
+    all_rows = daily_rows()
+    for symbol in MARKS:
+        store.register_asset(symbol, market="spot", now=START)
+        store.record_asset_candles(symbol, "1d", list(all_rows[symbol][:10] + all_rows[symbol][12:]))
+    calls = []
+
+    class PublicClient:
+        def backfill(self, *, symbol, interval, start_time, end_time, now):
+            calls.append((symbol, interval, start_time, end_time))
+            return [r for r in all_rows[symbol] if start_time <= r[0] <= end_time]
+
+    collected = collect_missing_daily(store, config(), PublicClient())
+    assert len(calls) == 3 and all(c[1] == "1d" for c in calls)
+    assert all(c[2] == all_rows[c[0]][10][0] and c[3] == all_rows[c[0]][12][0]-1 for c in calls)
+    assert all(r["inserted_bars"] == 2 for r in collected)

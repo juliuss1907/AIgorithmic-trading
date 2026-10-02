@@ -205,3 +205,23 @@ def simulate_portfolio(config, candles, daily):
         book.close(symbol, close_at, close_marks[symbol], "window_end")
     book.enforce_risk(close_at, close_marks)
     return portfolio_result(config, prepared, daily, book)
+
+
+def main(argv=None):
+    import argparse
+    import json
+    from intraday.replay_v2.portfolio_study import run_study
+
+    parser = argparse.ArgumentParser(description="Research-only BTC/ETH/SOL 16-variant Spot portfolio grid")
+    parser.add_argument("--database", required=True, help="Verified immutable backup with sibling manifest")
+    parser.add_argument("--report-root", required=True, help="New private study directory; never overwritten")
+    parser.add_argument("--collect-missing-1d", action="store_true", help="Append missing public daily bars to a private copy")
+    arguments = parser.parse_args(argv)
+    receipt = run_study(arguments.database, arguments.report_root, collect=arguments.collect_missing_1d,
+                        progress=lambda item: print(json.dumps(item), flush=True))
+    print(json.dumps({"comparison": str(arguments.report_root)+"/comparison.json", "runs": len(receipt["results"]),
+                      "source_unchanged": receipt["source_unchanged"]}), flush=True)
+
+
+if __name__ == "__main__":
+    main()
