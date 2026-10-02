@@ -54,6 +54,10 @@ def perp_evidence(reader, rule, start, end, data=None):
 
 
 def _replay_inputs(reader, rule, registry, now, *, root, funding_id, campaign=None):
+    from intraday.replay_v2.selection import read_selection, verify_selection
+    selection = read_selection(reader, rule.rule_id)
+    if selection:
+        verify_selection(reader, rule, selection, now=now, audit_prefix=campaign is None)
     market = "spot" if rule.scope is DecisionScope.SPOT_4H else "perp"
     collection = None
     if market == "spot":
@@ -73,6 +77,8 @@ def _replay_inputs(reader, rule, registry, now, *, root, funding_id, campaign=No
         anchor = campaign["started_at"] if campaign else registry.get("updated_at")
         if collection:
             start = collection.source_config.start
+        elif selection and not campaign:
+            start = selection.collection_started_at
         elif not anchor or registry.get("challenger_id") != rule.rule_id:
             start = min(rule.created_at,now-timedelta(seconds=1))
         else:

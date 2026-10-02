@@ -249,7 +249,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--database", default=None)
         command.add_argument("--report-dir", type=Path, default=None)
         if name == "replay":
-            command.add_argument("--engine", choices=("v1","v2"), default="v1")
+            command.add_argument("--engine", choices=("v1","v2"), default=None)
         if name in {"replay","evaluate"}:
             command.add_argument("--funding-id", default=None)
         if name in {"start-soak", "activate"}:

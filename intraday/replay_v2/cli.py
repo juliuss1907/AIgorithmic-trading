@@ -179,14 +179,16 @@ def dispatch_gate_command(store, arguments, *, now):
         return None
     repository = GateRepository(store)
     candidate = store.load_scoped_rule(arguments.candidate_id)
+    from intraday.replay_v2.selection import read_selection
+    binding = read_selection(store, arguments.candidate_id)
     campaign = repository.current(candidate.symbol,candidate.scope) if candidate else None
-    selected = bool(campaign and campaign["candidate_id"] == arguments.candidate_id)
+    selected = bool(binding or campaign and campaign["candidate_id"] == arguments.candidate_id)
     evaluation_id = getattr(arguments,"evaluation_id",None)
     if getattr(arguments,"engine",None) != "v2" and not selected and not (evaluation_id and repository.get(evaluation_id)):
         return None
     common = {"now":now,"report_dir":arguments.report_dir}
     if command == "replay":
-        if arguments.engine != "v2":
+        if arguments.engine == "v1" or not selected and arguments.engine != "v2":
             raise ValueError("a v2 campaign cannot fall back to v1 replay")
         result = replay_gate(store,arguments.candidate_id,funding_id=arguments.funding_id,**common)
     elif command == "start-soak":
