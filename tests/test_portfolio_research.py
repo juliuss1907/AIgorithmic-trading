@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 
 from intraday.replay_v2.portfolio_book import PortfolioBook, PortfolioConfig
+from intraday.replay_v2.contracts import Candle
 
 
 START = datetime(2024, 10, 2, tzinfo=timezone.utc)
@@ -93,3 +94,122 @@ def test_closing_fees_upgrade_daily_halt_to_terminal_dd():
 def test_invalid_policy_is_rejected(changes):
     with pytest.raises(ValueError):
         config(**changes)
+
+
+def candles(*, breakout=True, volatile=False, future=None):
+    rows = []
+    for index in range(-31, 0):
+        close = 110 if breakout and index == -1 else 100
+        rows.append(Candle(opened_at=START + timedelta(hours=4*index),
+            available_at=START + timedelta(hours=4*(index+1)), open=100,
+            high=max(close, 120 if volatile else Decimal("100.1")),
+            low=80 if volatile else Decimal("99.9"), close=close, volume=1))
+    future = future or [(110, 111, 109, 110)]
+    for index, (opening, high, low, close) in enumerate(future):
+        rows.append(Candle(opened_at=START + timedelta(hours=4*index),
+            available_at=START + timedelta(hours=4*(index+1)),
+            open=opening, high=high, low=low, close=close, volume=1))
+    return {s: tuple(rows) for s in MARKS}
+
+
+def daily_rows(*, rising=True):
+    rows = []
+    for i in range(-60, 2):
+        opening = int((START + timedelta(days=i)).timestamp()*1000)
+        price = str(100 + i if rising else 100)
+        rows.append([opening, price, price, price, price, "1", opening+86400000-1])
+    return {s: tuple(rows) for s in MARKS}
+
+
+def test_replay_three_assets_next_open_costs_and_determinism():
+    from intraday.replay_v2.portfolio_research import simulate_portfolio
+
+    cfg = config(end=START + timedelta(hours=4))
+    report = simulate_portfolio(cfg, candles(), {})
+    assert report == simulate_portfolio(cfg, dict(reversed(list(candles().items()))), {})
+    assert report["summary"]["net_pnl"] == pytest.approx(-1.8)
+    entries = [e for e in report["events"] if e["kind"] == "entry"]
+    assert len(entries) == 3 and all(e["at"] == START.isoformat() for e in entries)
+    assert all(e["price"] == "110" for e in entries)
+    assert sum(t["net_pnl"] for t in report["trades"]) == Decimal("-1.8")
+    assert report["activation_allowed"] is False
+    assert report["official_gate_eligible"] is False
+
+
+def test_current_candle_does_not_generate_its_own_entry():
+    from intraday.replay_v2.portfolio_research import simulate_portfolio
+
+    report = simulate_portfolio(config(end=START + timedelta(hours=4)),
+                                candles(breakout=False), {})
+    assert report["summary"]["closed_trades"] == 0
+
+
+def test_daily_filter_uses_only_available_closed_candles():
+    from intraday.replay_v2.portfolio_research import simulate_portfolio
+
+    cfg = config(end=START + timedelta(hours=4), trend_filter=True)
+    flat = daily_rows(rising=False)
+    # Future day has an enormous rally, but is not available at the entry.
+    for rows in flat.values():
+        rows[-1][1:5] = ["10000"]*4
+    assert simulate_portfolio(cfg, candles(), flat)["summary"]["closed_trades"] == 0
+    assert simulate_portfolio(cfg, candles(), daily_rows())["summary"]["closed_trades"] == 3
+
+
+def test_missing_4h_or_daily_data_fails_closed():
+    from intraday.replay_v2.portfolio_research import simulate_portfolio
+
+    data = candles()
+    data["SOLUSDT"] = data["SOLUSDT"][:-1]
+    with pytest.raises(ValueError, match="4h"):
+        simulate_portfolio(config(end=START + timedelta(hours=4)), data, {})
+    with pytest.raises(ValueError, match="1d"):
+        simulate_portfolio(config(end=START + timedelta(hours=4), trend_filter=True), candles(), {})
+
+
+def test_atr_sizes_each_asset_once_in_replay():
+    from intraday.replay_v2.portfolio_research import simulate_portfolio
+
+    data = candles(volatile=True)
+    # Volatile highs (120) would suppress a breakout at 110. Use a higher setup.
+    data = {s: tuple(list(rows[:-2]) + [rows[-2].model_copy(update={
+        "close": Decimal(130), "high": Decimal(131)}), rows[-1].model_copy(update={
+        "open": Decimal(130), "high": Decimal(131), "low": Decimal(129), "close": Decimal(130)})])
+        for s, rows in data.items()}
+    result = simulate_portfolio(config(end=START + timedelta(hours=4)), data, {})
+    entry = next(e for e in result["events"] if e["kind"] == "entry" and e["symbol"] == "BTCUSDT")
+    assert 18 < Decimal(entry["notional"]) < 20
+
+
+def test_coin_stop_uses_low_but_portfolio_does_not_use_simultaneous_lows():
+    from intraday.replay_v2.portfolio_research import simulate_portfolio
+
+    result = simulate_portfolio(config(end=START + timedelta(hours=4)),
+        candles(future=[(110, 111, 90, 110)]), {})
+    assert all(t["exit_reason"] == "emergency_stop" for t in result["trades"])
+    assert all(Decimal(t["exit_price"]) == 99 for t in result["trades"])
+    assert result["summary"]["halt_reason"] == "daily_loss_limit"
+    assert result["summary"]["max_drawdown_known_pct"] < 10
+
+
+def test_coin_gap_stop_fills_at_open_when_portfolio_guard_is_not_triggered():
+    from intraday.replay_v2.portfolio_research import simulate_portfolio
+
+    data = candles(volatile=True, future=[(130, 131, 129, 130), (110, 111, 109, 110)])
+    data = {s: tuple(list(rows[:-3]) + [rows[-3].model_copy(update={
+        "close": Decimal(130), "high": Decimal(131)})] + list(rows[-2:])) for s, rows in data.items()}
+    result = simulate_portfolio(config(end=START + timedelta(hours=8)), data, {})
+    assert all(t["exit_reason"] == "emergency_stop_gap" for t in result["trades"])
+    assert all(Decimal(t["exit_price"]) == 110 for t in result["trades"])
+    assert not result["summary"]["halted"]
+
+
+def test_native_daily_gaps_and_corrupt_prices_are_rejected():
+    from intraday.replay_v2.portfolio_research import daily_points
+
+    rows = list(daily_rows()["BTCUSDT"])
+    with pytest.raises(ValueError, match="1d history gap"):
+        daily_points(rows[:20] + rows[21:])
+    rows[0][4] = "NaN"
+    with pytest.raises(ValueError, match="1d values"):
+        daily_points(rows)
