@@ -55,6 +55,7 @@ def perp_evidence(reader, rule, start, end, data=None):
 
 def _replay_inputs(reader, rule, registry, now, *, root, funding_id, campaign=None):
     market = "spot" if rule.scope is DecisionScope.SPOT_4H else "perp"
+    collection = None
     if market == "spot":
         rows = reader.list_asset_candles(rule.symbol,"4h",as_of=now)
         history = spot_4h_history_progress(rows,now=now)
@@ -64,8 +65,15 @@ def _replay_inputs(reader, rule, registry, now, *, root, funding_id, campaign=No
         evidence = GateEvidence(history_bars=history["bars"],history_coverage=history["coverage"],
                                latest_candle_age_seconds=history["latest_candle_age_seconds"])
     else:
+        from intraday.replay_v2.collection import read_collection_binding, verify_collection_binding
+        if not campaign:
+            collection = read_collection_binding(reader, rule.rule_id)
+            if collection:
+                verify_collection_binding(reader, rule, collection, now=now)
         anchor = campaign["started_at"] if campaign else registry.get("updated_at")
-        if not anchor or registry.get("challenger_id") != rule.rule_id:
+        if collection:
+            start = collection.source_config.start
+        elif not anchor or registry.get("challenger_id") != rule.rule_id:
             start = min(rule.created_at,now-timedelta(seconds=1))
         else:
             start = datetime.fromisoformat(anchor)
@@ -83,7 +91,7 @@ def _replay_inputs(reader, rule, registry, now, *, root, funding_id, campaign=No
     data = load_dataset(reader.database,config,reader=reader)
     if evidence is None:
         evidence = perp_evidence(reader,rule,start,end,data)
-        if not campaign and registry.get("challenger_id") != rule.rule_id:
+        if not campaign and not collection and registry.get("challenger_id") != rule.rule_id:
             evidence = evidence.model_copy(update={"elapsed_days":0,"heartbeat_coverage":0})
     return config,data,evidence
 
@@ -98,6 +106,11 @@ def replay_gate(store, rule_id, *, now, report_dir=None, funding_id=None, campai
             raise ValueError("active validation must use evaluate, not restart historical replay")
         config,data,evidence = _replay_inputs(reader,rule,registry,now,root=root,funding_id=funding_id,campaign=campaign)
         report = simulate(config,data)
+        if not campaign and rule.scope is DecisionScope.PERP_INTRADAY:
+            from intraday.replay_v2.collection import read_collection_binding
+            collection = read_collection_binding(reader, rule.rule_id)
+            if collection:
+                report["methodology"]["collection_inheritance"] = collection.model_dump(mode="json")
         champion_report = None
         if registry.get("champion_id"):
             champion_config = config.model_copy(update={"rule_id":registry["champion_id"]})

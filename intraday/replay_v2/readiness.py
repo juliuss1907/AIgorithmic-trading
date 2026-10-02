@@ -15,6 +15,13 @@ def project_gate_readiness(reader, row, *, now):
     replay = (repository.get(campaign["replay_evaluation_id"]) if campaign
               else repository.latest_for_route(row["symbol"],scope))
     latest_route = repository.latest_for_route(row["symbol"],scope)
+    from intraday.replay_v2.collection import read_collection_binding
+    collection = read_collection_binding(reader, row["candidate_id"]) if row["candidate_id"] else None
+    if collection and not (campaign and campaign["candidate_id"] == collection.candidate_id):
+        saved = repository.latest(collection.candidate_id)
+        if saved is None or saved.status == "deferred":
+            return _collection_readiness(reader, row, collection, saved, now=now)
+        campaign, replay = None, saved
     if (campaign and campaign["status"] != "active" and latest_route
             and latest_route.evaluated_at > replay.evaluated_at):
         campaign, replay = None, latest_route
@@ -89,4 +96,41 @@ def project_gate_readiness(reader, row, *, now):
     row.update(blockers=blockers,next_action="wait" if now < started+timedelta(days=14) else "run_evaluation")
     if saved and saved.status == "pass":
         row.update(phase="awaiting_promotion",next_action="request_promotion",blockers=[])
+    return True
+
+
+def _collection_readiness(reader, row, collection, replay, *, now):
+    """Source-only collection preview; account/quote/provenance checks stay in replay."""
+    from intraday.asset_readiness import _gate
+    from intraday.contracts import DecisionScope
+    from intraday.replay_v2.contracts import binance_gate_profile
+    from intraday.replay_v2.gates import GATE_VERSION
+    rule = reader.load_scoped_rule(collection.candidate_id)
+    champion = reader.load_active_scoped_rule(DecisionScope.PERP_INTRADAY, symbol=row["symbol"])
+    if (rule is None or champion is None or rule.content_hash != collection.candidate_hash
+            or champion.content_hash != collection.champion_hash or champion.rule_id != collection.champion_id
+            or rule.parent_rule_id != champion.rule_id or rule.parameters != champion.parameters
+            or collection.accepted_at > now or rule.created_at > now):
+        row.update(phase="inconsistent", blockers=["v2_collection_binding_mismatch"], next_action="investigate")
+        return True
+    start = collection.source_config.start
+    evidence = perp_evidence(reader, rule, start, now)
+    metrics = evidence.model_dump()
+    earliest = start+timedelta(days=14)
+    row.update(gate_version=GATE_VERSION, collection=collection.model_dump(mode="json"),
+        cost_profile=binance_gate_profile().model_dump(mode="json", exclude={"funding","instrument","instrument_observed_at","instrument_source"}),
+        phase="decision_soak" if now < earliest else "awaiting_replay",
+        next_action="wait" if now < earliest else "run_replay", started_at=start.isoformat(),
+        earliest_evaluation_at=earliest.isoformat(), replay_v1=row["replay"], soak_v1=row["soak"],
+        replay=replay.model_dump(mode="json") if replay else None, soak=None,
+        preview={"status":"deferred","metrics":{key:value for key,value in metrics.items()
+            if key not in {"quote_coverage","verified_decisions"}}},
+        blockers=["v2_account_replay_evaluation_required"],
+        gates=[_gate("elapsed_hours", evidence.elapsed_days*24,336,"hours"),
+               _gate("matured_outcomes", evidence.outcome_count,100,"count"),
+               _gate("outcome_coverage",evidence.outcome_coverage,.95,"fraction"),
+               _gate("heartbeat_coverage",evidence.heartbeat_coverage,.95,"fraction"),
+               _gate("hard_risk_violations",evidence.hard_risk_violations,0,"count",maximum=True)])
+    if now < earliest:
+        row["blockers"].append("minimum_14_days")
     return True

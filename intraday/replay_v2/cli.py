@@ -159,8 +159,11 @@ def gate_rule_status(store, candidate_id):
     replay = repository.latest(candidate_id)
     campaign = repository.campaign_for_rule(candidate_id)
     soak = repository.latest(candidate_id,kind="soak",campaign_id=campaign["campaign_id"]) if campaign else None
+    from intraday.replay_v2.collection import read_collection_binding
+    collection = read_collection_binding(store, candidate_id)
     return {"replay":replay.model_dump(mode="json") if replay else None,
-            "soak":soak.model_dump(mode="json") if soak else None,"campaign":campaign}
+            "soak":soak.model_dump(mode="json") if soak else None,"campaign":campaign,
+            "collection":collection.model_dump(mode="json") if collection else None}
 
 
 def dispatch_gate_command(store, arguments, *, now):
@@ -168,6 +171,10 @@ def dispatch_gate_command(store, arguments, *, now):
     from intraday.replay_v2.gate_repository import GateRepository
     from intraday.replay_v2.lifecycle import replay_gate, start_gate_soak, evaluate_gate_soak, activate_gate_rule
     command = arguments.asset_rules_command
+    if command == "inherit-perp":
+        from intraday.replay_v2.collection import inherit_perp_collection
+        return inherit_perp_collection(store, arguments.symbol,
+            collection_from=datetime.fromisoformat(arguments.collection_from), now=now)
     if command not in {"replay","start-soak","evaluate","activate"}:
         return None
     repository = GateRepository(store)

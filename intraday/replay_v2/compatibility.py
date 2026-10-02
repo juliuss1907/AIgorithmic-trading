@@ -4,6 +4,9 @@ from intraday.replay_v2.gate_repository import GateRepository
 
 
 def require_legacy_campaign(store, candidate_id):
+    from intraday.replay_v2.collection import read_collection_binding
+    if read_collection_binding(store, candidate_id):
+        raise ValueError("inherited Perp collection requires v2 evaluation; no v1 fallback")
     candidate = store.load_scoped_rule(candidate_id)
     if candidate:
         campaign = GateRepository(store).current(candidate.symbol,candidate.scope)
@@ -23,6 +26,9 @@ def execution_gate_evaluation(path, rule, evaluation_id, *, now):
         campaign = repository.campaign_for_rule(rule.rule_id)
         evaluation = repository.get(evaluation_id)
         if campaign is None and evaluation is None:
+            from intraday.replay_v2.collection import read_collection_binding
+            if read_collection_binding(reader, rule.rule_id):
+                raise ValueError("inherited Perp collection requires promoted v2 validation; no v1 fallback")
             return None
         replay = repository.get(campaign["replay_evaluation_id"]) if campaign else None
         latest = repository.latest(rule.rule_id,kind="soak",campaign_id=campaign["campaign_id"]) if campaign else None
