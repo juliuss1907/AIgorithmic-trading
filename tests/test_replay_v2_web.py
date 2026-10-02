@@ -55,7 +55,9 @@ def test_replay_pages_have_utc_plus_seven_limits_and_no_activation_controls(tmp_
     assert "Equity" in detail.text
     assert "entry" in detail.text
     assert 'method="post"' not in detail.text
+    assert 'class="replay-limitations"' in detail.text
     assert 'href="/replay"' in client.get("/assets").text
+    assert 'href="data:,"' in client.get("/assets").text
 
 
 def test_empty_and_missing_reports_are_explicit_and_do_not_create_report_root(tmp_path):

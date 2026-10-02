@@ -15,6 +15,7 @@ class GateRepository:
         if self.store.read_only:
             raise ValueError("gate migration requires an explicit writer")
         with self.store._connect() as connection:
+            self._exists(connection)  # Reject future extensions before any DDL.
             connection.executescript("""
                 CREATE TABLE IF NOT EXISTS replay_gate_meta (
                     key TEXT PRIMARY KEY, value TEXT NOT NULL

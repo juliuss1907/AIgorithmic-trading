@@ -1,4 +1,4 @@
-"""Separate research CLI; never dispatches a lifecycle or execution command."""
+"""Research CLI and explicit operator-only versioned gate dispatch."""
 
 from datetime import datetime
 import json
@@ -114,6 +114,17 @@ def docker_replay_command(deployment, raw_arguments, *, config_path=None):
         args = ["--config=/run/replay-config.json" if item.startswith("--config=") else item for item in args]
     return deployment_cli.compose_command(deployment, "--profile", "admin", "run", "--rm", "--volume",
         f"{path}:/run/replay-config.json:ro", "admin", *args)
+
+
+def gate_rule_status(store, candidate_id):
+    """Separate versioned evidence from the unchanged legacy status fields."""
+    from intraday.replay_v2.gate_repository import GateRepository
+    repository = GateRepository(store)
+    replay = repository.latest(candidate_id)
+    campaign = repository.campaign_for_rule(candidate_id)
+    soak = repository.latest(candidate_id,kind="soak",campaign_id=campaign["campaign_id"]) if campaign else None
+    return {"replay":replay.model_dump(mode="json") if replay else None,
+            "soak":soak.model_dump(mode="json") if soak else None,"campaign":campaign}
 
 
 def dispatch_gate_command(store, arguments, *, now):

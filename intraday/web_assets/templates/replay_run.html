@@ -43,7 +43,7 @@
       <p>Phí sàn {{ report.config.profile.spot_fee_bps if report.config.market == 'spot' else report.config.profile.perp_fee_bps }} bps + trượt giá giả định {{ report.config.profile.spot_slippage_bps if report.config.market == 'spot' else report.config.profile.perp_slippage_bps }} bps mỗi fill. Biểu phí đọc {{ report.config.profile.fee_observed_at|vn_time }}; funding Perp tính riêng theo settlement.</p>
       {% endif %}
       <p>{% if report.config.market == 'spot' %}Donchian rule-only · ATR sizing · cap 30% vốn · stop khẩn cấp 10%, Donchian exit riêng.{% else %}Jev đã lưu · cap 20% vốn · isolated {{ report.config.leverage }}x; leverage không nhân notional/PnL.{% endif %} Daily loss 1,5% / drawdown 8%.</p>
-      <ul>{% for reason in report.limitations %}<li>{{ reason }}</li>{% endfor %}</ul>
+      <ul class="replay-limitations">{% for reason in report.limitations %}<li>{{ reason }}</li>{% endfor %}</ul>
       <p>Không mô phỏng order-book, partial fill, API lỗi, liquidation chính xác hoặc danh mục nhiều coin.</p>
       <details><summary>Provenance và cấu hình</summary><pre class="replay-config">{{ report.inputs|tojson(indent=2) }}</pre><pre class="replay-config">{{ report.config|tojson(indent=2) }}</pre></details>
       <details><summary>Gate v1 · chỉ tham chiếu, khác phương pháp</summary><pre class="replay-config">{{ report.v1_reference|tojson(indent=2) }}</pre></details>

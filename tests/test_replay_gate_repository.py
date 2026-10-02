@@ -82,3 +82,14 @@ def test_validation_binding_is_immutable_and_cannot_be_restarted(tmp_path):
     with pytest.raises(ValueError, match="active"):
         repository.start(saved.evaluation_id, now=NOW+timedelta(days=1))
     assert repository.current(rule.symbol, rule.scope)["started_at"] == campaign["started_at"]
+
+
+def test_writer_refuses_unknown_extension_version_before_creating_tables(tmp_path):
+    store, rule, repository = setup(tmp_path)
+    with store._connect() as connection:
+        connection.execute("CREATE TABLE replay_gate_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        connection.execute("INSERT INTO replay_gate_meta VALUES ('version','99')")
+    with pytest.raises(ValueError, match="unsupported gate extension"):
+        repository.record(evaluation(rule))
+    with store._connect() as connection:
+        assert connection.execute("SELECT 1 FROM sqlite_master WHERE name='replay_gate_evaluations'").fetchone() is None

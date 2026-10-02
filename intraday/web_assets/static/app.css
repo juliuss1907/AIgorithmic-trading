@@ -81,6 +81,7 @@ nav { display: flex; align-items: center; gap: 1rem; }
 .replay-scale, .replay-timeline { color: var(--muted); font-size: 0.875rem; }
 .replay-timeline, .replay-pagination { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
 .replay-config { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.875rem; }
+.replay-limitations { overflow-wrap: anywhere; }
 .replay-intro p, .replay-intro code { overflow-wrap: anywhere; }
 summary { cursor: pointer; padding-block: 0.5rem; }
 summary:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }

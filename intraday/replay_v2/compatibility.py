@@ -29,6 +29,10 @@ def execution_gate_evaluation(path, rule, evaluation_id, *, now):
         if (not campaign or campaign["status"] != "promoted" or not evaluation or not replay or not latest
                 or latest.evaluation_id != evaluation_id or evaluation.kind != "soak" or evaluation.status != "pass"
                 or replay.kind != "replay" or replay.status != "pass"
+                or replay.candidate_id != rule.rule_id or replay.rule_content_hash != rule.content_hash
+                or replay.symbol != rule.symbol or replay.scope != rule.scope
+                or replay.profile_hash != campaign["profile_hash"]
+                or campaign["rule_content_hash"] != rule.content_hash
                 or evaluation.replay_evaluation_id != replay.evaluation_id
                 or evaluation.campaign_id != campaign["campaign_id"]
                 or evaluation.candidate_id != rule.rule_id or evaluation.rule_content_hash != rule.content_hash

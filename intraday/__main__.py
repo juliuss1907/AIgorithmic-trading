@@ -484,6 +484,7 @@ def _assets_cli(arguments) -> None:
                 print(json.dumps(gate_result,indent=2,allow_nan=False))
                 return
             if command == "status":
+                from intraday.replay_v2.cli import gate_rule_status
                 symbol = store.asset_spec(arguments.symbol).symbol
                 result = {
                     scope.value: {
@@ -493,7 +494,7 @@ def _assets_cli(arguments) -> None:
                                 evaluation.model_dump(mode="json") if (evaluation := store.latest_scoped_rule_evaluation(row["id"], kind="replay")) else None
                             ), "soak": (
                                 evaluation.model_dump(mode="json") if (evaluation := store.latest_scoped_rule_evaluation(row["id"], kind="soak")) else None
-                            )}
+                            ), "gate_v2": gate_rule_status(store,row["id"])}
                             for row in store.list_scoped_rules(scope, symbol=symbol)
                         ],
                         "lifecycle": store.asset_lifecycle_record(symbol, scope),

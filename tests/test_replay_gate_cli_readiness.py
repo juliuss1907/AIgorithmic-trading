@@ -49,3 +49,16 @@ def test_v1_activation_entrypoint_cannot_bypass_selected_v2_validation(tmp_path)
     start_gate_soak(store,rule.rule_id,evaluation_id=saved.evaluation_id,now=NOW,report_dir=root)
     with pytest.raises(ValueError,match="no v1 fallback"):
         evaluate_spot_4h_soak(store,rule.rule_id,now=NOW+timedelta(days=20))
+
+
+def test_cli_rule_status_keeps_legacy_and_labels_v2_evidence(tmp_path, monkeypatch, capsys):
+    store, rule, root = setup(tmp_path)
+    saved = replay_gate(store,rule.rule_id,now=NOW,report_dir=root)
+    monkeypatch.setattr(sys,"argv",["aigt","assets","rules","status","ETH",
+        "--database",str(store.database)])
+    main()
+    row = json.loads(capsys.readouterr().out)["spot_4h"]["rules"][0]
+    assert row["replay"] is None
+    assert row["gate_v2"]["replay"]["evaluation_id"] == saved.evaluation_id
+    assert row["gate_v2"]["replay"]["engine_version"] == "gate-v2.1"
+    assert row["gate_v2"]["campaign"] is None
