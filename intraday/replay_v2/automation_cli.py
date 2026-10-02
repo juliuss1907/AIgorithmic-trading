@@ -32,7 +32,11 @@ def dispatch_automation(args):
                 for market in markets:
                     scope = MARKETS[market]
                     if scope in spec.enabled_scopes:
-                        result['rows'].append({'symbol':symbol,'market':market,**projection(store,symbol,scope,now=now)})
+                        try:
+                            state = projection(store,symbol,scope,now=now)
+                        except ValueError:
+                            state = {'status':'halted','blockers':['automation_binding_invalid'],'next_action':'investigate'}
+                        result['rows'].append({'symbol':symbol,'market':market,**state})
     except (OSError,sqlite3.Error,ValueError,KeyError) as error:
         raise SystemExit(f'gate automation unavailable: {type(error).__name__}') from None
     print(json.dumps(result,indent=2,allow_nan=False))

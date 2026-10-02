@@ -58,10 +58,15 @@ def route_requires_v2(store, symbol, scope):
 def set_policy(store, market, *, enabled, now, interval_days=7):
     if market not in {*MARKETS,'all'} or interval_days != 7:
         raise ValueError('automation requires spot/perp/all and interval 7 days')
-    install(store)
     markets = list(MARKETS) if market == 'all' else [market]
+    existing = {m:policy(store,m) for m in markets}
+    if not enabled and not any(existing.values()):
+        return existing
+    install(store)
     with store._connect() as c:
         for m in markets:
+            if not enabled and existing[m] is None:
+                continue
             c.execute('INSERT INTO gate_automation_policy VALUES (?,?,7,?) ON CONFLICT(market) '
                       'DO UPDATE SET enabled=excluded.enabled,updated_at=excluded.updated_at',
                       (m,int(enabled),utc(now).isoformat()))

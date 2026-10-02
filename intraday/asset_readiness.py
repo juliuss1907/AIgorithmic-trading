@@ -52,23 +52,8 @@ def build_asset_readiness(database, *, symbol=None, market=None, now=None):
                 if scope not in spec.enabled_scopes or market not in {None, selected_market}:
                     continue
                 row = _asset_row(reader, spec.symbol, selected_market, scope, now)
-                from intraday.replay_v2.automation import projection, route_requires_v2
-                try:
-                    row['automation'] = projection(reader,spec.symbol,scope,now=now)
-                    if route_requires_v2(reader,spec.symbol,scope) and row.get('gate_version') in {None,'v1'}:
-                        from intraday.replay_v2.gates import GATE_VERSION
-                        from intraday.replay_v2.contracts import binance_gate_profile
-                        row.update(gate_version=GATE_VERSION,cost_profile=binance_gate_profile().model_dump(mode='json',
-                            exclude={'funding','instrument','instrument_observed_at','instrument_source'}),
-                            replay_v1=row['replay'],soak_v1=row['soak'],replay=None,soak=None)
-                        auto = row['automation']
-                        if auto['window_start']:
-                            row.update(started_at=auto['window_start'],earliest_evaluation_at=auto['next_run_at'],
-                                       phase='decision_soak',phase_label=PHASE_LABELS['decision_soak'])
-                        row['blockers'] = auto['blockers']
-                except ValueError:
-                    row['automation'] = {'status':'halted','blockers':['automation_binding_invalid'],
-                                         'next_action':'investigate','interval_days':7}
+                from intraday.replay_v2.automation_readiness import project_weekly_readiness
+                project_weekly_readiness(reader,row,now=now)
                 rows.append(row)
     return {"report_schema_version": "1", "generated_at": now.isoformat(), "rows": rows}
 

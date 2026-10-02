@@ -292,3 +292,27 @@ def test_excluded_legacy_scopes_are_not_seeded_by_proposal_pipeline(tmp_path):
     before = dump(store.database)
     assert LLMAnalysisPipeline(object(),store).generate_scoped_candidates(object(),now=NOW,generate_scopes=set()) == []
     assert dump(store.database) == before
+
+
+def test_selected_perp_preview_does_not_display_old_72_hour_validation_gate(tmp_path):
+    from intraday.scoped_rule_lifecycle import ScopedRuleEvaluation
+    from intraday.asset_readiness import build_asset_readiness
+    store,rule,later = perp_setup(tmp_path)
+    store.record_scoped_rule_evaluation(ScopedRuleEvaluation.create(candidate_id=rule.rule_id,
+        symbol=rule.symbol,scope=rule.scope,kind='replay',status='pass',evaluated_at=later,
+        sample_count=100,coverage=1,champion_score=0,challenger_score=1))
+    before = dump(store.database)
+    row = build_asset_readiness(store.database,symbol='DOGE',market='perp',now=later)['rows'][0]
+    assert row['phase'] == 'awaiting_replay'
+    assert next(g for g in row['gates'] if g['key']=='elapsed_hours')['required'] == 336
+    assert row['replay'] is None and row['replay_v1']['status'] == 'pass'
+    assert dump(store.database) == before
+
+
+def test_pause_before_opt_in_is_a_noop_not_a_new_v2_selection(tmp_path):
+    from intraday.replay_v2.automation import route_requires_v2
+    store,rule,root = setup(tmp_path)
+    before = dump(store.database)
+    assert set_policy(store,'all',enabled=False,now=NOW) == {'spot':None,'perp':None}
+    assert not route_requires_v2(store,rule.symbol,rule.scope)
+    assert dump(store.database) == before

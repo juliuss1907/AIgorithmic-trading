@@ -48,3 +48,24 @@ def test_cli_migrate_dry_run_has_no_writes_and_partial_error_nonzero(tmp_path,mo
 def test_replay_engine_unselected_default_legacy_but_explicit_still_parse():
     assert _parser().parse_args(['assets','rules','replay','r']).engine is None
     assert _parser().parse_args(['assets','rules','replay','r','--engine','v1']).engine == 'v1'
+
+
+def test_status_isolates_a_broken_route_and_remains_read_only(tmp_path,monkeypatch,capsys):
+    import intraday.replay_v2.automation_cli as cli
+    store,rule,root = setup(tmp_path)
+    from intraday.replay_v2.automation import set_policy
+    from test_spot_4h_lifecycle import NOW
+    set_policy(store,'all',enabled=True,now=NOW)
+    original = cli.projection
+    def broken(reader,symbol,scope,**kwargs):
+        if symbol == 'ETHUSDT':
+            raise ValueError('binding invalid')
+        return original(reader,symbol,scope,**kwargs)
+    monkeypatch.setattr(cli,'projection',broken)
+    before = dump(store.database)
+    monkeypatch.setattr(sys,'argv',['aigt','assets','rules','automation','status','--database',str(store.database)])
+    main()
+    rows = json.loads(capsys.readouterr().out)['rows']
+    assert rows and all(r['status']=='halted' for r in rows if r['symbol']=='ETHUSDT')
+    assert any(r['symbol']!='ETHUSDT' for r in rows)
+    assert dump(store.database) == before
