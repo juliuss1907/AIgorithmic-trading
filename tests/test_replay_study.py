@@ -32,6 +32,22 @@ def test_snapshot_preserves_source_and_verified_baseline(tmp_path):
     assert "research_only" not in "\n".join(dump(result["baseline"]))
 
 
+def test_batch_binds_final_evidence_snapshot_not_mutable_working_database(tmp_path):
+    from intraday.replay_v2.research import run_research, file_checksum
+    from intraday.store import IntradayStore
+    store = source(tmp_path)
+    before = dump(store.database)
+    result = run_research(store.database,["DOGE"],tmp_path/"reports",now=NOW,
+                          markets=("spot",),collect=False)
+    assert result["research_integrity"] == "ok"
+    assert file_checksum(result["research_evidence_database"]) == result["research_checksum"]
+    # Later diagnostics are allowed to touch the working copy, never the bound evidence.
+    IntradayStore(result["snapshot"]["research_database"]).register_asset("PEPE",market="spot",now=NOW)
+    assert file_checksum(result["research_evidence_database"]) == result["research_checksum"]
+    assert "PEPEUSDT" not in "\n".join(dump(result["research_evidence_database"]))
+    assert dump(store.database) == before
+
+
 def test_variants_change_only_explicit_parameters_and_preserve_original():
     config, data = inputs([bar(22)])
     variant = variant_rule(data.rule, {"entry_window": 30, "exit_window": 8}, now=NOW)

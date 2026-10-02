@@ -6,6 +6,7 @@ import hashlib
 import uuid
 
 from intraday.assets import ticker_symbol
+from intraday.backups import create_backup
 from intraday.llm_pipeline import active_llm_client
 from intraday.provider_profiles import ProviderSecretStore
 from intraday.replay_v2.artifacts import _write, resolve_report_dir
@@ -63,8 +64,13 @@ def run_research(database, coins, root=None, *, now=None, markets=("spot","perp"
                 results.append({"symbol":symbol,"market":market,"status":"deferred",
                                 "blockers":["research_failed:"+type(error).__name__],
                                 "research_only":True,"activation_allowed":False})
+    # Bind evidence to a completed SQLite backup, not a mutable WAL-backed file.
+    # Opening the working copy for later diagnostics can checkpoint/change its bytes.
+    evidence = create_backup(working,directory/"evidence",now=now)
     manifest = {"study_id":identity,"created_at":now.isoformat(),"research_only":True,
-        "activation_allowed":False,"snapshot":snapshot,"research_checksum":file_checksum(working),
+        "activation_allowed":False,"snapshot":snapshot,
+        "research_evidence_database":evidence["backup"],"research_checksum":evidence["sha256"],
+        "research_integrity":evidence["integrity"],
         "results":results,"methodology":"Independent1000USDT accounts, no automatic lifecycle writes"}
     _write(directory/"manifest.json", encoded(manifest))
     return manifest
