@@ -39,12 +39,13 @@ Checkbox code không thay cho quyền activation hoặc bằng chứng vận hà
 - [x] Per-pair leverage CLI/dashboard confirmation/controller opt-in.
 - [x] Readiness theo symbol/scope và blockers pre/post-replay: CLI/API/dashboard, read-only v23 (local).
 - [x] Replay v2 research Spot/Perp: offline ledger/risk/assumptions, CLI, private artifacts và read-only web UTC+7 (local, chưa deploy).
+- [x] Versioned gate v2 và separated Binance Regular User costs; explicit campaign mới, giữ v1 evidence (local, chưa deploy).
 - [x] VPS source worker/web v23 rollout, bảo toàn evidence (snapshot 2026-10-01 05:30 UTC).
 
 ## Nghiệm thu và vận hành còn mở
 
 - [ ] Hoàn tất 5 Perp decision soak ≥14 ngày/100 matured outcomes/coverage.
-- [ ] Perp replay cutoff và validation độc lập ≥72 giờ trước promotion.
+- [ ] Perp replay cutoff và validation độc lập: v1 ≥72 giờ; campaign v2 ≥14 ngày mới trước promotion.
 - [ ] Spot candidate pass replay rồi operator start soak ≥14 ngày và đủ setup.
 - [ ] Supervised Demo order → native protection → reconcile → close, approval riêng.
 - [ ] Demo per-pair settings write/read-back acceptance khi paused/flat.
@@ -53,7 +54,7 @@ Checkbox code không thay cho quyền activation hoặc bằng chứng vận hà
 
 ## Backlog build — chưa triển khai
 
-- [ ] Calibrate/adopt full-risk versioned gate evaluator: Replay v2 research đã xây riêng, chưa thay gate v1 hoặc rewrite evidence.
+- [ ] Deploy/accept versioned gate v2 trên VPS sau verified backup; evaluator đã xây local, không rewrite v1 evidence.
 - [ ] Unified multi-coin Demo positions/orders/protection projection.
 - [ ] Scheduled backup/retention/restore drill và Demo operational alerts.
 - [ ] Hyperliquid execution adapter; live/multi-venue allocation cần spec riêng.

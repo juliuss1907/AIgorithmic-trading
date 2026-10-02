@@ -88,9 +88,12 @@ kiểm tra Demo account/allocation/execution preflight.
 Replay v2 có namespace nghiên cứu riêng: `aigt replay run COIN --market spot|perp
 --rule RULE_ID --from ISO_TIME --to ISO_TIME`, `aigt replay list`, `aigt replay show RUN_ID`.
 Spot dùng Donchian/ATR và ledger cash; Perp dùng Jev đã lưu, margin và funding
-settlement khi có. Không gọi model/sàn, không thay gate v1 hay soak. Funding thiếu
+settlement khi có. `replay run` không gọi model/sàn, không thay gate hay soak. Funding thiếu
 không thành 0/net PnL đầy đủ. Report private lưu ngoài source DB; `/replay` chỉ đọc,
 lịch sử UTC+7. [Runbook và giả định Replay v2](docs/replay-v2-runbook.md).
+Gate operator riêng: `aigt assets rules replay RULE_ID --engine v2`, sau passing
+evaluation mới explicit start validation 14 ngày và promote. Spot fee/slippage
+10/5 bps, Perp 5/5 bps mỗi fill; không rewrite v1 và không tự bật execution.
 Feature xây local, chưa deploy; dùng đường dẫn native rõ ràng khi image Docker còn cũ.
 
 Binance Demo execution có namespace riêng `aigt execution demo` với `preflight`,

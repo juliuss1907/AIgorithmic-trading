@@ -23,6 +23,7 @@ Subsystem `lab/` vẫn giữ dữ liệu, control và tests độc lập.
 | Operations | Dashboard, readiness report, backup/verify và upgrade rehearsal | Chưa tự schedule/retain/restore backup |
 | Simulator / research | BTC parent paper và `lab/` | Không đại diện cho vị thế Demo đa coin |
 | Replay v2 research | Offline single-coin Spot/Perp, ledger/risk, versioned profile, CLI/artifacts và read-only `/replay` (local) | Không thay gate v1; funding/filters/Demo-price limitations rõ; chưa deploy |
+| Gate v2 | Versioned evaluations/campaigns, separated fees/slippage, CLI/readiness, exact promotion binding (local) | Validation 14 ngày mới; không rewrite v1/auto trading; chưa deploy |
 
 Code supports coin mới nếu catalog và Binance Demo hỗ trợ, không còn ETH-only bootstrap.
 [Demo plan](binance-demo-execution-plan.md) và
@@ -43,21 +44,22 @@ Không hardcode các trạng thái này thành UI realtime. Kiểm tra source DB
 ## 3. Các bước vận hành còn lại — không phải build thêm adapter
 
 1. Theo dõi 5 Perp decision soak ≥14 ngày và đủ outcome/coverage.
-2. Replay Perp tại cutoff rồi validation trên evidence riêng ≥72 giờ; không dùng lại tập replay.
+2. Replay Perp tại cutoff rồi validation trên evidence riêng: v1 ≥72 giờ,
+   campaign v2 ≥14 ngày mới; không dùng lại tập replay.
 3. Với Spot, cần candidate pass replay trước khi operator start soak ≥14 ngày và đủ setup.
 4. Supervised Binance Demo acceptance: read/preflight → order → protection → reconcile → close,
    chỉ sau approval và đúng champion/evaluation. Tách Spot/Perp, không vượt gate để test chiến lược.
 5. Settings-only Demo leverage acceptance khi paused/flat; không activate trading bằng đổi leverage.
 6. Tiếp tục Hermes/Telegram read-only rollout riêng; không đặt add-on vào hot path.
 
-Các mốc 14 ngày/72 giờ là minimum đánh giá, không phải lời hứa ngày bật giao dịch.
+Các mốc là minimum đánh giá (v2 Perp ≥14 + 14 ngày), không phải lời hứa ngày bật giao dịch.
 Không tự activate khi đủ lịch hoặc khi LLM đưa proposal.
 
 ## 4. Trạng thái các hạng mục xây tiếp
 
 | Ưu tiên | Hạng mục | Acceptance cần đạt |
 | --- | --- | --- |
-| 1 — research đã xây local | Replay v2 Spot/Perp và bước adoption gate sau | ATR/allocation/stop/loss/funding assumptions inspectable; CLI/web riêng. Còn calibration và spec gate adoption; không rewrite evaluation cũ |
+| 1 — đã xây local | Replay v2 Spot/Perp và versioned gate | ATR/allocation/stop/loss/funding assumptions inspectable; gate/campaign riêng. Còn rollout/acceptance; không rewrite evaluation cũ |
 | 2 — đã xây local | Soak readiness theo coin/scope | CLI/API/dashboard đã có; rollout/kiểm chứng source VPS là bước riêng, chưa deploy |
 | 3 | Unified Demo portfolio/positions | Đọc execution journal đa coin, open orders/stop/PnL/reconciliation; tách simulator |
 | 4 | Backup/alerts vận hành | Schedule ngoài volume, verification, retention/restore drill riêng; cảnh báo protection/cash drift/stale |
@@ -66,8 +68,10 @@ Không tự activate khi đủ lịch hoặc khi LLM đưa proposal.
 
 Các hạng mục chưa xây là backlog định hướng, chưa cấp quyền triển khai hoặc deploy.
 Readiness đã xây local theo [plan riêng](asset-readiness-plan.md), chưa được deploy.
-Replay v2 theo [plan riêng](replay-v2-plan.md)/[runbook](../docs/replay-v2-runbook.md), chưa deploy
-và không là passing evaluation để bắt đầu soak hoặc activate Demo.
+Replay research theo [plan riêng](replay-v2-plan.md), gate theo
+[gate plan](replay-v2-gate-plan.md)/[runbook](../docs/replay-v2-runbook.md), chưa deploy.
+Research report không phải gate evaluation; gate pass chỉ cho phép explicit validation,
+không activate Demo.
 Không tối ưu tham số để ép một gate pass; rejection là evidence hợp lệ.
 
 ## 5. Quy tắc cập nhật roadmap

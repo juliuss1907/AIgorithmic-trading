@@ -112,7 +112,7 @@ Dashboard lịch sử sử dụng UTC+7; hiển thị không làm đổi ranh gi
 Rule/registry/evaluation tách theo `(symbol, scope)`; champion BTC không cấp quyền cho ETH.
 Chung schema/baseline defaults không có nghĩa dùng chung evaluation.
 
-### Spot 4h
+### Spot 4h — gate v1 compatibility
 
 1. Closed native 4h history ≥365 ngày, coverage ≥99%; 8h/1d context tải native.
 2. Replay walk-forward: ≥6 OOS closed trades, return sau chi phí >0, drawdown <8%,
@@ -132,7 +132,7 @@ Spot emergency stop 10% hoặc shared Demo loss/margin guards. Return/DD này l�
 kết quả của evaluator đó, không phải dự báo PnL hay full-risk parity với Demo.
 Không hạ gate hoặc rewrite evaluation cũ để làm candidate pass.
 
-### Perp bootstrap
+### Perp bootstrap — gate v1 compatibility
 
 1. Baseline decision soak trước replay: ≥14 ngày, ≥100 matured 15m outcomes,
    outcome và 30s heartbeat coverage ≥95%.
@@ -147,6 +147,26 @@ exception cho passing BTC parent evaluation. Không copy exception sang coin kh�
 
 LLM chỉ đề xuất khi rejection/deterioration và đủ fresh evidence; không auto-replay,
 auto-start Spot soak, auto-promote hay auto-activate. Rejection là kết quả hợp lệ.
+
+### Versioned gate v2 — implementation local, chưa deploy
+
+`assets rules replay RULE_ID --engine v2` dùng offline account replay (`replay-v2.2`)
+và lưu `gate-v2.1` append-only; research `replay run` không tự trở thành gate ID.
+Spot native 4h ≥365 ngày, window liên tục sau 1095 warm-up bars, ≥6 trades;
+rule-only ex-post, không giả Jev/OOS. Perp vẫn cần decision collection ≥14 ngày,
+≥100 verified decisions/outcomes, quote/outcome/heartbeat coverage ≥95% và funding đầy đủ.
+
+Phí/slippage mỗi fill: Spot 10/5 bps, USDT Perp taker 5/5 bps; không BNB/VIP.
+Spread Perp implicit, funding settlement riêng. Net return >0, DD <8%, daily guard
+1,5% và Spot stop 10% giữ nguyên. Historical pass chỉ mở quyền operator bắt đầu
+**14 ngày validation mới** (Spot ≥6 matured setups; Perp ≥100 outcomes và ≥6 trades mới).
+Promotion dùng exact latest pass; Demo activation/account acceptance vẫn riêng.
+
+Optional gate extension version 1 không đổi source schema v23, không rewrite v1
+payload/raw evidence. V1-rejected rule có thể được chọn lại bằng campaign v2 mới,
+nhưng v1 rejection còn nguyên. Campaign v2 không được fallback v1 để bypass.
+Readiness GET không chạy replay hoặc DDL. Chi tiết/quy trình và giới hạn:
+[runbook](replay-v2-runbook.md), [verification](replay-v2-gate-verification.md).
 
 ## 6. Demo execution và hard-risk
 
