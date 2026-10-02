@@ -13,6 +13,13 @@
     hard_risk_violations: "Vi phạm hard risk", outcome_coverage: "Coverage outcome",
     closed_trades: "Giao dịch đóng", net_return_pct: "Return sau chi phí", drawdown_pct: "Drawdown",
   };
+  const automationLabels = {
+    disabled: "Chưa bật tự động", paused: "Đã tạm dừng", waiting: "Đang chờ dữ liệu/lịch",
+    due: "Đến lịch đánh giá", passed_waiting_operator: "Gate pass · chờ operator",
+    halted: "Đã dừng · cần kiểm tra", stopped: "Giai đoạn đã kết thúc",
+  };
+  const actionLabels = {start_validation: "Operator bắt đầu validation", review_and_promote: "Operator kiểm tra và promote",
+    prepare_or_migrate: "Chuẩn bị baseline / migration", migrate_perp: "Migration Perp sang v2", investigate: "Kiểm tra blockers"};
   function element(tag, text) {
     const node = document.createElement(tag); node.textContent = text; return node;
   }
@@ -33,6 +40,14 @@
     const summary = document.createElement("summary"); summary.textContent = "Xem bằng chứng";
     details.append(summary);
     details.append(element("p", "Gate: " + (row.gate_version || "v1")));
+    if (row.automation) {
+      const auto = row.automation;
+      details.append(element("p", "Tự động " + auto.interval_days + " ngày · " + (automationLabels[auto.status] || auto.status)));
+      details.append(element("p", "Lần gần nhất: " + time(auto.last_evaluated_at) + " · " + (auto.last_result || "chưa có") + " · " + (auto.last_evaluation_id || "—")));
+      details.append(element("p", "Lịch tiếp: " + time(auto.next_run_at) + " UTC+7 · dùng dữ liệu tích lũy từ " + time(auto.window_start)));
+      if (auto.last_job) details.append(element("p", "Job: " + auto.last_job.state + " · " + (auto.last_job.error_code || "không có lỗi")));
+      for (const blocker of auto.blockers || []) details.append(element("p", blocker));
+    }
     if (row.cost_profile) {
       const profile = row.cost_profile, prefix = row.market;
       details.append(element("p", "Mỗi fill: phí sàn " + profile[prefix + "_fee_bps"] + " bps + trượt giá giả định " + profile[prefix + "_slippage_bps"] + " bps. Spread bid/ask và funding Perp riêng."));
@@ -70,15 +85,20 @@
       const row = document.createElement("tr"); row.dataset.market = item.market;
       const coin = cell(row, item.symbol + " · " + (item.market === "spot" ? "Spot" : "Perp"));
       evidence(coin, item);
-      cell(row, item.phase_label + " · " + item.lifecycle);
+      const phase = cell(row, item.phase_label + " · " + item.lifecycle);
+      if (item.automation && item.automation.status !== "disabled") {
+        phase.append(element("p", automationLabels[item.automation.status] || item.automation.status));
+        if (item.automation.status === "passed_waiting_operator") phase.append(element("p", "Không tự bật trading."));
+      }
       const gates = cell(row);
       if (!item.gates.length) gates.textContent = "Xem rule/evaluation trong bằng chứng.";
       for (const gate of item.gates) {
         gates.append(element("p", (labels[gate.key] || gate.key) + ": " + number(gate.value, gate.unit) + " " + gate.comparison + " " + number(gate.required, gate.unit) + " · " + (gate.status === "pass" ? "đạt" : gate.status === "unknown" ? "chưa có dữ liệu" : "chưa đạt")));
       }
       const next = cell(row, item.next_action_label);
+      if (item.automation?.next_action) next.append(element("p", actionLabels[item.automation.next_action] || item.automation.next_action));
       for (const blocker of [...item.blockers, ...item.venue_blockers]) next.append(element("p", blocker));
-      cell(row, time(item.earliest_evaluation_at));
+      cell(row, time(item.automation && item.automation.status !== "disabled" ? item.automation.next_run_at : item.earliest_evaluation_at));
       cell(row, item.venue ? item.venue.venue + " / " + item.venue.environment + " · " + item.venue.instrument : "Chưa chọn sàn");
       target.append(row);
     }

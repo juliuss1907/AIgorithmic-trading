@@ -11,6 +11,10 @@ Study nhiều setup và LLM confidence theo coin là workflow riêng, có thể 
 history/funding và gọi model trên research copy; không đổi tính offline của
 `replay run`. Xem [four-coin runbook](four-coin-replay-runbook.md).
 
+Opt-in đánh giá định kỳ Spot/Perp mỗi 7 ngày, explicit Perp migration và dashboard
+pass alert: [weekly gate runbook](weekly-gate-automation-runbook.md). Luồng này ghi
+v2 gate evidence, không đổi `replay run` offline/read-only và không auto trade.
+
 ## Chạy và xem kết quả
 
 Các timestamp phải có timezone; `--from` inclusive, `--to` exclusive. Code chuyển

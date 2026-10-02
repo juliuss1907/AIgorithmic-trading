@@ -90,3 +90,18 @@ Không push/merge/redeploy cho tới khi operator yêu cầu riêng.
 BTC Perp explicit inheritance của collection có kiểm chứng; ETH Spot 30/8 gate v2
 trên snapshot riêng. Historical gate/collection không thay validation mới ≥14 ngày.
 Risk policy hiện tại không đổi; local verification không phải VPS activation.
+
+## Migrate Perp và weekly gate — 2026-10-02
+
+[Runbook hiện hành](../docs/weekly-gate-automation-runbook.md).
+
+- [x] V2 selection BTC/ETH/HYPE/NEAR/ZEC/SOL Perp; preserve rules/collection/v1 evidence.
+- [x] Optional 7-day Spot/Perp automation và future coins; cumulative/manual-aware.
+- [x] Durable jobs, public funding retry, crash recovery, hard-risk/binding halt.
+- [x] CLI và read-only dashboard pass/waiting/next-run UTC+7; local tests/browser/copy.
+- [ ] Push/merge/deploy sau approval; worker/admin/web tương thích trước opt-in.
+- [ ] Migrate/bật policy VPS; kiểm chứng campaign/anchors/execution unchanged.
+- [ ] Operator validation/promote/credentialed execution acceptance riêng sau pass.
+
+Không thay/xóa backlog trước. V1 routes chưa chọn v2 giữ compatibility; route đã
+chọn v2 không fallback. BTC/ETH Spot campaigns không restart khi set policy.

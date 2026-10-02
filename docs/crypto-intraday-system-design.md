@@ -145,7 +145,7 @@ Vì vậy Perp mới thường cần **ít nhất 14 ngày + 72 giờ**, không 
 BTC Perp legacy có champion và portfolio evaluation riêng; Demo có compatibility
 exception cho passing BTC parent evaluation. Không copy exception sang coin khác.
 
-LLM chỉ đề xuất khi rejection/deterioration và đủ fresh evidence; không auto-replay,
+Trên lifecycle v1 chưa chọn v2, LLM chỉ đề xuất khi rejection/deterioration và đủ fresh evidence; không auto-replay,
 auto-start Spot soak, auto-promote hay auto-activate. Rejection là kết quả hợp lệ.
 
 ### Versioned gate v2 — implementation local, chưa deploy
@@ -167,6 +167,21 @@ payload/raw evidence. V1-rejected rule có thể được chọn lại bằng ca
 nhưng v1 rejection còn nguyên. Campaign v2 không được fallback v1 để bypass.
 Readiness GET không chạy replay hoặc DDL. Chi tiết/quy trình và giới hạn:
 [runbook](replay-v2-runbook.md), [verification](replay-v2-gate-verification.md).
+
+### Weekly gate policy — local 2026-10-02, chưa deploy
+
+Optional policy Spot/Perp áp dụng cả future enabled routes. Background job poll
+60 giây, đánh giá v2 khi minimum sẵn sàng rồi retry ≥7 ngày sau latest non-pass
+evaluation cùng phase/campaign, kể cả chạy tay. Window tích lũy; collection/campaign
+start, rules và v1 evidence không reset. Perp selection seal provenance prefix;
+BTC giữ champion reference và candidate inheritance cùng parameters.
+
+Durable cutoff/funding/evaluation ledger và OS lock độc lập collector, reconcile
+crash thay vì append gate trùng. Public funding retry 3 lần/15 phút, không giả 0.
+Hard-risk/binding error halt; validation reject kết thúc campaign. Pass dừng stage,
+dashboard/alert chờ operator start validation/promote. Không auto-tune/model-call,
+auto-transition/trading. Pause không fallback v1; GET không replay/DDL.
+[Weekly runbook](weekly-gate-automation-runbook.md).
 
 ## 6. Demo execution và hard-risk
 

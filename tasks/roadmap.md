@@ -24,6 +24,7 @@ Subsystem `lab/` vẫn giữ dữ liệu, control và tests độc lập.
 | Simulator / research | BTC parent paper và `lab/` | Không đại diện cho vị thế Demo đa coin |
 | Replay v2 research | Offline single-coin Spot/Perp, ledger/risk, versioned profile, CLI/artifacts và read-only `/replay` (local) | Không thay gate v1; funding/filters/Demo-price limitations rõ; chưa deploy |
 | Gate v2 | Versioned evaluations/campaigns, separated fees/slippage, CLI/readiness, exact promotion binding (local) | Validation 14 ngày mới; không rewrite v1/auto trading; chưa deploy |
+| Weekly gates | Opt-in 7 ngày, cumulative/manual-aware, immutable Perp migration, retry/recovery, dashboard pass alert (local 2026-10-02) | Enabled Spot/Perp/future coins; còn rollout và opt-in, không auto transition/trading |
 
 Code supports coin mới nếu catalog và Binance Demo hỗ trợ, không còn ETH-only bootstrap.
 [Demo plan](binance-demo-execution-plan.md) và
@@ -73,6 +74,10 @@ Replay research theo [plan riêng](replay-v2-plan.md), gate theo
 Research report không phải gate evaluation; gate pass chỉ cho phép explicit validation,
 không activate Demo.
 Không tối ưu tham số để ép một gate pass; rejection là evidence hợp lệ.
+
+Weekly evaluation đã xây local theo [runbook](../docs/weekly-gate-automation-runbook.md).
+Không phải gate hàng ngày/reset soak: first eligibility rồi retry ≥7 ngày; pass
+dừng stage chờ operator. Chưa deploy hoặc bật policy VPS trong đợt build này.
 
 ## 5. Quy tắc cập nhật roadmap
 

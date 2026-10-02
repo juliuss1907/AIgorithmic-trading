@@ -149,6 +149,13 @@ Worker tự khởi động Perp decision soak; `start-soak CANDIDATE_ID` cũng d
 bootstrap thủ công. LLM chỉ tự đề xuất challenger khi baseline/candidate bị reject
 hoặc champion xuống cấp và có evidence mới; tối đa 3 lời gọi/90 ngày mỗi coin/scope,
 không tự promote. Các ID lấy từ output hoặc `aigt assets rules status ETHUSDT`.
+
+Weekly gate v2 đã xây local: explicit Perp migration, optional replay/validation
+mỗi 7 ngày cho mọi enabled Spot/Perp coin (kể cả coin thêm sau), window tích lũy,
+pass dừng stage và báo `/assets` chờ operator. Giữ collection/campaign/rule/v1
+evidence; không model-call, auto-tune hoặc auto bật trading. Chưa deploy/bật policy VPS.
+Khi chọn v2, các lệnh rule mặc định dùng v2 và không fallback gate v1 bên trên.
+Lệnh và rollout/rollback: [weekly gate runbook](docs/weekly-gate-automation-runbook.md).
 BTC Spot 1d cũ chỉ được đóng vị thế đang mở, không mở lệnh mới. `activate` chỉ chọn
 champion, không tự bật paper/fill. UI lịch sử hiển thị UTC+7; API/SQLite và logic nến
 vẫn dùng UTC. Lệnh `aigt assets start-soak` cũ đã đóng để tránh vượt gate.
