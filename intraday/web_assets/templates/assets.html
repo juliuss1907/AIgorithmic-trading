@@ -8,6 +8,7 @@
   <script src="/static/asset-readiness.js" defer></script>
   <script src="/static/assets.js" defer></script>
   <script src="/static/perp.js" defer></script>
+  <script src="/static/confidence-proposals.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Đến nội dung chính</a>
@@ -43,6 +44,16 @@
       <div class="table-wrap" tabindex="0" aria-label="Bảng readiness, cuộn ngang để xem đủ cột"><table class="readiness-table">
         <caption>Mốc thời gian là giới hạn sớm nhất, không phải thời gian hoàn thành. Vẫn cần đủ samples, coverage và evaluation được lưu riêng.</caption>
         <thead><tr><th scope="col">Coin / bằng chứng</th><th scope="col">Bước rule</th><th scope="col">Gates hiện tại</th><th scope="col">Blockers / bước tiếp theo</th><th scope="col">Mốc sớm nhất UTC+7</th><th scope="col">Sàn được chọn</th></tr></thead><tbody id="asset-catalog"></tbody>
+      </table></div>
+    </section>
+    <section id="confidence-section" class="ledger" aria-labelledby="confidence-heading" hidden>
+      <div class="section-head"><h2 id="confidence-heading">Perp · Confidence proposals</h2><button id="confidence-refresh" type="button">Làm mới proposal</button></div>
+      <p>LLM review thứ Hai 09:00 UTC+7 khi được bật và đủ bằng chứng. Proposal không phải ngưỡng đang chạy hoặc quyền trading; cần gate v2 và soak riêng.</p>
+      <p id="confidence-message" role="status" aria-live="polite">Đang đọc proposal…</p>
+      <div class="table-wrap" tabindex="0" aria-label="Confidence proposals, cuộn ngang để xem đủ cột"><table>
+        <caption>Sàn mục tiêu 70%, dung sai 1 điểm phần trăm: từ 69% đến 100%; không có trần 85%.</caption>
+        <thead><tr><th scope="col">Coin / source rule</th><th scope="col">Ngưỡng source → đề xuất</th><th scope="col">Trạng thái / blockers</th><th scope="col">Bằng chứng / model</th><th scope="col">Holdout sau chi phí</th><th scope="col">Review UTC+7 / report</th></tr></thead>
+        <tbody id="confidence-proposals"></tbody>
       </table></div>
     </section>
     <section id="perp-controls" class="ledger" aria-labelledby="perp-heading" hidden>

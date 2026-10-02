@@ -29,6 +29,7 @@ from intraday.assets import spec_payload, ticker_symbol
 from intraday.asset_readiness import build_asset_readiness
 from intraday.replay_v2.artifacts import resolve_report_dir
 from intraday.replay_v2.web import replay_router
+from intraday.replay_v2.confidence_web import confidence_router
 from intraday.execution.contracts import AccountRef
 from intraday.execution.journal import ExecutionJournal
 from intraday.execution.perp_control import LeveragePreview, queue_leverage_change, route_digest
@@ -118,6 +119,7 @@ def create_app(
     templates.env.filters["vn_time"] = _vn_time
     templates.env.filters["duration"] = _duration
     app.include_router(replay_router(resolve_report_dir(replay_report_dir), templates))
+    app.include_router(confidence_router(store.database, resolve_report_dir(replay_report_dir)))
     app.mount("/static", StaticFiles(directory=ASSETS / "static"), name="static")
     app.state.store = store
     app.state.cross_venue_mode = cross_venue_mode

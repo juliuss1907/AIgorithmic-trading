@@ -14,7 +14,7 @@
 .asset-form label { display: grid; gap: 0.25rem; max-width: 100%; }
 .asset-form input { max-width: 100%; padding: 0.5rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); }
 .asset-form small, #venue-results small { display: block; max-width: 18rem; white-space: normal; color: var(--muted); }
-.asset-market-switch button, .asset-form button, #venue-results button, #readiness-refresh { padding: 0.5rem 0.75rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
+.asset-market-switch button, .asset-form button, #venue-results button, #readiness-refresh, #confidence-refresh { padding: 0.5rem 0.75rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
 .asset-market-switch button[aria-pressed="true"] { background: var(--signal); color: var(--signal-ink); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
