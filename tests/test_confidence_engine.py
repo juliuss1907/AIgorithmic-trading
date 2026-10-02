@@ -88,3 +88,22 @@ def test_missing_provider_secret_is_deferred_without_silent_provider_switch(tmp_
     assert result["blockers"] == ["llm_provider:missing_secret"]
     assert result["proposed_threshold"] is None
     assert result["last_model_training_end"] is None
+
+
+def test_real_source_provenance_and_missing_outcomes_are_not_faked(tmp_path):
+    import sqlite3
+    from intraday.replay_v2.confidence import prepare_perp
+    from test_replay_v2_data import source, record_decision, dump, NOW as DATA_NOW
+    store = source(tmp_path,"perp")
+    record_decision(store,at=DATA_NOW)
+    before = dump(store.database)
+    _, data, evidence = prepare_perp(store.database,"DOGE",now=DATA_NOW+timedelta(hours=1))
+    assert len(data.decisions) == 1 and data.decisions[0].features_valid
+    assert evidence["coverage"] == 0  # No matured outcomes; not a valid review window.
+    assert dump(store.database) == before
+    with sqlite3.connect(store.database) as c:
+        c.execute("UPDATE model_calls SET status='error'")
+    before = dump(store.database)
+    _, data, evidence = prepare_perp(store.database,"DOGE",now=DATA_NOW+timedelta(hours=1))
+    assert not data.decisions and evidence["coverage"] == 0
+    assert dump(store.database) == before

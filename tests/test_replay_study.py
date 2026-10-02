@@ -61,3 +61,39 @@ def test_missing_spot_history_is_deferred_without_source_writes(tmp_path):
     assert result["status"] == "deferred"
     assert "minimum_24_month_history" in result["blockers"]
     assert dump(store.database) == before
+
+
+def test_complete_study_deduplicates_and_never_reselects_on_holdout(tmp_path, monkeypatch):
+    from test_replay_v2_data import rule
+    store = source(tmp_path)
+    existing = rule()
+    # Replace the fixture's original parameters in the isolated test database.
+    existing = variant_rule(existing, {"entry_window":30,"exit_window":8}, now=NOW)
+    store.register_scoped_rule(existing, status="champion")
+    store.activate_scoped_champion(existing.scope, existing.rule_id, now=NOW, symbol=existing.symbol)
+    start, split, end = spot_windows(NOW)
+    beginning = start-timedelta(days=11)
+    rows = []
+    while beginning < end:
+        opened = int(beginning.timestamp()*1000)
+        rows.append([opened,100,101,99,100,5,opened+14_400_000-1])
+        beginning += timedelta(hours=4)
+    store.record_asset_candles("DOGEUSDT","4h",rows)
+    before = dump(store.database)
+    calls = []
+    def replay(data, config, variant, root, *, now):
+        calls.append((config.start, config.end, variant.parameters.entry_window))
+        assert all(c.available_at <= config.end for c in data.candles)
+        is_holdout = config.start == split
+        rate, dd = {30:(4,2),40:(5,2),50:(6,4)}[variant.parameters.entry_window]
+        return {"id":variant.rule_id,"status":"reject" if is_holdout else "pass",
+            "blockers":["nonpositive_net_return"] if is_holdout else [],
+            "summary":{"net_return_pct":-1 if is_holdout else rate,
+                       "max_drawdown_known_pct":dd,"closed_trades":8},
+            "rule":variant.model_dump(mode="json")}
+    monkeypatch.setattr("intraday.replay_v2.study.run_variant",replay)
+    result = study_spot(store.database,"DOGE",tmp_path/"reports",now=NOW)
+    assert calls == [(start,split,30),(start,split,40),(start,split,50),(split,end,40)]
+    assert result["status"] == "reject"
+    assert result["blockers"] == ["nonpositive_net_return"]
+    assert dump(store.database) == before
