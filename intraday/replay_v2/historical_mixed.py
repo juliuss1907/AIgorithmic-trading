@@ -26,7 +26,7 @@ class HistoricalConfig(MixedConfig):
     perp_stop: Literal['fixed-1pct', 'atr14-2x', 'fixed-5pct', 'atr14-3x'] = 'fixed-1pct'
     perp_size: Literal['full', 'two-thirds'] = 'full'
     perp_daily_policy: Literal['disabled', 'none', 'target3', 'target5', 'trailing'] = 'disabled'
-    capital_growth: Literal['capped', 'equity'] = 'capped'
+    capital_growth: Literal['capped', 'equity', 'realized'] = 'capped'
     drawdown_policy: Literal['terminal', 'observe-only', 'initial-capital'] = 'terminal'
 
     @model_validator(mode='after')
@@ -46,6 +46,7 @@ VERSION = 'historical-mixed-quant-v1.2'  # Explicit stop and notional-size exper
 DAILY_VERSION = 'historical-perp-daily-policy-v1.0'
 GROWTH_VERSION = 'historical-equity-growth-v1.0'
 GUARD_VERSION = 'historical-capital-guard-v1.0'
+REALIZED_VERSION = 'historical-realized-sizing-v1.0'
 
 
 @dataclass(frozen=True)
@@ -193,7 +194,7 @@ def open_entries(book, at, marks, perp_bars, spot_obs, perp_obs, spot_trends, pe
         else:
             # Scale the requested coin budget BEFORE cash/exposure trimming, not
             # the already-constrained target. Unused allocation stays in cash.
-            target = (book.allocation_base(marks)*cfg.perp_cap*cfg.perp_weights[s]*2/3
+            target = (book.perp_budget(marks)*cfg.perp_weights[s]*2/3
                       if cfg.perp_size == 'two-thirds' else None)
             if book.enter_perp(s, at, marks, perp_bars[s].open, side, distance, approved_target=target):
                 book.events[-1].update(reason='historical_donchian', stop_fraction=str(distance),
@@ -314,7 +315,7 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
         payload.pop('capital_growth')
     if config.drawdown_policy == 'terminal':
         payload.pop('drawdown_policy')
-    version = GUARD_VERSION if config.drawdown_policy != 'terminal' else (
+    version = REALIZED_VERSION if config.capital_growth == 'realized' else GUARD_VERSION if config.drawdown_policy != 'terminal' else (
         GROWTH_VERSION if config.capital_growth == 'equity' else (
             DAILY_VERSION if isinstance(book, PerpDailyBook) else VERSION))
     data_hash = fingerprint({'spot': {s: [c.row() for c in rows] for s, rows in sorted(spot.items())},
@@ -370,6 +371,16 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
             'ideal_fractional_fills_without_partial_fills_or_historical_instrument_filters',
             'no_exact_liquidation_or_verified_historical_demo_execution', 'risk_gaps_and_exit_costs_can_overshoot'}),
         'v1_reference': None, 'equity_curve': book.curve, 'trades': book.trades, 'events': book.events}
+    if config.capital_growth == 'realized':
+        if abs(sum(book.realized_capital.values(), ZERO)-book.cash) > Decimal('1e-18'):
+            raise ValueError('realized sleeve capital does not reconcile to flat cash')
+        report['summary']['realized_sizing'] = {'final_capital': {
+            k: float(v) for k, v in book.realized_capital.items()}}
+        report['methodology']['allocation'] = (
+            'separate initial Spot/Perp allocations plus own realized price PnL; '
+            'fees/slippage and settled funding charged immediately, once; no unrealized PnL in sizing; '
+            'marked and entry-principal exposure, shared cash/margin limits and 10% realized reserve; '
+            'no transfers or existing-position rebalance; risk guards retain marked equity')
     if config.capital_growth == 'equity':
         report['methodology']['allocation'] = (
             'notional caps and reserve on current mark-to-market portfolio equity at each new entry; '

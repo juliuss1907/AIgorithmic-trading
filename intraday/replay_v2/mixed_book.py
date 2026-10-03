@@ -131,6 +131,18 @@ class MixedBook(PortfolioBook):
     def allocation_base(self, marks):
         return min(self.config.capital, self.equity(marks))
 
+    def spot_budget(self, marks):
+        return self.allocation_base(marks)*self.config.entry_cap
+
+    def perp_budget(self, marks):
+        return self.allocation_base(marks)*self.config.perp_cap
+
+    def combined_budget(self, marks):
+        return self.allocation_base(marks)*(self.config.entry_cap+self.config.perp_cap)
+
+    def budget_exposures(self, marks):
+        return self.exposures(marks)
+
     def enter_batch(self, at, marks, multipliers):
         if not set(multipliers) <= set(self.weights) or any(
             not m.is_finite() or not ZERO <= m <= ONE for m in multipliers.values()
@@ -141,14 +153,15 @@ class MixedBook(PortfolioBook):
                 self.event(at, "entry_blocked", "portfolio_loss_limit", symbol=s, market="spot")
             return
         base = self.allocation_base(marks)
-        spot, perp = self.exposures(marks)
-        requests = {s: base*self.config.entry_cap*self.weights[s]*multipliers[s]
+        spot, perp = self.budget_exposures(marks)
+        budget = self.spot_budget(marks)
+        requests = {s: budget*self.weights[s]*multipliers[s]
                     for s in sorted(multipliers) if not self.positions[s].quantity and multipliers[s] > 0}
         total = sum(requests.values(), ZERO)
         if not total:
             return
-        room = max(ZERO, min(base*self.config.entry_cap-spot,
-            base*(self.config.entry_cap+self.config.perp_cap)-spot-perp,
+        room = max(ZERO, min(budget-spot,
+            self.combined_budget(marks)-spot-perp,
             (self.free_cash-base*self.config.reserve)/(ONE+FEE+SLIP)))
         scale = min(ONE, room/total)
         for s, requested in requests.items():
@@ -203,11 +216,12 @@ class MixedBook(PortfolioBook):
 
     def perp_target(self, symbol, marks):
         base = self.allocation_base(marks)
-        spot, perp = self.exposures(marks)
-        requested = base*self.config.perp_cap*self.config.perp_weights[symbol]
-        target = max(ZERO, min(requested, base*self.config.perp_cap-perp,
-            base*self.config.perp_cap-self.locked_margin*self.config.leverage,
-            base*(self.config.entry_cap+self.config.perp_cap)-spot-perp,
+        spot, perp = self.budget_exposures(marks)
+        budget = self.perp_budget(marks)
+        requested = budget*self.config.perp_weights[symbol]
+        target = max(ZERO, min(requested, budget-perp,
+            budget-self.locked_margin*self.config.leverage,
+            self.combined_budget(marks)-spot-perp,
             (self.free_cash-base*self.config.reserve)/(ONE/self.config.leverage+PERP_FEE+PERP_SLIP)))
         return base, requested, target
 
