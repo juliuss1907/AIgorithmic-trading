@@ -169,12 +169,7 @@ class MixedBook(PortfolioBook):
             raise ValueError("invalid Perp entry")
         if self.halted or not self.config.include_perp or self.perps[symbol].quantity:
             return False
-        base = min(self.config.capital, self.equity(marks))
-        spot, perp = self.exposures(marks)
-        requested = base*self.config.perp_cap*self.config.perp_weights[symbol]
-        target = min(requested, base*self.config.perp_cap-perp,
-            base*(self.config.entry_cap+self.config.perp_cap)-spot-perp,
-            (self.free_cash-base*self.config.reserve)/(ONE/self.config.leverage+PERP_FEE+PERP_SLIP))
+        base, requested, target = self.perp_target(symbol, marks)
         if approved_target is not None:
             target = min(target, approved_target)
         if target <= 0:
@@ -194,6 +189,16 @@ class MixedBook(PortfolioBook):
             notional=str(target), price=str(price), quantity=str(quantity), base_equity=str(base),
             requested_notional=str(requested), locked_margin=str(self.locked_margin))
         return True
+
+    def perp_target(self, symbol, marks):
+        base = min(self.config.capital, self.equity(marks))
+        spot, perp = self.exposures(marks)
+        requested = base*self.config.perp_cap*self.config.perp_weights[symbol]
+        target = max(ZERO, min(requested, base*self.config.perp_cap-perp,
+            base*self.config.perp_cap-self.locked_margin*self.config.leverage,
+            base*(self.config.entry_cap+self.config.perp_cap)-spot-perp,
+            (self.free_cash-base*self.config.reserve)/(ONE/self.config.leverage+PERP_FEE+PERP_SLIP)))
+        return base, requested, target
 
     def settle_funding(self, symbol, at, rate, mark):
         p = self.perps[symbol]
