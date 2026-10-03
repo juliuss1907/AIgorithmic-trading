@@ -453,3 +453,81 @@ warnings. No tests disabled and no new dependencies added.
 Default-off legacy runs retain their existing config hashes, result identities
 and complete journals under the v1.2 evaluator. Research `pass` remains
 descriptive only, not an official gate or permission for soak/Demo/real trades.
+
+### Reinvest accumulated equity — paired research (2026-10-03)
+
+The earlier +40.0815% mixed return accumulates PnL but does **not** grow entry
+budgets above initial capital: its sizing base is `min(initial capital, equity)`.
+The opt-in `HistoricalConfig.capital_growth='equity'` removes that ceiling for
+both markets. Spot cap 60%, Perp **notional** cap 30%, reserve 10% and coin
+weights now use current mark-to-market **portfolio** equity at each new entry.
+Realized and unrealized PnL, including known costs/funding, affect that base.
+Losses shrink budgets too. Cash/margin/exposure constraints still apply.
+
+This is entry-time equity sizing, **not** forced daily rebalancing, resizing
+existing positions, or a guaranteed daily compounded cash yield. The separate
+virtual Perp sleeve remains initially 300 USDT plus only its own net PnL;
+its day-start equity still determines +5%/-3% triggers. Sizing does not transfer
+Spot profits into that accounting sleeve or redefine the daily denominator.
+
+The four-run preset fixes the previously selected mixed setup: ATR14 × 3,
+full Perp size, profit target +5% and Perp daily loss 3%, parent daily loss 3%
+and terminal DD 10%. It compares capped versus equity sizing for that mixed
+book **and** its paired Spot-only control. Signals, allocations, leverage,
+fees/slippage, actual funding, native fills and frozen 24-month data are unchanged.
+
+```bash
+uv run python -m intraday.replay_v2.mixed_portfolio_research \
+  --mode historical-quant --preset perp-daily-compounding \
+  --database /path/to/verified-backup.sqlite3 \
+  --perp-inputs /path/to/frozen/perp-inputs.json \
+  --report-root /path/to/new-private-directory
+```
+
+The preset is historical-only. No model calls, source collection or runtime
+activation are needed with frozen inputs. Default capped configs omit the new
+field in published metadata, keeping old evaluator versions, result IDs and
+complete journals identical. Equity runs use `historical-equity-growth-v1.0`.
+
+Authoritative private output:
+`~/.local/state/aigorithmic-trading/reports/perp-daily-compounding-20261003-24months/`.
+
+| Portfolio | Entry sizing | Net return | Final equity USDT | Portfolio DD | Perp net USDT | Perp sleeve DD | Research check |
+|---|---|---:|---:|---:|---:|---:|---|
+| Spot+Perp | Capped (old) | +40.0815% | 1,400.8145 | 9.5172% | +96.6608 | 21.6093% | pass |
+| Spot+Perp | Current equity | -1.6271% | 983.7290 | 10.0863% | -60.7963 | 23.9790% | reject |
+| Spot-only | Capped (old) | +29.2802% | 1,292.8024 | 7.9954% | — | — | pass |
+| Spot-only | Current equity | +32.1198% | 1,321.1976 | 9.4107% | — | — | pass |
+
+The compounded mixed run breaches the terminal DD guard at
+`2025-01-28T03:59:59.999Z` (10:59:59.999 UTC+7), about 118.17 days after
+starting. It closes remaining positions at the next native open and remains
+idle for the rest of the window: **this is not 24 months of continuous trading**.
+It has 78 closed trades, including 33 Perp trades. Spot earns +44.5254 USDT
+but Perp loses -60.7963 (BTC +4.9333, ETH -65.7296). Entry bases reach
+1,094.0811 USDT before halting. Larger growth-based budgets and altered daily
+locks/exposure paths can cross a DD boundary that the capped path avoids;
+reinvestment is not intrinsically a profitability improvement.
+
+The equity Spot-only control does trade the full window and improves return
+by 2.8395 percentage points, with higher observed DD (9.4107% versus 7.9954%).
+The mixed equity result must not be credited with later market gains that its
+terminal halt prevented it from trading. Its worst observed Perp day is
+-6.8126%, despite the unchanged 3% trigger; 4h/funding sampling, gaps and exit
+costs still do not establish a hard intraday loss cap.
+
+All four complete summaries and journals reproduce offline. An independent
+process also verifies that both capped runs match the earlier daily-policy
+reports byte-for-byte across all three journal series. Source backup, Spot
+bundle, Futures bundle and previous comparison hashes remain unchanged.
+Focused research regression: 124 passed. Full project regression:
+`uv run pytest -q` — **1,092 passed**, 29 existing dependency deprecation
+warnings. No new dependencies or disabled tests.
+
+- Comparison SHA256: `a8f374b0fa089aea5e9ce5ccc5f75fe86aeb6ba170f084e9ebfb37446fb05a96`.
+- Equity mixed result: `b8062f1715548a7939793778740b1efaa6ba8127fa233efd37de6a86f6943df0`.
+- Equity Spot-only result: `9d83e4e14b7c1cc55f8cf7a16757caaff24b033d9b99927b4bb76d65a496bc8a`.
+
+These are ex-post research comparisons, not independent holdouts, official
+gates or automatic selection. No runtime rule, risk limit, wallet, worker,
+database, soak, Demo/real trading state, push or deployment was changed.
