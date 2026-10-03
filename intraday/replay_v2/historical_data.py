@@ -14,11 +14,12 @@ from intraday.replay_v2.contracts import Candle, FrozenModel, utc
 from intraday.replay_v2.funding import NoRedirect
 from intraday.replay_v2.metrics import fingerprint
 from intraday.replay_v2.portfolio_research import daily_points
+from intraday.replay_v2.trailing_candle import TrailingCandle, WIDTHS as TRAILING_WIDTHS
 
 
 BASE = 'https://fapi.binance.com'
 PATHS = {'trade': '/fapi/v1/klines', 'mark': '/fapi/v1/markPriceKlines'}
-WIDTHS = {'4h': timedelta(hours=4), '1d': timedelta(days=1)}
+WIDTHS = {'4h': timedelta(hours=4), '1d': timedelta(days=1), **TRAILING_WIDTHS}
 MAX_BYTES = 20_000_000
 
 
@@ -44,6 +45,8 @@ def public_candle_json(path, query):
 
 
 def validate_rows(rows, interval, start, end):
+    if interval not in WIDTHS:
+        raise ValueError('unsupported native Futures interval')
     width = WIDTHS[interval]
     width_ms = int(width.total_seconds()*1000)
     expected = list(range(int(start.timestamp()*1000), int(end.timestamp()*1000), width_ms))
@@ -55,6 +58,8 @@ def validate_rows(rows, interval, start, end):
         raise ValueError('incomplete native Futures window, gap or duplicate')
     if interval == '4h':
         return tuple(Candle.from_row(row) for row in rows)
+    if interval in TRAILING_WIDTHS:
+        return tuple(TrailingCandle.from_row(row, interval) for row in rows)
     daily_points(rows)
     return ()
 
