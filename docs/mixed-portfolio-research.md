@@ -531,3 +531,106 @@ warnings. No new dependencies or disabled tests.
 These are ex-post research comparisons, not independent holdouts, official
 gates or automatic selection. No runtime rule, risk limit, wallet, worker,
 database, soak, Demo/real trading state, push or deployment was changed.
+
+### No DD lock versus initial-capital floor (2026-10-03)
+
+Historical-only `drawdown_policy` has three modes; the runtime and recorded-Jev
+paths do not accept this setting:
+
+- `terminal` (default): existing 10% drawdown from the observed equity peak.
+- `observe-only`: measure peak DD but do not close, lock or restrict daily
+  resumption because of DD. Stop-losses and daily pauses remain active.
+- `initial-capital`: terminal stop when shared marked portfolio equity is
+  at or below `initial capital × (1 - max_drawdown)`. At 1,000 USDT / 10%,
+  the floor is **900 USDT**, never profit-trailed or daily-reset. A prior
+  1,200 USDT peak followed by 950 USDT does not activate this floor.
+
+The same capital policy is consulted during risk checks and daily resumption.
+The new floor has its own `initial_capital_loss` event/exit reason and latches
+for the rest of the replay even if prices subsequently recover. It closes
+both Spot and Perp. Equity includes unrealized PnL and recorded costs/funding;
+no realized sale is required to trigger it. Delayed native-open fills, gaps
+and closing costs may make the actual loss exceed 100 USDT. Unsupported
+isolated collateral and exhausted Perp capital still prevent a fabricated
+profitable continuation or full-return claim.
+
+New nondefault runs use `historical-capital-guard-v1.0` and include explicit
+policy, equity minimum, maximum loss relative to initial capital, and first
+peak-DD/floor crossing timestamps. The default field is omitted from published
+configs, preserving all older hashes, versions and journals. Peak equity is
+never reset. The research check remains net-positive, peak DD below 10% and
+at least six closed trades: respecting the 900 USDT floor is a **different
+criterion**, not an override of that check or official gate acceptance.
+
+Run each group using the same frozen inputs and a separate new directory:
+
+```bash
+uv run python -m intraday.replay_v2.mixed_portfolio_research \
+  --mode historical-quant --preset perp-daily-compounding \
+  --drawdown-policy observe-only \
+  --database /path/to/verified-backup.sqlite3 \
+  --perp-inputs /path/to/frozen/perp-inputs.json \
+  --report-root /path/to/new-observe-only-directory
+```
+
+Use `--drawdown-policy initial-capital` and a different report directory for
+the initial-capital group. Both groups were run as **two parallel processes**,
+with four matched configurations each (mixed/Spot-only × capped/equity sizing).
+ATR14 × 3 full Perp size, target +5% / loss -3%, parent daily loss 3%, allocation,
+fees, funding, signals, native execution and the 24-month window are unchanged.
+
+Authoritative private root:
+`~/.local/state/aigorithmic-trading/reports/perp-capital-guard-comparison-20261003-24months/`.
+It contains eight new immutable reports in `observe-only/` and
+`initial-capital/`, plus combined `comparison.json/md` referencing the four
+unchanged peak-DD reports from the prior experiment.
+
+| Portfolio | Sizing | Peak-DD terminal reference | No DD lock | Initial-capital floor | Peak DD without peak lock |
+|---|---|---:|---:|---:|---:|
+| Spot+Perp | Capped | +40.0815% | +40.0815% | +40.0815% | 9.5172% |
+| Spot+Perp | Equity growth | -1.6271% | +29.6198% | +29.6198% | 15.5217% |
+| Spot-only | Capped | +29.2802% | +29.2802% | +29.2802% | 7.9954% |
+| Spot-only | Equity growth | +32.1198% | +32.1198% | +32.1198% | 9.4107% |
+
+All eight new runs finish the window without a capital terminal halt. The
+900 USDT floor **never triggers**: the compounded mixed minimum is 947.5382
+USDT (5.2462% below initial capital), despite peak DD of 15.5217%. Its first
+peak-DD breach is still 28 January 2025, but this no longer prevents subsequent
+trading. Each matched no-lock/floor pair has identical complete economic
+journals; the different policy is still recorded with a distinct result ID.
+This dataset therefore does not establish the economic effect of actually
+triggering the initial-capital floor; its activation is covered by tests.
+
+The equity mixed book finishes at 1,296.1976 USDT after 344 trades: Spot
+contributes +327.4754, Perp **-31.2778** (BTC -4.0413, ETH -27.2365). Perp
+has 161 trades, 27 daily loss pauses and 18 daily profit pauses, with **32.5596%
+sleeve DD** and a worst observed day of -6.8126%. Portfolio DD and Perp sleeve
+DD must not be conflated. Spot-only equity growth finishes at 1,321.1976;
+adding Perp reduces total return by 2.5000 percentage points versus that
+paired control, including indirect shared-cash/risk effects.
+
+The eight mixed/control runs comprise six research passes and two rejections:
+both compounded mixed modes reject the unchanged **peak-DD** check. They are
+profitable and respect the initial-capital floor, but are not evidence of a
+profitable standalone Perp strategy or automatic permission to trade.
+The earlier -1.6271% peak-halt reference traded only about 118 days, not the
+full 730; the eight new runs do reach the full window.
+
+An independent process reproduces all **12 full summaries and journal sets**,
+including the four previous references, verifies that the two new groups'
+matched economic journals are identical, and confirms original source/input
+and prior comparison checksums unchanged. Tests cover exact floor boundaries,
+unrealized PnL, native contract rather than mark fills, both-market flattening,
+fixed versus peak basis, next-day resumption, terminal latching, Perp daily
+guards, collateral protection, config validation and historical-only CLI use.
+
+- Focused research regression: **146 passed**.
+- Full project regression: `uv run pytest -q` — **1,114 passed**, 29 existing
+  dependency deprecation warnings. No disabled tests or new dependencies.
+- Combined comparison SHA256: `b36071536c2c3e0abe8225780d262f6a4f57b8b98aa2d512abe0d76ca16b86ea`.
+- Equity no-DD-lock result: `35a90d9b7cbb4162ee5d02e8a130dfde3ae11bf564b7b6dbdb9a9bdd3d070d46`.
+- Equity initial-capital result: `7f6b4d4415c924f431ff2a59227fdb80a4d620bfa9e58ec764c1a636b7a64632`.
+
+Only research code, tests and documentation changed locally. Runtime rules,
+risk settings, database, workers, soak and Demo/real trading remain untouched;
+no push, merge, deployment or activation occurred.
