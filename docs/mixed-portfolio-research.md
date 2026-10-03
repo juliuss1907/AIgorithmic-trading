@@ -750,3 +750,194 @@ trailing result is
 
 No runtime, source database, worker, rule, gate, soak or exchange account was
 changed. Work remains local: no push, merge, deployment or activation.
+
+## H4 / H1 / M30 per-trade trailing cadence — 2026-10-03
+
+The opt-in `perp-trailing-cadence` preset compares three otherwise identical
+separate-realized-sizing mixed books. Initial capital is 1,000 USDT: Spot
+600, Perp notional 300 and unallocated 100; isolated 3x. Spot weights remain
+BTC/ETH/SOL/NEAR/ZEC 40/20/20/10/10; Perp BTC/ETH 50/50. Each sleeve only
+reinvests its own realized PnL after costs. No fixed daily profit target;
+Perp daily loss remains -3%. Peak DD is observe-only, but the research check
+still requires positive net return, DD below 10% and six closed trades.
+
+`HistoricalConfig.perp_trailing_interval` accepts `4h` (default), `1h`, or
+`30m`. Finer cadences require `net-trailing-3pp`, ATR14 x3 and daily policy
+`none`; a complete frozen native supplemental bundle is mandatory. The
+default interval is omitted from published config, preserving the original
+H4 evaluator version, result IDs, summaries and complete journals.
+
+Only **trailing** changes cadence:
+
+- Entry signals, new entries, Donchian exits and frozen initial ATR14 x3
+  remain H4; the trend filter uses native D1. ATR touch detection remains
+  H4-close. This does not introduce faster entries, ATR stops or periodic
+  daily-risk checks.
+- Per-trade peaks use net return on frozen entry notional, observed only
+  at the selected native contract close. Arm +3%; floor is observed peak
+  minus 3 percentage points, never lowered or reset at UTC midnight.
+- A close breach latches until that cadence's next native open, even after
+  a rebound. Opening gaps through an existing floor fill at open; opening
+  prices cannot raise the peak. Intrabar highs/lows never arm trailing.
+- Parent/daily guards and initial ATR gap exits retain priority at common
+  H4 boundaries. Finer events do not change Spot or Perp risk marks. Actual
+  finer trailing fills add post-cost risk checks using the last allowed
+  H4/funding marks. Other flattening remains at H4 contract opens.
+- Same-tick reopening is blocked; no re-entry is possible between H4 opens.
+  Fees, slippage, actual funding and collateral protection are unchanged.
+
+H1 and M30 are fetched independently from public native Futures contract
+klines, not derived from H4 or each other. `TrailingCandle` is separate from
+the fixed-H4 `Candle` signal contract. Supplemental snapshots enforce
+source/symbol/interval identity, UTC coverage, checksums, finite OHLC bounds,
+no gaps/duplicates and exact common H4 boundary prices. Finer result IDs
+include the supplemental data hash; all three cases retain the same base
+dataset checksum. H4 does not acquire a new supplemental identity.
+
+Explicit collection (research local only):
+
+```bash
+uv run python -m intraday.replay_v2.mixed_portfolio_research \
+  --mode historical-quant --preset perp-trailing-cadence \
+  --database /path/to/verified-backup.sqlite3 \
+  --perp-inputs /path/to/frozen/perp-inputs.json \
+  --collect-trailing \
+  --report-root /path/to/new-private-report-directory
+```
+
+For fully offline reproduction, replace `--collect-trailing` with
+`--trailing-inputs /path/to/frozen/trailing-inputs.json`. Exactly one is
+required; these flags are rejected for all other presets/modes. This preset
+fixes DD to observe-only; other DD policy values are rejected. Each published
+summary and all three journal series must reproduce before a comparison is
+published. Reports include final equity, market PnL, observed DD, trade and
+trailing-exit counts, mean Perp holding hours and deltas versus H4.
+
+### Native data discrepancy: 24-month comparison correctly blocked
+
+Collection completed for the frozen window 2024-10-02 00:00 UTC through
+2026-10-02 00:00 UTC: 17,520 H1 and 35,040 M30 bars for each of BTC and ETH,
+105,120 supplemental native bars in total. Validation checked 35,040 common
+open/close boundaries. Exactly four comparisons differ: both finer intervals
+at the same H4 opening time, **2024-10-28 20:00 UTC / 2024-10-29 03:00 UTC+7**.
+All other boundary comparisons match.
+
+| Coin | Frozen H4 open | Native H1 and M30 open | Difference |
+|---|---:|---:|---:|
+| BTCUSDT | 69,650.00 | 69,605.80 | 6.3460 bps |
+| ETHUSDT | 2,518.92 | 2,505.93 | 51.5697 bps |
+
+A fresh Binance public API recheck of all six series confirms those prices;
+the corresponding H4/finer closing prices match. The cause of Binance's
+cross-interval opening discrepancy is not established. No evidence was
+normalized, overwritten or silently exempted. The study stops before
+publishing any of its three results, so **there is no H1/M30 profitability
+conclusion for the full 730-day window**. The operator subsequently chose
+the shorter consistent window below, retaining strict validation.
+
+Private evidence root:
+`/home/julius/.local/state/aigorithmic-trading/reports/perp-trailing-cadence-20261003-24months/`.
+It contains the unchanged exported Spot/base Futures inputs, native raw
+snapshots, `trailing-inputs.json`, `collection-error.json`, and
+`boundary-audit.json` including fresh API recheck snapshots. There is no
+completed `comparison.json`/`comparison.md`; existing research remains intact.
+
+- Supplemental bundle file SHA256:
+  `09af9c3afd06d55c874617e5bef41d2376913a2f49d342384d54123d6ee3f054`.
+- Exported Spot file SHA256:
+  `7102d12761db783237fb933359a4bae6fee4398c44f734ff583d7fc976acdf15`.
+- Original SQLite and native base Futures bundle SHA256 remain exactly
+  those recorded in the preceding study.
+- All **six preceding reports** were independently regenerated: result IDs,
+  summaries and complete equity/trade/event journals unchanged.
+- Independent review found no Critical/Required issue; 71 targeted tests
+  passed and old/new complete fixture reports matched against `670ade0`.
+- Initial full project regression: `uv run pytest -q` — **1,162 passed**, 29 existing
+  dependency warnings. `uv build` and `git diff --check` passed; no new dependency.
+
+Finer close sampling is not real-time trailing, exact intrabar risk/DD or
+Binance Demo execution parity. Runtime, rules, database, workers, soak and
+exchange accounts remain unchanged. No push, merge, deploy or activation.
+
+### Completed strict 703-day comparison
+
+Operator-approved active window: **2024-10-29 00:00 UTC → 2026-10-02 00:00
+UTC**, 703 days (07:00 UTC+7 at both boundaries). All three cases restart
+from the same 1,000 USDT; this is not continuing balances from the excluded
+27 days or an annualized result. The H4 control is rerun on this same shorter
+window and must not be compared as though it were the previous 730-day run.
+
+New bundles are exact row subsets of the original native evidence, preserving
+all prices and actual funding. Coverage and checksum identities are recomputed;
+parent snapshot IDs/file hashes are recorded in `subset-provenance.json`.
+Snapshot `fetched_at` and `pages` retain parent-collection metadata, not a
+claim of new HTTP requests. H4/D1 indicator warmup is retained; the discrepant
+opening is outside the active window. Each coin has 4,218 active H4 bars,
+16,872 H1 bars and 33,744 M30 bars. All active common boundaries pass strict
+validation with no exception. Original bundles and rejected-window audit
+remain unchanged.
+
+| Trailing | Final USDT | Net return | Spot net USDT | Perp net USDT | Portfolio DD | Perp trades | Trailing exits | Mean Perp hold hours | Research check |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| H4 | 1,378.2554 | +37.8255% | +375.2763 | +2.9791 | 15.7951% | 141 | 45 | 68.5957 | reject |
+| H1 | 1,419.6712 | +41.9671% | +381.7541 | +37.9171 | 13.0254% | 148 | 65 | 61.4054 | reject |
+| M30 | 1,394.4021 | +39.4402% | +379.2646 | +15.1375 | 14.0240% | 152 | 73 | 57.6645 | reject |
+
+On this dataset H1 has the highest final equity and lowest observed portfolio
+DD: **+41.4158 USDT / +4.1416 percentage points** versus the paired H4 book.
+M30 gains +16.1467 USDT / +1.6147 points versus H4, but is worse than H1;
+faster trailing does not automatically improve results. All three complete
+the window with full actual funding coverage, no terminal capital halt and
+zero fixed daily profit pauses. All reject only the unchanged DD-under-10%
+research check; none is an official gate acceptance or permission to trade.
+
+H1 Perp contributes +37.9171 USDT (+12.6390% of its initial 300-USDT sleeve),
+with **22.3115% sleeve DD**, distinct from portfolio DD 13.0254%. H4/M30
+Perp sleeve DD is 25.7704%/24.7836%. Perp daily loss pauses are 20/12/12
+for H4/H1/M30. Daily guards and intended trailing floors are not guaranteed
+loss/fill caps between risk samples or after gaps/costs. Spot rules remain
+unchanged; Spot PnL can still differ through shared cash, reserve, margin and
+portfolio-risk path constraints. No unrealized PnL or cross-market profit
+transfer was added to sizing.
+
+Private completed report:
+`/home/julius/.local/state/aigorithmic-trading/reports/perp-trailing-cadence-20261003-703days/comparison.md`.
+Derived input/provenance root:
+`/home/julius/.local/state/aigorithmic-trading/reports/perp-trailing-cadence-20261003-703days-inputs/`.
+
+Offline reproduction with a new output directory:
+
+```bash
+uv run python -m intraday.replay_v2.mixed_portfolio_research \
+  --mode historical-quant --preset perp-trailing-cadence \
+  --start 2024-10-29T00:00:00+00:00 --end 2026-10-02T00:00:00+00:00 \
+  --database /path/to/original-verified-backup.sqlite3 \
+  --perp-inputs /path/to/703days-inputs/perp-inputs.json \
+  --trailing-inputs /path/to/703days-inputs/trailing-inputs.json \
+  --report-root /path/to/new-private-report-directory
+```
+
+`--start`/`--end` are restricted to this historical cadence preset; default
+dates and all other historical/recorded-Jev modes remain unchanged.
+
+- Shared base dataset checksum:
+  `1efd518e17072c05fb73772c970a78d0bdccdb13ea319c94b34e77374403132c`.
+- Derived base Futures file SHA256:
+  `392465eab360494b915af03828182ea60d019bdae5d90aff37998aa1bcab257b`.
+- Derived supplemental file SHA256:
+  `82e9737715f8ab48a21b8ca9502977cce714a4258a9a8e409ce655aed110fbad`.
+- Comparison SHA256:
+  `f2769f2de21f82d6575ab12ec3ac0980f77d9a1f14fe3ae380fda6118275895c`.
+- H1 result ID:
+  `710959d2e19bb7bbc0f33175ca72d269c89059384c532f9db54e45527ca5e412`.
+- All three published summaries and full journals reproduce offline. An
+  independent process confirmed every result ID, summary and complete
+  journal hash, verified all derived candle/funding rows equal exact parent
+  subsets, and checked parent/source/derived/published hashes unchanged.
+- A persisted golden test locks H4 result ID and the combined complete-journal
+  fingerprint independently confirmed against evaluator `670ade0`.
+- Final full regression: **1,163 passed**, 29 existing dependency warnings;
+  package wheel/source distribution and `git diff --check` passed.
+
+Research-only code/tests/docs and private reports are local. No runtime,
+worker, rule, gate, database, soak, Demo/real account, push, merge or deploy change.
