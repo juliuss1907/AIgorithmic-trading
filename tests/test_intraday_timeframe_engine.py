@@ -1,11 +1,13 @@
 from datetime import timedelta
 from decimal import Decimal
 
+import pytest
+
 from test_historical_mixed_research import START, fixture_inputs
 from test_intraday_timeframe_data import native_bundle
 
 
-def inputs(tmp_path, interval='1h'):
+def inputs(tmp_path, interval='1h', side=1):
     from intraday.replay_v2.intraday_book import IntradayConfig
     from intraday.replay_v2.intraday_data import decode_inputs
     cfg = IntradayConfig(start=START, end=START+timedelta(hours=8),
@@ -15,7 +17,9 @@ def inputs(tmp_path, interval='1h'):
     # A closed H1 breakout, deliberately absent in the active first H1 bar.
     for series in native.values():
         rows = list(series['trade1h'])
-        rows[30] = rows[30].model_copy(update={'high': Decimal(105), 'close': Decimal(105)})
+        rows[30] = rows[30].model_copy(update={
+            'high' if side == 1 else 'low':Decimal(105 if side == 1 else 95),
+            'close':Decimal(105 if side == 1 else 95)})
         series['trade1h'] = tuple(rows)
     return cfg, spot, daily, perp, funding, native
 
@@ -37,15 +41,17 @@ def test_h1_next_open_entries_atr_and_offline_reproduction(tmp_path):
     assert (START+timedelta(minutes=15)).isoformat() in {r['at'] for r in report['perp_equity_curve']}
 
 
-def test_m15_stop_touch_closes_single_position_at_close_not_h1_close(tmp_path):
+@pytest.mark.parametrize('side', [1,-1])
+def test_m15_stop_touch_closes_single_position_at_close_not_h1_close(tmp_path, side):
     from intraday.replay_v2.intraday_engine import simulate_intraday
-    cfg, spot, daily, perp, funding, native = inputs(tmp_path)
+    cfg, spot, daily, perp, funding, native = inputs(tmp_path, side=side)
     rows = list(native['BTCUSDT']['trade15m'])
-    rows[0] = rows[0].model_copy(update={'low': Decimal(80)})
+    rows[0] = rows[0].model_copy(update={'low' if side == 1 else 'high': Decimal(80 if side == 1 else 120)})
     native['BTCUSDT']['trade15m'] = tuple(rows)
     report = simulate_intraday(cfg, spot, daily, perp, funding, native)
     btc = next(t for t in report['trades'] if t['symbol'] == 'BTCUSDT')
     assert btc['exit_reason'] == 'contract_stop_detected_at_close'
+    assert btc['side'] == ('long' if side == 1 else 'short')
     assert btc['closed_at'] == (START+timedelta(minutes=15)-timedelta(milliseconds=1)).isoformat()
 
 
@@ -92,3 +98,21 @@ def test_m15_trailing_latches_breach_then_fills_on_rebound_before_h1(tmp_path):
     assert second['closed_at'] == (START+timedelta(hours=1, minutes=15)).isoformat()
     assert second['trailing_triggered_at'] == (START+timedelta(hours=1, minutes=15)-timedelta(milliseconds=1)).isoformat()
     assert second['net_pnl'] > first['net_pnl']
+
+
+def test_open_fill_loss_flattens_other_perps_at_same_open(tmp_path):
+    from intraday.replay_v2.intraday_engine import simulate_intraday
+    args = inputs(tmp_path)
+    native = args[-1]
+    rows = list(native['BTCUSDT']['trade1h'])
+    rows[31] = rows[31].model_copy(update={'low':Decimal(94), 'close':Decimal(94)})
+    rows[32] = rows[32].model_copy(update={'low':Decimal(94), 'open':Decimal(94)})
+    native['BTCUSDT']['trade1h'] = tuple(rows)
+    rows = list(native['BTCUSDT']['trade15m'])
+    rows[3] = rows[3].model_copy(update={'low':Decimal(94), 'close':Decimal(94)})
+    rows[4] = rows[4].model_copy(update={'low':Decimal(94), 'open':Decimal(94)})
+    native['BTCUSDT']['trade15m'] = tuple(rows)
+    report = simulate_intraday(*args)
+    eth = next(t for t in report['trades'] if t['symbol'] == 'ETHUSDT')
+    assert eth['exit_reason'] == 'perp_daily_loss'
+    assert eth['closed_at'] == (START+timedelta(hours=1)).isoformat()

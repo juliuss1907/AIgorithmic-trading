@@ -77,3 +77,23 @@ def test_intraday_bundle_rejects_hash_warmup_and_boundary_changes(tmp_path):
     bad['bundle_checksum'] = fingerprint({k:v for k,v in bad.items() if k != 'bundle_checksum'})
     with pytest.raises(ValueError, match='gap'):
         decode_inputs(cfg, bad, perp)
+
+
+def test_reuse_collects_only_missing_warmup_and_preserves_parent_rows(tmp_path):
+    from intraday.replay_v2.intraday_data import reuse_with_warmup
+    def fetch(symbol, interval, start, end, **kw):
+        ms = int((end-start).total_seconds()*1000)
+        op = int(start.timestamp()*1000)
+        return fetch_candle_snapshot(symbol, interval, start, end, price_kind='trade',
+            fetch_json=lambda p,q:[[op,'100','101','99','100','1',op+ms-1]], now=end+timedelta(days=1))
+    parent = fetch('BTCUSDT', '1h', START, START+timedelta(hours=1))
+    calls = []
+    def prefix(*args, **kw):
+        calls.append(args)
+        return fetch(*args, **kw)
+    merged, lineage = reuse_with_warmup(parent, START-timedelta(hours=1),
+        START+timedelta(hours=1), prefix)
+    assert calls[0][2:] == (START-timedelta(hours=1), START)
+    assert merged.raw_rows[1:] == parent.raw_rows
+    assert lineage['parent_snapshot_id'] == parent.snapshot_id
+    assert lineage['warmup_snapshot_id']

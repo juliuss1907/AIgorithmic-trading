@@ -49,6 +49,27 @@ def subset_snapshot(snapshot, start, end):
     return CandleSnapshot(snapshot_id=fingerprint(raw), **raw)
 
 
+def reuse_with_warmup(parent, start, end, fetcher):
+    if not parent.coverage_start < end <= parent.coverage_end:
+        raise ValueError('reused native history must cover the active window')
+    lineage = dict(parent_snapshot_id=parent.snapshot_id,
+        parent_coverage_start=parent.coverage_start.isoformat(),
+        parent_coverage_end=parent.coverage_end.isoformat(), unchanged_row_subset=True)
+    if parent.coverage_start <= start:
+        lineage['acquisition_metadata_retained'] = True
+        return subset_snapshot(parent, start, end), lineage
+    prefix = fetcher(parent.symbol, parent.interval, start, parent.coverage_start, price_kind=parent.price_kind)
+    suffix = subset_snapshot(parent, parent.coverage_start, end)
+    payload = suffix.model_dump(mode='json', exclude={'snapshot_id'})
+    payload.update(coverage_start=start.isoformat().replace('+00:00', 'Z'),
+        fetched_at=max(parent.fetched_at, prefix.fetched_at).isoformat().replace('+00:00', 'Z'),
+        pages=parent.pages+prefix.pages, raw_rows=prefix.raw_rows+suffix.raw_rows)
+    lineage.update(warmup_snapshot_id=prefix.snapshot_id,
+        warmup_snapshot=prefix.model_dump(mode='json'), composite_acquisition=True,
+        acquisition_metadata_retained=False)
+    return CandleSnapshot(snapshot_id=fingerprint(payload), **payload), lineage
+
+
 def collect_inputs(config, root, *, candle_fetcher=fetch_candle_snapshot, progress=None,
                    reused=None, reused_files=None):
     reused = reused or {}
@@ -61,13 +82,11 @@ def collect_inputs(config, root, *, candle_fetcher=fetch_candle_snapshot, progre
         raw['candles'][s], raw['reuse_lineage'][s] = {}, {}
         for tag, (interval, kind, warmup) in SERIES.items():
             parent = reused.get((s, tag))
-            snapshot = (subset_snapshot(parent, config.start-warmup, config.end) if parent else
-                        candle_fetcher(s, interval, config.start-warmup, config.end, price_kind=kind))
             if parent:
-                raw['reuse_lineage'][s][tag] = dict(parent_snapshot_id=parent.snapshot_id,
-                    parent_coverage_start=parent.coverage_start.isoformat(),
-                    parent_coverage_end=parent.coverage_end.isoformat(),
-                    unchanged_row_subset=True, acquisition_metadata_retained=True)
+                snapshot, raw['reuse_lineage'][s][tag] = reuse_with_warmup(
+                    parent, config.start-warmup, config.end, candle_fetcher)
+            else:
+                snapshot = candle_fetcher(s, interval, config.start-warmup, config.end, price_kind=kind)
             payload = snapshot.model_dump(mode='json')
             _write(directory/(s+'-'+tag+'.json'), encoded(payload))
             raw['candles'][s][tag] = payload

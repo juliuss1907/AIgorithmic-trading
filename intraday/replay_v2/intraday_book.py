@@ -8,6 +8,7 @@ from intraday.replay_v2.trade_trailing import TradeTrailingBook
 
 
 class IntradayConfig(HistoricalConfig):
+    include_perp: Literal[True] = True
     capital_growth: Literal['realized'] = 'realized'
     perp_stop: Literal['atr14-3x'] = 'atr14-3x'
     perp_daily_policy: Literal['none'] = 'none'

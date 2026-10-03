@@ -60,7 +60,25 @@ def perp_open_exits(book, at, bars, observations, closed, trailing_open):
             closed.add(('perp', s))
 
 
-def perp_open_entries(book, at, marks, bars, observations, trends, closed):
+def flatten_open_locks(book, at, marks, spot_open, perp_open, closed):
+    """A fill-cost trigger at an open must flatten at that same open."""
+    while book.halted or book.daily.locked:
+        before = len(book.trades)
+        if book.halted:
+            for s, bar in sorted(spot_open.items()):
+                if book.positions[s].quantity:
+                    book.close(s, at, bar.open, book.halt_reason)
+                    closed.add(('spot', s))
+        for s, bar in sorted(perp_open.items()):
+            if book.perps[s].quantity:
+                book.close_perp(s, at, bar.open, book.halt_reason if book.halted else book.daily.reason)
+                closed.add(('perp', s))
+        if len(book.trades) == before:
+            break
+        cost_checkpoint(book, at, marks)
+
+
+def perp_open_entries(book, at, marks, bars, observations, trends, closed, spot_open):
     cfg = book.config
     for s, obs in sorted(observations.items()):
         side = obs.entry_side
@@ -82,6 +100,7 @@ def perp_open_entries(book, at, marks, bars, observations, trends, closed):
                 trend_profile=cfg.perp_trend_profile, stop_fraction=str(distance),
                 stop_price=str(book.perps[s].stop), signal_available_at=at.isoformat())
             cost_checkpoint(book, at, marks)
+            flatten_open_locks(book, at, marks, spot_open, bars, closed)
 
 
 def simulate_intraday(config, candles, daily, perp, funding, native):
@@ -148,14 +167,16 @@ def simulate_intraday(config, candles, daily, perp, funding, native):
         perp_open_exits(book, at, perp_open, perp_obs, closed, at in trail.opens)
         if len(book.trades) != before:
             cost_checkpoint(book, at, marks)
+        flatten_open_locks(book, at, marks, spot_open, perp_open, closed)
         # Parent resumption is deliberately not a new periodic M15 parent guard.
         if spot_open:
             book.maybe_resume(at, marks)
         book.maybe_resume_perp(at)
         if spot_open:
             open_entries(book, at, marks, {}, spot_obs, {}, spot_trends, {}, closed)
+            flatten_open_locks(book, at, marks, spot_open, perp_open, closed)
         if perp_obs:
-            perp_open_entries(book, at, marks, perp_open, perp_obs, trends, closed)
+            perp_open_entries(book, at, marks, perp_open, perp_obs, trends, closed, spot_open)
     return intraday_result(config, spot, daily, perp, funding, audit, book, native)
 
 
