@@ -235,6 +235,11 @@ def test_daily_config_rejects_nonfinite_and_unknown_policies(field, value):
         HistoricalConfig(start=START, end=START+WIDTH, **{field: value})
 
 
+def test_daily_policy_requires_perp_instead_of_silently_ignoring_it():
+    with pytest.raises(ValueError, match='requires Perp'):
+        HistoricalConfig(start=START, end=START+WIDTH, include_perp=False, perp_daily_policy='target3')
+
+
 def test_missing_funding_daily_report_does_not_claim_full_return():
     from intraday.replay_v2.historical_mixed import simulate_historical
     from test_historical_mixed_research import fixture_inputs
@@ -268,3 +273,50 @@ def test_loss_flatten_blocks_same_open_reentry_but_spot_survives():
     assert sum(e['reason'] == 'perp_daily_loss' and e['kind'] == 'entry_blocked'
                for e in ledger.events) == 2
     assert all(t['exit_reason'] == 'perp_daily_loss' for t in ledger.trades)
+
+
+@pytest.mark.parametrize('rate,reason', [('.06', 'perp_daily_loss'), ('-.07', 'perp_daily_profit')])
+def test_midbar_funding_trigger_waits_for_contract_open(rate, reason):
+    from intraday.replay_v2.contracts import FundingSettlement
+    from intraday.replay_v2.historical_mixed import simulate_historical
+    from test_historical_mixed_research import fixture_inputs
+
+    cfg = HistoricalConfig(start=START, end=START+2*WIDTH, trend_filter=False,
+                           perp_stop='fixed-5pct', perp_daily_policy='target3')
+    spot, daily, perp, funding = fixture_inputs(cfg)
+    midpoint = START+timedelta(hours=2)
+    h = funding['BTCUSDT']
+    funding['BTCUSDT'] = h.model_copy(update={'settlements': (
+        h.settlements[0], FundingSettlement(at=midpoint, rate=rate, mark=100), h.settlements[1])})
+    report = simulate_historical(cfg, spot, daily, perp, funding)
+    halts = [e for e in report['events'] if e['kind'] == 'perp_daily_halt']
+    assert halts[0]['at'] == midpoint.isoformat() and halts[0]['reason'] == reason
+    assert all(t['closed_at'] == (START+WIDTH).isoformat() and t['exit_price'] == '100'
+               and t['exit_reason'] == reason for t in report['trades'])
+
+
+def test_trailing_close_trigger_uses_next_open_and_not_the_peak_price():
+    from intraday.replay_v2.historical_mixed import simulate_historical
+    from test_historical_mixed_research import fixture_inputs
+
+    cfg = HistoricalConfig(start=START, end=START+3*WIDTH, trend_filter=False,
+                           perp_stop='fixed-5pct', perp_daily_policy='trailing')
+    spot, daily, perp, funding = fixture_inputs(cfg)
+    # Funding is a genuine additional mark sample, not an unrelated 100-price
+    # fixture that would itself trigger the giveback at the 04:00 open.
+    for s, history in funding.items():
+        funding[s] = history.model_copy(update={'settlements': tuple(
+            p.model_copy(update={'mark': Decimal(104)}) if p.at == START+WIDTH else p
+            for p in history.settlements)})
+    for data in perp.values():
+        mark = list(data['mark'])
+        for i, (open_, close_) in enumerate(((100, 104), (104, '102.9'), ('102.9', '102.9'))):
+            mark[i] = mark[i].model_copy(update={'open': Decimal(open_), 'close': Decimal(close_),
+                                               'low': Decimal(99), 'high': Decimal(105)})
+        data['mark'] = tuple(mark)
+    report = simulate_historical(cfg, spot, daily, perp, funding)
+    halts = [e for e in report['events'] if e['kind'] == 'perp_daily_halt']
+    assert halts[0]['reason'] == 'perp_daily_trailing'
+    assert halts[0]['at'] == (START+2*WIDTH-timedelta(milliseconds=1)).isoformat()
+    assert all(t['closed_at'] == (START+2*WIDTH).isoformat() and t['exit_price'] == '100'
+               and t['exit_reason'] == 'perp_daily_trailing' for t in report['trades'])

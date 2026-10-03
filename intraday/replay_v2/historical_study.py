@@ -255,6 +255,7 @@ def run_study(database, report_root, *, start=START, end=END, collect_perp=False
         results.append(item)
         if progress:
             progress({'phase': 'historical_replay_complete', 'variant': name, 'perp_stop': cfg.perp_stop, 'perp_size': cfg.perp_size,
+                **({'perp_daily_policy': cfg.perp_daily_policy} if preset == 'perp-daily-policy' else {}),
                 'daily_loss_pct': item['daily_loss_pct'], 'run_id': saved['run_id'],
                 **{key: report['summary'][key] for key in
                    ('net_return_pct', 'max_drawdown_known_pct', 'closed_trades', 'economic_check_only')},

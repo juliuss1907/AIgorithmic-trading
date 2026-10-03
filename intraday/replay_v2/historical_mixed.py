@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import ConfigDict, field_validator
+from pydantic import ConfigDict, field_validator, model_validator
 
 from intraday.contracts import SpotRuleParameters
 from intraday.replay_v2.metrics import fingerprint
@@ -25,6 +25,12 @@ class HistoricalConfig(MixedConfig):
     perp_stop: Literal['fixed-1pct', 'atr14-2x', 'fixed-5pct', 'atr14-3x'] = 'fixed-1pct'
     perp_size: Literal['full', 'two-thirds'] = 'full'
     perp_daily_policy: Literal['disabled', 'none', 'target3', 'target5', 'trailing'] = 'disabled'
+
+    @model_validator(mode='after')
+    def daily_policy_requires_perp(self):
+        if self.perp_daily_policy != 'disabled' and not self.include_perp:
+            raise ValueError('daily policy requires Perp; use disabled for Spot-only control')
+        return self
 
     @field_validator('weights', 'perp_weights')
     @classmethod
