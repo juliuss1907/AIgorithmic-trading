@@ -329,3 +329,127 @@ summary field change. Source and frozen input SHA256 match the v1.1 study:
 The private `benchmark-review.md` records the immutable baseline comparison
 and receipt hashes. Neither research pass nor this comparison authorizes
 soak, Demo or real-trading activation.
+
+### Perp daily-policy experiment — 2026-10-03
+
+Preset `perp-daily-policy`, evaluator `historical-perp-daily-policy-v1.0`.
+This is an **offline quantitative 4h experiment**, not the current Jev/LLM
+intraday worker. No new collection, model calls, runtime risk changes or
+activation. Existing presets remain disabled for this additional policy.
+
+```bash
+uv run python -m intraday.replay_v2.mixed_portfolio_research \
+  --mode historical-quant --preset perp-daily-policy \
+  --database /path/to/verified-immutable-backup.sqlite3 \
+  --perp-inputs /path/to/frozen-perp-inputs.json \
+  --report-root /path/to/new-private-report-directory
+```
+
+The backup requires its matching manifest and all five coins' frozen Spot
+4h/1d history. The Futures bundle requires native BTC/ETH contract/mark candles
+and complete actual funding. The output directory must not already exist.
+`--preset` cannot be applied to recorded-Jev mode. Defaults remain unchanged.
+
+#### Policy and accounting contract
+
+- Same 24-month dataset, 1,000 USDT shared portfolio, Spot 60%, Perp **notional**
+  30%, reserve 10%, isolated 3x. Full Perp coin budgets; no new sizing sweep.
+- The separate **virtual Perp sleeve** starts at 300 USDT and adds only Perp
+  net PnL, including realized/unrealized PnL, entry/exit fees, assumed slippage
+  and signed funding. It is not an exchange subaccount, margin, or allocation
+  transfer. Spot PnL does not enter this policy's numerator or denominator.
+- Daily return is `(Perp equity - sleeve day-start equity) / day-start equity`.
+  The day baseline is the last observed equity before the UTC boundary.
+  Carried positions contribute only their change in the new day, not their
+  whole lifetime PnL. No external cash transfers are modeled.
+- All eight mixed runs enforce Perp net daily loss **3%**. A protective stop
+  closes its own position; if the resulting sleeve return breaches the daily
+  limit, all remaining Perp positions are scheduled for closure. No exception
+  based on the percentage of green positions or hope of recovering losses.
+- For each stop (fixed 5%, ATR14 × 3), compare `none`, `target3`, `target5` and
+  `trailing`. `none` means no profit cap, **not** no Perp daily-loss guard.
+- `trailing` arms at +3%, then closes after a **1 percentage point** decline
+  from the observed day's highest return. For example +4.5% → +3.5%. The
+  peak never decreases, but the daily peak/armed state reset at the UTC day.
+- Daily locks latch regardless of later PnL recovery. Resume requires a
+  subsequent UTC day, no remaining Perp position and no parent halt. Never
+  reenter at the same tick as a delayed flatten. Spot need not be flat.
+- Parent research daily loss 3% and terminal DD 10% remain authoritative and
+  may flatten **both** markets. Parent insolvency/DD/daily loss have priority.
+  Runtime daily loss 1.5% / DD 8% are **not changed** by this research.
+- Close/funding triggers fill at the next contract open; open triggers can
+  fill at that open. Mark prices value PnL, not fills. Locked Perp opening
+  requests are blocked; there are no invented live pending orders to cancel.
+
+This samples 4h open/close plus funding/cost events, not continuous intraday
+equity. The return after closure can fall below a profit target or exceed a
+loss threshold because of gaps, intervening movement and closing costs.
+ATR14 remains simple mean TR on closed native 4h bars, fixed at entry.
+
+#### Results and risk interpretation
+
+Authoritative private output:
+`~/.local/state/aigorithmic-trading/reports/perp-daily-policy-20261003-24months/`.
+All returns below are net of the existing fees, slippage and actual funding.
+Only the ATR14 × 3 / +5% run completes the entire window without a terminal
+halt among the mixed variants. Rejected runs retain idle equity after halting;
+their full-window returns are not 24 months of uninterrupted trading.
+
+| Perp stop | Profit policy | Portfolio return | Portfolio DD | Perp net USDT | Perp sleeve DD | Perp trades | Research check |
+|---|---|---:|---:|---:|---:|---:|---|
+| Fixed 5% | None | -0.9427% | 10.0555% | -53.9834 | 23.6190% | 31 | reject |
+| Fixed 5% | +3% | 22.7959% | 10.0438% | 66.6706 | 14.2127% | 126 | reject |
+| Fixed 5% | +5% | -1.3365% | 10.2108% | -58.8404 | 24.0700% | 33 | reject |
+| Fixed 5% | Trailing | 19.6936% | 10.0848% | 38.2317 | 17.4105% | 121 | reject |
+| ATR14 × 3 | None | -0.8208% | 10.0808% | -53.4050 | 23.7982% | 30 | reject |
+| ATR14 × 3 | +3% | 22.2744% | 10.1980% | 70.2164 | 14.4676% | 126 | reject |
+| ATR14 × 3 | +5% | **40.0815%** | **9.5172%** | **96.6608** | **21.6093%** | **144** | pass |
+| ATR14 × 3 | Trailing | 18.5600% | 10.1061% | 20.3449 | 17.6582% | 119 | reject |
+| Spot-only control | — | 29.2802% | 7.9954% | — | — | 0 | pass |
+
+The ATR14 × 3 / +5% variant ends at 1,400.8145 USDT. Perp itself contributes
+96.6608 USDT (BTC 44.1738, ETH 52.4870; long 61.4261, short 35.2347) after
+21.4271 fee + 21.4271 slippage + 4.7511 signed funding costs. Spot contributes
+304.1537 USDT. Compared with the Spot-only control, the total improvement is
+10.8012 percentage points, **not all direct Perp PnL**: shared cash/risk also
+changes Spot allocations and its economic path.
+
+It hits the +5% profit guard on 12 days and the Perp loss guard on 17 days;
+24 of 144 Perp trades exit at protective stops. Its Perp sleeve return is
+32.2203%, but sleeve DD is **21.6093%** and its worst observed day is
+**-6.4805%**, despite a 3% trigger. The 9.5172% figure is the **combined
+portfolio** DD. This experiment does not establish a guaranteed daily loss
+cap, a guaranteed daily income, or a low-risk standalone Perp strategy.
+
+Perp six-month continuous returns are -8.5925%, +24.1728%, +7.1172% and
++8.7503%; they are not four independently reset or held-out tests. The
+combined portfolio also has a negative third six-month period (-1.3450%).
+This is an ex-post comparison on previously inspected history, not an
+independent holdout and not automatic selection/promotion of the best run.
+
+Outputs include nine immutable report bundles, `comparison.json/md` and the
+frozen inputs. Each full equity curve records Perp baselines, return, peak and
+lock state. Events record arming, triggers, after-flatten return, resume and
+blocked requests. Summaries include sleeve costs/DD, profit/loss/trailing
+counts, worst day and both portfolio/sleeve six-month periods. Fewer than six
+Perp trades or a never-triggered profit policy is marked inconclusive evidence.
+Incomplete funding/unsupported liquidation never produces a full net return.
+
+All nine summaries and complete journals reproduce from serialized configs.
+A separate process also verifies these nine runs, the eight wider-stop runs,
+and six original baseline runs: **23 complete journals**, unchanged economic
+results for the old configurations, and unchanged source/input hashes.
+Focused research regression: 112 passed. Full project regression:
+`uv run pytest -q` — **1,080 passed**, 29 existing dependency deprecation
+warnings. No tests disabled and no new dependencies added.
+
+- Source SHA256: `63a099e3fdd67d9a46578d919578bc7d9231d753babc4dcf26326a02986efbb5`.
+- Spot bundle SHA256: `7102d12761db783237fb933359a4bae6fee4398c44f734ff583d7fc976acdf15`.
+- Futures bundle SHA256: `5aaee92a2a5450b842e7a8a3499cfd87c485f894df7a403bffeca52cc1a61bfd`.
+- Dataset checksum: `3fe0072da5a6f5446e8aadf1676c9df3b65610301855389ac7bac6c9e767a645`.
+- Comparison SHA256: `e0dde4adb96e37a4696f2fbd4bea4ca2cb2cfeab7b0a3585a0cad089ea1bafbf`.
+- ATR14 × 3 / +5% result: `f6983c002074499541ba6b88a4c7e6fccdc03e2a6acfe158e886298611e6fc9e`.
+
+Default-off legacy runs retain their existing config hashes, result identities
+and complete journals under the v1.2 evaluator. Research `pass` remains
+descriptive only, not an official gate or permission for soak/Demo/real trades.
