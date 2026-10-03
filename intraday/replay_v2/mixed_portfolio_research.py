@@ -148,8 +148,8 @@ def main(argv=None):
                         help="Recorded Jev window (default) or separate 24-month deterministic Perp study")
     parser.add_argument("--collect-perp", action="store_true", help="Explicitly collect public native Futures candles, marks and funding")
     parser.add_argument("--perp-inputs", help="Immutable historical Futures input bundle for offline reproduction")
-    parser.add_argument("--preset", choices=("baseline", "stop-extension", "perp-daily-policy", "perp-daily-compounding"),
-                        help="Historical-only matrix: baseline (6), stop-extension (8), perp-daily-policy (9), or perp-daily-compounding (4)")
+    parser.add_argument("--preset", choices=("baseline", "stop-extension", "perp-daily-policy", "perp-daily-compounding", "perp-realized-trailing"),
+                        help="Historical-only matrix: baseline (6), stop-extension (8), perp-daily-policy (9), perp-daily-compounding (4), or perp-realized-trailing (6)")
     parser.add_argument("--drawdown-policy", choices=("terminal", "observe-only", "initial-capital"),
                         help="Historical only: peak DD halt (default), observe DD only, or terminal loss from initial capital")
     args = parser.parse_args(argv)

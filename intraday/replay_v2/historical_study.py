@@ -15,10 +15,13 @@ from intraday.replay_v2.historical_mixed import HistoricalConfig, funding_audit,
 from intraday.replay_v2.metrics import encoded, fingerprint
 from intraday.replay_v2.portfolio_research import validate_inputs
 from intraday.replay_v2.portfolio_study import START, END, file_hash, load_inputs
+from intraday.replay_v2 import realized_trailing_study
 from intraday.store import IntradayStore
 
 
 def study_configs(start, end, trend_filter=True, preset='baseline'):
+    if preset == realized_trailing_study.PRESET:
+        return realized_trailing_study.study_configs(start, end, trend_filter)
     if preset == 'perp-daily-compounding':
         return [(name, HistoricalConfig(start=start, end=end, trend_filter=trend_filter,
                  include_perp=include, capital_growth=growth,
@@ -110,6 +113,8 @@ def decode_inputs(config, raw):
 
 
 def comparison_markdown(receipt):
+    if receipt['preset'] == realized_trailing_study.PRESET:
+        return realized_trailing_study.comparison_markdown(receipt)
     if receipt.get('drawdown_policy', 'terminal') != 'terminal':
         return capital_guard_comparison_markdown(receipt)
     if receipt['preset'] == 'perp-daily-compounding':
@@ -319,17 +324,20 @@ def run_study(database, report_root, *, start=START, end=END, collect_perp=False
             daily_loss_pct=float(cfg.daily_loss*100), max_drawdown_pct=float(cfg.max_drawdown*100),
             run_id=saved['run_id'], result_id=report['result_id'], dataset_checksum=report['inputs']['dataset_checksum'],
             summary=report['summary'], status=report['status'], deterministic_rerun_verified=True)
-        if preset in {'perp-daily-policy', 'perp-daily-compounding'}:
+        if preset in {'perp-daily-policy', 'perp-daily-compounding', realized_trailing_study.PRESET}:
             item['perp_daily_policy'] = cfg.perp_daily_policy
-        if preset == 'perp-daily-compounding':
+        if preset in {'perp-daily-compounding', realized_trailing_study.PRESET}:
             item['capital_growth'] = cfg.capital_growth
+        if preset == realized_trailing_study.PRESET:
+            item['perp_trade_exit'] = cfg.perp_trade_exit
         if drawdown_policy != 'terminal':
             item['drawdown_policy'] = drawdown_policy
         results.append(item)
         if progress:
             progress({'phase': 'historical_replay_complete', 'variant': name, 'perp_stop': cfg.perp_stop, 'perp_size': cfg.perp_size,
-                **({'perp_daily_policy': cfg.perp_daily_policy} if preset in {'perp-daily-policy', 'perp-daily-compounding'} else {}),
-                **({'capital_growth': cfg.capital_growth} if preset == 'perp-daily-compounding' else {}),
+                **({'perp_daily_policy': cfg.perp_daily_policy} if preset in {'perp-daily-policy', 'perp-daily-compounding', realized_trailing_study.PRESET} else {}),
+                **({'capital_growth': cfg.capital_growth} if preset in {'perp-daily-compounding', realized_trailing_study.PRESET} else {}),
+                **({'perp_trade_exit': cfg.perp_trade_exit} if preset == realized_trailing_study.PRESET else {}),
                 **({'drawdown_policy': drawdown_policy} if drawdown_policy != 'terminal' else {}),
                 'daily_loss_pct': item['daily_loss_pct'], 'run_id': saved['run_id'],
                 **{key: report['summary'][key] for key in
@@ -345,10 +353,15 @@ def run_study(database, report_root, *, start=START, end=END, collect_perp=False
         mixed, control = row['summary']['net_return_pct'], controls[
             row['daily_loss_pct'], row.get('capital_growth', 'capped')]
         row['paired_spot_control_return_difference_pp'] = mixed-control if row['include_perp'] and mixed is not None and control is not None else None
-        if preset == 'perp-daily-compounding':
+        if preset in {'perp-daily-compounding', realized_trailing_study.PRESET}:
             reference = next(r['summary']['net_return_pct'] for r in results
-                if r['include_perp'] == row['include_perp'] and r['capital_growth'] == 'capped')
+                if r['include_perp'] == row['include_perp'] and r['capital_growth'] == 'capped'
+                and r.get('perp_trade_exit') == row.get('perp_trade_exit'))
             row['paired_capped_return_difference_pp'] = mixed-reference if mixed is not None and reference is not None else None
+        if preset == realized_trailing_study.PRESET:
+            reference = next((r['summary']['net_return_pct'] for r in results if r['include_perp']
+                and r['capital_growth'] == row['capital_growth'] and r['perp_trade_exit'] == 'baseline'), None)
+            row['paired_target5_return_difference_pp'] = mixed-reference if row['include_perp'] and mixed is not None and reference is not None else None
         if preset == 'perp-daily-policy':
             reference = next((r['summary']['net_return_pct'] for r in results if r['include_perp']
                 and r['perp_stop'] == row['perp_stop'] and r['perp_daily_policy'] == 'none'), None)
