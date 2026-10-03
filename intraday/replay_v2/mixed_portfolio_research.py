@@ -148,8 +148,8 @@ def main(argv=None):
                         help="Recorded Jev window (default) or separate 24-month deterministic Perp study")
     parser.add_argument("--collect-perp", action="store_true", help="Explicitly collect public native Futures candles, marks and funding")
     parser.add_argument("--perp-inputs", help="Immutable historical Futures input bundle for offline reproduction")
-    parser.add_argument("--preset", choices=("baseline", "stop-extension"),
-                        help="Historical-only matrix: baseline (six runs, default) or stop-extension (eight runs)")
+    parser.add_argument("--preset", choices=("baseline", "stop-extension", "perp-daily-policy"),
+                        help="Historical-only matrix: baseline (6), stop-extension (8), or perp-daily-policy (9)")
     args = parser.parse_args(argv)
     progress = lambda item: print(json.dumps(item, allow_nan=False), flush=True)
     if args.mode == "historical-quant":

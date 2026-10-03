@@ -30,8 +30,9 @@ class PerpDailyState:
 
     def advance_day(self, at):
         at = utc(at)
-        if at < self.last_at:
+        if at < self.last_at or at.date() < self.day:
             raise ValueError('Perp daily time cannot go backwards')
+        self.last_at = at
         if at.date() != self.day:
             self.day = at.date()
             if self.last_equity > 0:
@@ -139,3 +140,43 @@ class PerpDailyBook(MixedBook):
         previous = d.reason
         d.locked, d.reason, d.until, d.flattened_at = False, None, None, None
         self.event(at, 'perp_daily_resume', 'next_utc_day_and_perp_flat', previous_reason=previous, market='perp')
+
+
+def daily_summary(book, valid=True):
+    """Descriptive statistics, not an activation or a newly optimized gate."""
+    d = book.daily
+    trades = [t for t in book.trades if t['market'] == 'perp']
+    net = sum((t['net_pnl'] for t in trades), ZERO)
+    if abs(d.cash-d.initial-net) > Decimal('1e-18'):
+        raise ValueError('Perp sleeve does not reconcile to trade journal')
+    days = {}
+    giveback = ZERO
+    for row in book.curve:
+        day = row['at'][:10]
+        daily_return = Decimal(row['perp_daily_return'])
+        days[day] = daily_return
+        giveback = max(giveback, Decimal(row['perp_daily_peak_return'])-daily_return)
+    # The end-exclusive boundary is not an additional traded day.
+    if book.config.end.time().isoformat() == '00:00:00':
+        days.pop(book.config.end.date().isoformat(), None)
+    halts = [e for e in book.events if e['kind'] == 'perp_daily_halt']
+    profit = sum(e['reason'] == 'perp_daily_profit' for e in halts)
+    trailing = sum(e['reason'] == 'perp_daily_trailing' for e in halts)
+    evidence = ('insufficient_perp_trades' if len(trades) < 6 else
+                'policy_not_triggered' if d.policy != 'none' and profit+trailing == 0 else
+                'descriptive_only_not_holdout')
+    return {'policy': d.policy, 'initial_equity': float(d.initial), 'final_equity': float(d.cash),
+            'net_pnl': float(net) if valid else None, 'pnl_after_known_costs': float(net),
+            'net_return_pct': float(net/d.initial*100) if valid else None,
+            'max_drawdown_known_pct': float(d.max_drawdown*100), 'closed_trades': len(trades),
+            'exchange_fee': float(sum((t['exchange_fee'] for t in trades), ZERO)),
+            'slippage_cost': float(sum((t['slippage_cost'] for t in trades), ZERO)),
+            'funding_paid': float(sum((t['funding_paid'] for t in trades), ZERO)),
+            'loss_halts': sum(e['reason'] == 'perp_daily_loss' for e in halts),
+            'profit_halts': profit, 'trailing_halts': trailing,
+            'armed_days': len({e['at'][:10] for e in book.events if e['kind'] == 'perp_daily_armed'}),
+            'resumes': sum(e['kind'] == 'perp_daily_resume' for e in book.events),
+            'blocked_entries': sum(e['kind'] == 'entry_blocked' and e['reason'].startswith('perp_daily_')
+                                   for e in book.events),
+            'observed_days': len(days), 'worst_observed_day_pct': float(min(days.values(), default=ZERO)*100),
+            'max_observed_giveback_pp': float(giveback*100), 'evidence': evidence}

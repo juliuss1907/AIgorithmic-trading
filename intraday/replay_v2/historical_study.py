@@ -19,6 +19,13 @@ from intraday.store import IntradayStore
 
 
 def study_configs(start, end, trend_filter=True, preset='baseline'):
+    if preset == 'perp-daily-policy':
+        variants = [('Spot+Perp', HistoricalConfig(start=start, end=end, trend_filter=trend_filter,
+                     perp_stop=stop, perp_daily_policy=policy))
+                    for stop in ('fixed-5pct', 'atr14-3x')
+                    for policy in ('none', 'target3', 'target5', 'trailing')]
+        return variants+[('Spot-only control', HistoricalConfig(start=start, end=end,
+                        trend_filter=trend_filter, include_perp=False))]
     setups = {'baseline': [('fixed-1pct', 'full'), ('atr14-2x', 'full')],
               'stop-extension': [('fixed-5pct', 'full'), ('atr14-3x', 'full'), ('atr14-3x', 'two-thirds')]}
     if preset not in setups:
@@ -97,6 +104,8 @@ def decode_inputs(config, raw):
 
 
 def comparison_markdown(receipt):
+    if receipt['preset'] == 'perp-daily-policy':
+        return daily_comparison_markdown(receipt)
     local = timezone(timedelta(hours=7))
     from datetime import datetime
     lines = ['# Historical Spot + quantitative Perp — 24-month research', '',
@@ -133,6 +142,47 @@ def comparison_markdown(receipt):
         'Mark-price values positions; it is not an invented bid/ask fill. No exact liquidation or Demo execution parity.',
         'Full journals include per-coin/market and long/short contributions, costs, funding, margin/exposure, halts and four continuous six-month periods.',
         'All published ledger series were reproduced offline; the original immutable SQLite source was unchanged.', '']
+    return '\n'.join(lines)
+
+
+def daily_comparison_markdown(receipt):
+    lines = ['# Perp daily policies — 24-month research', '',
+        'Research only; not a Jev/LLM intraday replay, independent holdout or activation gate.', '',
+        'Portfolio 1,000 USDT: Spot cap 60%, Perp NOTIONAL cap 30%, reserve 10%; isolated 3x.',
+        'Perp sleeve initially 300 USDT, plus its own cumulative net PnL. Percentages use sleeve day-start equity, not margin.',
+        'BTC/ETH Perp equal weights; BTC/ETH/SOL/NEAR/ZEC Spot 40/20/20/10/10. Full Perp sizing unchanged.',
+        'All Perp policies: net daily loss 3%. Parent daily loss 3%, terminal DD 10% unchanged.',
+        'Trailing: arm at +3%, flatten after 1 percentage point giveback from observed daily peak.',
+        'UTC trading day (reset 07:00 UTC+7). Close/funding triggers flatten at the next contract open.', '',
+        '| Stop | Policy | Portfolio net | Portfolio DD | Perp net USDT | Perp sleeve DD | Perp trades | Profit / trailing / loss halts | Evidence |',
+        '|---|---|---:|---:|---:|---:|---:|---|---|']
+    for row in receipt['results']:
+        s = row['summary']
+        net = f"{s['net_return_pct']:.4f}%" if s['net_return_pct'] is not None else 'UNKNOWN'
+        p = s.get('perp_daily')
+        if p:
+            perp_net = f"{p['net_pnl']:.4f}" if p['net_pnl'] is not None else 'UNKNOWN'
+            lines.append(f"| {row['perp_stop']} | {row['perp_daily_policy']} | {net} | "
+                f"{s['max_drawdown_known_pct']:.4f}% | {perp_net} | {p['max_drawdown_known_pct']:.4f}% | "
+                f"{p['closed_trades']} | {p['profit_halts']} / {p['trailing_halts']} / {p['loss_halts']} | {p['evidence']} |")
+        else:
+            lines.append(f"| Spot-only | disabled | {net} | {s['max_drawdown_known_pct']:.4f}% | — | — | 0 | — | control |")
+    lines += ['', '## Paired comparison', '',
+        '| Stop | Policy | Return minus no-profit-cap, pp | Return minus Spot control, pp |',
+        '|---|---|---:|---:|']
+    for row in receipt['results']:
+        if row['include_perp']:
+            lines.append(f"| {row['perp_stop']} | {row['perp_daily_policy']} | "
+                         f"{row['paired_no_profit_cap_return_difference_pp']} | {row['paired_spot_control_return_difference_pp']} |")
+    lines += ['', '## Evidence and limitations', '',
+        'Separate Perp return, costs, BTC/ETH and long/short contributions, stop-outs and six-month continuous periods are in summary.json.',
+        'equity_curve.jsonl contains day baselines, net daily returns and peaks. events.jsonl contains triggers, after-flatten returns and blocked requests.',
+        'ATR14 is simple mean TR on closed 4h bars, fixed at entry; not trailing or Wilder/RMA.',
+        'Four-hour open/close plus funding/cost sampling cannot establish intraday trigger timing or exact DD.',
+        'Closing costs and next-open gaps can miss profit targets or overshoot loss limits.',
+        'No fabricated pending exchange orders, liquidation, order-book or partial-fill simulation.',
+        'All summaries and complete journals reproduced offline; inputs and source backup remain unchanged.',
+        'A profitable Spot book does not prove the Perp strategy profitable. No automatic winner, promotion or activation.', '']
     return '\n'.join(lines)
 
 
@@ -185,7 +235,8 @@ def run_study(database, report_root, *, start=START, end=END, collect_perp=False
         report['inputs'].update(source_sha256=before, snapshot_files_sha256=hashes)
         saved = publish_report(root/'reports', report)
         loaded = read_report(root/'reports', saved['run_id'])
-        restored = HistoricalConfig.model_validate({k: loaded['config'][k] for k in HistoricalConfig.model_fields})
+        restored = HistoricalConfig.model_validate({k: loaded['config'][k] for k in HistoricalConfig.model_fields
+                                                    if k in loaded['config']})
         repeated = simulate_historical(restored, frozen_spot, frozen_daily, perp, funding)
         if loaded['result_id'] != repeated['result_id'] or loaded['summary'] != repeated['summary']:
             raise ValueError('historical published summary does not reproduce')
@@ -199,6 +250,8 @@ def run_study(database, report_root, *, start=START, end=END, collect_perp=False
             daily_loss_pct=float(cfg.daily_loss*100), max_drawdown_pct=float(cfg.max_drawdown*100),
             run_id=saved['run_id'], result_id=report['result_id'], dataset_checksum=report['inputs']['dataset_checksum'],
             summary=report['summary'], status=report['status'], deterministic_rerun_verified=True)
+        if preset == 'perp-daily-policy':
+            item['perp_daily_policy'] = cfg.perp_daily_policy
         results.append(item)
         if progress:
             progress({'phase': 'historical_replay_complete', 'variant': name, 'perp_stop': cfg.perp_stop, 'perp_size': cfg.perp_size,
@@ -214,6 +267,10 @@ def run_study(database, report_root, *, start=START, end=END, collect_perp=False
     for row in results:
         mixed, control = row['summary']['net_return_pct'], controls[row['daily_loss_pct']]
         row['paired_spot_control_return_difference_pp'] = mixed-control if row['include_perp'] and mixed is not None and control is not None else None
+        if preset == 'perp-daily-policy':
+            reference = next((r['summary']['net_return_pct'] for r in results if r['include_perp']
+                and r['perp_stop'] == row['perp_stop'] and r['perp_daily_policy'] == 'none'), None)
+            row['paired_no_profit_cap_return_difference_pp'] = mixed-reference if row['include_perp'] and mixed is not None and reference is not None else None
     receipt = dict(preset=preset, research_only=True, activation_allowed=False, official_gate_eligible=False,
         signal_mode='historical_deterministic', window={'start': start.isoformat(), 'end': end.isoformat()},
         original_source=str(source), source_manifest=manifest, source_sha256=before, source_unchanged=True,

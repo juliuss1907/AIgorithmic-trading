@@ -12,6 +12,7 @@ from pydantic import ConfigDict, field_validator
 from intraday.contracts import SpotRuleParameters
 from intraday.replay_v2.metrics import fingerprint
 from intraday.replay_v2.mixed_book import MixedBook, MixedConfig
+from intraday.replay_v2.perp_daily import PerpDailyBook, daily_summary
 from intraday.replay_v2.portfolio_book import ONE, ZERO, STOP
 from intraday.replay_v2.portfolio_research import WIDTH, daily_points, validate_inputs
 from intraday.replay_v2.study import months_before
@@ -33,6 +34,7 @@ class HistoricalConfig(MixedConfig):
 
 
 VERSION = 'historical-mixed-quant-v1.2'  # Explicit stop and notional-size experiments.
+DAILY_VERSION = 'historical-perp-daily-policy-v1.0'
 
 
 @dataclass(frozen=True)
@@ -141,7 +143,8 @@ def open_exits(book, at, spot_bars, perp_bars, spot_obs, perp_obs, closed):
     for s, bar in sorted(perp_bars.items()):
         p, obs = book.perps[s], perp_obs[s]
         gap = p.quantity and (bar.open <= p.stop if p.quantity > 0 else bar.open >= p.stop)
-        reason = (book.halt_reason if book.halted else 'contract_stop_gap' if gap else
+        daily_reason = book.daily.reason if isinstance(book, PerpDailyBook) and book.daily.locked else None
+        reason = (book.halt_reason if book.halted else daily_reason if daily_reason else 'contract_stop_gap' if gap else
                   'donchian_exit' if (obs.exit_long if p.quantity > 0 else obs.exit_short) else None)
         if p.quantity and reason:
             book.close_perp(s, at, bar.open, reason)
@@ -196,7 +199,7 @@ def simulate_historical(config, candles, daily, perp, funding):
     perp_rows = {s: [c.row() for c in rows] for s, rows in trades.items()}
     settlements = defaultdict(list)
     audit = funding_audit(config, funding)
-    book = MixedBook(config)
+    book = PerpDailyBook(config) if config.include_perp and config.perp_daily_policy != 'disabled' else MixedBook(config)
     if config.include_perp:
         for s, state in audit.items():
             if not state['complete']:
@@ -246,6 +249,8 @@ def simulate_historical(config, candles, daily, perp, funding):
             open_exits(book, at, spot_open, perp_open, spot_obs, perp_obs, closed)
             book.enforce_risk(at, marks)
             book.maybe_resume(at, marks)
+            if isinstance(book, PerpDailyBook):
+                book.maybe_resume_perp(at)
             open_entries(book, at, marks, perp_open, spot_obs, perp_obs, spot_trends, perp_trends, closed)
     return historical_result(config, spot, daily, perp, funding, audit, book)
 
@@ -284,7 +289,7 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
                 name: float(sum((t[name] for t in rows), ZERO)) for name in
                 ('gross_pnl', 'exchange_fee', 'slippage_cost', 'funding_paid', 'net_pnl')}}
     complete = not config.include_perp or all(p['complete'] for p in audit.values())
-    valid = complete and 'unsupported_liquidation' not in book.limitations
+    valid = complete and not {'unsupported_liquidation', 'perp_capital_exhausted'} & book.limitations
     blockers = ([] if net > 0 else ['nonpositive_net_return']) + (
         ['drawdown_at_or_above_limit'] if book.max_drawdown >= config.max_drawdown else []) + (
         ['minimum_6_closed_trades'] if len(book.trades) < 6 else [])
@@ -292,13 +297,16 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
         'symbol': '+'.join(s.removesuffix('USDT') for s in sorted(config.weights)),
         'market': 'spot+perp' if config.include_perp else 'spot-control',
         'entry_window': 30, 'atr_period': 14, 'perp_exit_window': 8}
+    if config.perp_daily_policy == 'disabled':
+        payload.pop('perp_daily_policy')  # Preserve old config hashes and journal identities.
+    version = DAILY_VERSION if isinstance(book, PerpDailyBook) else VERSION
     data_hash = fingerprint({'spot': {s: [c.row() for c in rows] for s, rows in sorted(spot.items())},
         'spot_daily': daily, 'perp': {s: {'trade': [c.row() for c in p['trade']],
             'mark': [c.row() for c in p['mark']], 'daily': p['daily']} for s, p in sorted(perp.items())},
         'funding': {s: h.model_dump(mode='json') for s, h in sorted(funding.items())}})
     terminal = next((e['at'] for e in book.events if e['kind'] == 'halt' and e['reason'] == 'max_drawdown'), None)
-    return {'schema_version': '2', 'evaluator_version': VERSION,
-        'result_id': fingerprint({'version': VERSION, 'config': payload, 'data': data_hash}),
+    report = {'schema_version': '2', 'evaluator_version': version,
+        'result_id': fingerprint({'version': version, 'config': payload, 'data': data_hash}),
         'research_only': True, 'activation_allowed': False, 'official_gate_eligible': False,
         'status': 'complete' if valid else 'limited', 'config': payload,
         'inputs': {'dataset_checksum': data_hash, 'config_checksum': fingerprint(payload), 'funding_audit': audit},
@@ -344,3 +352,23 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
             'ideal_fractional_fills_without_partial_fills_or_historical_instrument_filters',
             'no_exact_liquidation_or_verified_historical_demo_execution', 'risk_gaps_and_exit_costs_can_overshoot'}),
         'v1_reference': None, 'equity_curve': book.curve, 'trades': book.trades, 'events': book.events}
+    if isinstance(book, PerpDailyBook):
+        report['summary']['perp_daily'] = daily_summary(book, valid)
+        perp_curve = [{**row, 'equity_known': row['perp_equity']} for row in book.curve]
+        report['summary']['perp_daily']['six_month_periods'] = continuous_periods(
+            config.model_copy(update={'capital': book.daily.initial}), perp_curve)
+        report['methodology']['perp_daily'] = {
+            'policy': config.perp_daily_policy, 'initial_equity': str(book.daily.initial),
+            'capital_basis': 'separate virtual Perp sleeve; initial capital times perp_cap, not margin or Spot PnL',
+            'loss_pct': 3, 'target_pct': {'target3': 3, 'target5': 5}.get(config.perp_daily_policy),
+            'trailing_arm_pct': 3, 'trailing_giveback_percentage_points': 1,
+            'day_start': 'last observed sleeve equity before UTC day boundary; overnight PnL is differenced',
+            'daily_resume': 'next UTC day AND Perp flat AND parent safe; never same tick as flatten',
+            'fills': 'close/funding-triggered flatten at next contract open; open-triggered flatten at that open',
+            'orders': 'opening requests blocked while locked; no exchange pending-order simulation',
+            'priority': 'parent insolvency/DD/daily loss before Perp loss/profit/trailing',
+        }
+        report['limitations'] = sorted(set(report['limitations']) | {
+            'four_hour_sampling_not_intraday_jev_llm_execution', 'virtual_perp_sleeve_not_segregated_exchange_wallet',
+            'profit_target_not_guaranteed_after_exit_costs_or_gap'})
+    return report
