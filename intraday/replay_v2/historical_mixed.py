@@ -23,6 +23,7 @@ class HistoricalConfig(MixedConfig):
     exit_window: Literal[8] = 8
     perp_stop: Literal['fixed-1pct', 'atr14-2x', 'fixed-5pct', 'atr14-3x'] = 'fixed-1pct'
     perp_size: Literal['full', 'two-thirds'] = 'full'
+    perp_daily_policy: Literal['disabled', 'none', 'target3', 'target5', 'trailing'] = 'disabled'
 
     @field_validator('weights', 'perp_weights')
     @classmethod
