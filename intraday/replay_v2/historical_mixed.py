@@ -14,6 +14,7 @@ from intraday.replay_v2.metrics import fingerprint
 from intraday.replay_v2.historical_capital import HistoricalBook
 from intraday.replay_v2.mixed_book import MixedConfig
 from intraday.replay_v2.perp_daily import PerpDailyBook, daily_summary
+from intraday.replay_v2.trade_trailing import TradeTrailingBook
 from intraday.replay_v2.portfolio_book import ONE, ZERO, STOP
 from intraday.replay_v2.portfolio_research import WIDTH, daily_points, validate_inputs
 from intraday.replay_v2.study import months_before
@@ -27,12 +28,17 @@ class HistoricalConfig(MixedConfig):
     perp_size: Literal['full', 'two-thirds'] = 'full'
     perp_daily_policy: Literal['disabled', 'none', 'target3', 'target5', 'trailing'] = 'disabled'
     capital_growth: Literal['capped', 'equity', 'realized'] = 'capped'
+    perp_trade_exit: Literal['baseline', 'net-trailing-3pp'] = 'baseline'
     drawdown_policy: Literal['terminal', 'observe-only', 'initial-capital'] = 'terminal'
 
     @model_validator(mode='after')
     def daily_policy_requires_perp(self):
         if self.perp_daily_policy != 'disabled' and not self.include_perp:
             raise ValueError('daily policy requires Perp; use disabled for Spot-only control')
+        if self.perp_trade_exit != 'baseline' and (
+            not self.include_perp or self.perp_daily_policy != 'none' or self.perp_stop != 'atr14-3x'
+        ):
+            raise ValueError('trade trailing requires Perp, ATR14 x3 and no fixed daily profit target')
         return self
 
     @field_validator('weights', 'perp_weights')
@@ -47,6 +53,7 @@ DAILY_VERSION = 'historical-perp-daily-policy-v1.0'
 GROWTH_VERSION = 'historical-equity-growth-v1.0'
 GUARD_VERSION = 'historical-capital-guard-v1.0'
 REALIZED_VERSION = 'historical-realized-sizing-v1.0'
+TRADE_TRAILING_VERSION = 'historical-net-trade-trailing-v1.0'
 
 
 @dataclass(frozen=True)
@@ -157,7 +164,9 @@ def open_exits(book, at, spot_bars, perp_bars, spot_obs, perp_obs, closed):
         gap = p.quantity and (bar.open <= p.stop if p.quantity > 0 else bar.open >= p.stop)
         daily_reason = book.daily.reason if isinstance(book, PerpDailyBook) and book.daily.locked else None
         reason = (book.halt_reason if book.halted else daily_reason if daily_reason else 'contract_stop_gap' if gap else
-                  'donchian_exit' if (obs.exit_long if p.quantity > 0 else obs.exit_short) else None)
+                  book.perp_exit_reason(s, bar.open, at))
+        if reason is None and (obs.exit_long if p.quantity > 0 else obs.exit_short):
+            reason = 'donchian_exit'
         if p.quantity and reason:
             book.close_perp(s, at, bar.open, reason)
             closed.add(('perp', s))
@@ -211,7 +220,8 @@ def simulate_historical(config, candles, daily, perp, funding):
     perp_rows = {s: [c.row() for c in rows] for s, rows in trades.items()}
     settlements = defaultdict(list)
     audit = funding_audit(config, funding)
-    book = PerpDailyBook(config) if config.include_perp and config.perp_daily_policy != 'disabled' else HistoricalBook(config)
+    book = (TradeTrailingBook(config) if config.perp_trade_exit != 'baseline' else
+            PerpDailyBook(config) if config.include_perp and config.perp_daily_policy != 'disabled' else HistoricalBook(config))
     if config.include_perp:
         for s, state in audit.items():
             if not state['complete']:
@@ -248,6 +258,8 @@ def simulate_historical(config, candles, daily, perp, funding):
             recently_closed[at+timedelta(milliseconds=1)] = closed
         book.check_isolated_collateral(at)
         book.enforce_risk(at, marks)
+        if isinstance(book, TradeTrailingBook) and at in closing_times and not book.halted and not book.daily.locked:
+            book.observe_trade_trailing(at, perp_close)
         if at == config.end:
             for s in sorted(spot):
                 book.close(s, at, spot_close[s].close, 'window_end')
@@ -313,9 +325,11 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
         payload.pop('perp_daily_policy')  # Preserve old config hashes and journal identities.
     if config.capital_growth == 'capped':
         payload.pop('capital_growth')
+    if config.perp_trade_exit == 'baseline':
+        payload.pop('perp_trade_exit')
     if config.drawdown_policy == 'terminal':
         payload.pop('drawdown_policy')
-    version = REALIZED_VERSION if config.capital_growth == 'realized' else GUARD_VERSION if config.drawdown_policy != 'terminal' else (
+    version = TRADE_TRAILING_VERSION if config.perp_trade_exit != 'baseline' else REALIZED_VERSION if config.capital_growth == 'realized' else GUARD_VERSION if config.drawdown_policy != 'terminal' else (
         GROWTH_VERSION if config.capital_growth == 'equity' else (
             DAILY_VERSION if isinstance(book, PerpDailyBook) else VERSION))
     data_hash = fingerprint({'spot': {s: [c.row() for c in rows] for s, rows in sorted(spot.items())},
@@ -381,6 +395,20 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
             'fees/slippage and settled funding charged immediately, once; no unrealized PnL in sizing; '
             'marked and entry-principal exposure, shared cash/margin limits and 10% realized reserve; '
             'no transfers or existing-position rebalance; risk guards retain marked equity')
+    if isinstance(book, TradeTrailingBook):
+        report['summary']['perp_trade_trailing'] = {
+            'exit_count': sum(t['exit_reason'] == 'perp_trade_trailing' for t in book.trades),
+            'armed_count': sum(t['market'] == 'perp' and t.get('trailing_floor_return') is not None for t in book.trades),
+        }
+        report['methodology']['perp_trade_trailing'] = {
+            'arm_net_return_pct': 3, 'giveback_percentage_points': 3,
+            'basis': 'net PnL divided by frozen entry notional, not margin; entry/estimated exit costs and settled funding included',
+            'sampling': 'native contract close only for peak updates; close breach latches until next open; open gaps exit at open',
+            'lifetime': 'per trade, never lowered or UTC-reset; ATR14 x3 and Donchian exits retained',
+            'daily_policy': 'no fixed daily profit cap; Perp -3% daily loss and parent guards retained',
+        }
+        report['limitations'] = sorted(set(report['limitations']) | {
+            'close_sampled_trailing_not_native_exchange_stop', 'trailing_floor_not_guaranteed_fill_return'})
     if config.capital_growth == 'equity':
         report['methodology']['allocation'] = (
             'notional caps and reserve on current mark-to-market portfolio equity at each new entry; '

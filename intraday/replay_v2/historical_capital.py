@@ -57,6 +57,9 @@ class HistoricalBook(MixedBook):
         return (max(ZERO, self.realized_capital['spot']) if self.config.capital_growth == 'realized'
                 else super().spot_budget(marks))
 
+    def perp_exit_reason(self, symbol, price, at):
+        return None
+
     def perp_budget(self, marks):
         return (max(ZERO, self.realized_capital['perp']) if self.config.capital_growth == 'realized'
                 else super().perp_budget(marks))
