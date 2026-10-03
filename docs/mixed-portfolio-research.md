@@ -1,4 +1,9 @@
-# Offline mixed Spot + recorded-Jev Perp research
+# Offline mixed Spot + Perp research
+
+Two explicit research modes share capital accounting, not signal generation:
+`recorded-jev` (default, preserved 44-hour experiment below) and
+`historical-quant` (24-month deterministic Perp study at the end of this guide).
+Neither activates trading or changes the current Jev/confidence workflow.
 
 Research only: no provider calls, credentials, runtime database writes, rule/gate
 updates, soak changes, scheduler integration or exchange orders. This is a short
@@ -120,3 +125,134 @@ All four published summaries and complete equity/trade/event series matched
 deterministic reruns from their serialized configs. Synthetic regression tests
 cover nonzero positions, costs, signed funding, locked collateral, shared halt,
 deferred Spot flatten, stop/quote freshness, and cross-market event ordering.
+
+## Historical quantitative mode — 24 months
+
+This mode answers the longer-history portfolio question without inventing
+historical Jev decisions. It uses deterministic Perp signals, **not Jev/LLM or
+confidence**, and does not establish readiness of the current Perp champion.
+The recorded-Jev mode, current rules, confidence proposals, gates, live database
+and VPS deployment remain unchanged.
+
+Collect public Futures inputs once:
+
+```bash
+uv run python -m intraday.replay_v2.mixed_portfolio_research \
+  --mode historical-quant \
+  --database /absolute/path/to/verified-backup.sqlite3 \
+  --report-root /absolute/path/to/new-historical-study \
+  --collect-perp
+```
+
+Replay the same inputs offline, without calling any API:
+
+```bash
+uv run python -m intraday.replay_v2.mixed_portfolio_research \
+  --mode historical-quant \
+  --database /absolute/path/to/the-same-verified-backup.sqlite3 \
+  --report-root /absolute/path/to/new-offline-rerun \
+  --perp-inputs /absolute/path/to/first-study/perp-inputs.json
+```
+
+Historical mode requires exactly one of `--collect-perp` / `--perp-inputs`.
+`--collect-funding` belongs to the recorded-Jev mode; historical collection
+already includes funding. Report roots must be new, never overwritten.
+
+### Dataset and configurations
+
+- Window: 2024-10-02 00:00 to 2026-10-02 00:00 UTC, 730 days. Every coin
+  requires all 4,380 native 4h bars; never silently shorten the window.
+- Reuse five-coin native Spot 4h/1d evidence, 31-bar / 60-day warmup. Export
+  frozen study inputs rather than creating another full runtime database copy.
+- BTC/ETH Futures: native contract-price 4h and 1d bars, mark-price 4h bars,
+  and actual historical funding. Separate files and source-tagged checksummed
+  snapshots; never insert Futures history into the Spot candle table.
+- Public endpoints: `/fapi/v1/klines`, `/fapi/v1/markPriceKlines`,
+  `/fapi/v1/fundingRate`. Pagination and OHLC/time coverage are validated.
+  [Official API contracts](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data).
+- Funding timestamps are preserved exactly, not snapped to an assumed 8h
+  schedule. A BTC/ETH completeness guard rejects empty coverage, edge gaps and
+  intervals above 8h plus 1 second of API timestamp tolerance. Missing periods
+  are never interpolated or replaced with zero. This guard is not a
+  reconstruction of every historical exchange funding-policy change.
+- Capital/caps/weights/costs stay as specified above: 1,000 USDT, Spot 60%,
+  Perp **notional** 30%, isolated 3x, reserve at least 10%. Spot uses ATR sizing;
+  Perp uses fixed coin budgets on `min(initial capital, current equity)`.
+- Spot remains Donchian 30/8 + native 1d EMA50/slope and 10% emergency stop.
+- Perp longs: closed 4h close above highs of the preceding 30 bars, closed
+  native 1d close > EMA50 > previous EMA50. Shorts mirror lows/downtrend.
+  Exit on the opposite Donchian 8-bar channel, using only closed bars.
+- Compare stop distance 1% with **2 × ATR14 / entry price**. ATR14 is the
+  existing simple mean of true ranges, not Wilder smoothing. ATR distance is
+  frozen at entry, not trailing; invalid distances outside (0, 100%) block entry.
+- Six runs: both Perp stops × daily loss 3%/5%, plus two Spot-only controls
+  with the same 60% cap and daily limits. All use terminal DD 10%.
+
+### Execution conventions and evidence
+
+Signal orders fill at the next native contract/Spot open. Perp protective stops
+use **contract-price OHLC**, not mark-price: a gap fills at open, otherwise a
+touch fills at the fixed stop. Touch detection is booked at Binance native
+`closeTime` (end-exclusive minus 1ms); signal availability stays at the next
+boundary. This keeps a 20:00 candle's closing loss in its original UTC day.
+No invented intrabar detection time, trailing stop, pyramiding, or immediate
+reentry at the boundary following a stop is used.
+
+All same-time marks/funding are batched before risk checks. Actual settlements
+precede same-time exits/entries. Positions touched intrabar exist in this model
+until close-time detection, so funding around a stop may differ from real fills.
+Mark-price values unrealized Perp PnL; contract price supplies executions.
+Shared DD samples open/close, funding and costs, not coincident intrabar lows.
+
+Daily loss flattens at the next native open and resumes only on/after the next
+UTC day, flat and DD-safe. DD is terminal; equity peak never resets. Window-end
+closure is explicit. Gaps and exit costs can exceed thresholds. Exhausted
+isolated collateral invalidates full net-return metrics because exact exchange
+liquidation is not modeled. Ideal fractional fills, fixed fee assumptions and
+cash-charged slippage do not reproduce historical Binance Demo execution.
+
+Outputs include `spot-inputs.json`, `perp-inputs.json`, initial raw collection
+snapshots, six report bundles and `comparison.json` / `comparison.md`.
+Failures preserve inputs and `collection-error.json`; they do not produce a
+full-return study. Source/snapshot hashes are checked, configs round-trip through
+JSON, and every published equity/trade/event series must match offline reruns.
+Allocation order is canonical to make Decimal arithmetic reproducible.
+
+Reports show signed funding, fees/slippage, per-market/coin and long/short
+contributions, margin/exposure, halts and four continuous six-month periods.
+Machine timestamps stay UTC; `comparison.md` shows the window in UTC+7.
+Compare mixed returns to paired 60% Spot controls, not the preceding 65% Spot
+study. Any `economic_check_only=pass` is research-only, never a gate activation.
+
+### Accepted local research evidence — 2026-10-03
+
+Final evaluator: `historical-mixed-quant-v1.1` (native closeTime / UTC-day
+attribution). Authoritative study:
+`~/.local/state/aigorithmic-trading/reports/historical-mixed-20261003-v1-1-final/`.
+Earlier collection/debug runs are retained as preliminary evidence, not accepted
+comparison results. No source data was deleted or overwritten.
+
+| Portfolio | Perp stop | Daily loss | Net return | Observed DD | Trades | Research check |
+|---|---|---:|---:|---:|---:|---|
+| Spot+Perp | 1% | 3% | 17.5487% | 10.2273% | 293 | reject |
+| Spot+Perp | 1% | 5% | 16.6008% | 10.0581% | 293 | reject |
+| Spot+Perp | ATR14 × 2 | 3% | 0.7384% | 10.0016% | 78 | reject |
+| Spot+Perp | ATR14 × 2 | 5% | 0.6340% | 10.0949% | 75 | reject |
+| Spot-only control | — | 3% | 29.2802% | 7.9954% | 182 | pass |
+| Spot-only control | — | 5% | 29.2802% | 7.9954% | 182 | pass |
+
+Returns are after fees, assumed slippage and funding over the entire 24-month
+account window. All four mixed accounts hit terminal DD and then remain idle:
+fixed-stop runs halt in April 2026; ATR runs halt in January/February 2025.
+The Spot controls trade through the full window without a daily or terminal halt.
+The research result rejects these particular added-Perp configurations; it is
+not evidence against the current Jev-based Perp strategy, which was not replayed.
+
+Each Perp coin has 4,380 contract/mark bars plus warmup, 790 native daily bars
+including warmup, and 2,190 actual funding settlements. The largest funding
+interval is 28,800.016 seconds, within the explicit 1-second timestamp tolerance.
+All six summaries and full journals match deterministic offline reruns.
+Source SHA256 remains
+`63a099e3fdd67d9a46578d919578bc7d9231d753babc4dcf26326a02986efbb5`.
+Entry caps are not forced continuous rebalancing limits: price moves and equity
+changes can push observed notional/margin percentages above entry caps.
