@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+import re
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -24,9 +25,21 @@ class PortfolioConfig(FrozenModel):
     max_drawdown: Decimal = Field(default=Decimal(".10"), gt=0, lt=1)
     exit_window: Literal[6, 8, 10] = 8
     trend_filter: bool = False
+    weights: dict[str, Decimal] = Field(default_factory=lambda: dict(WEIGHTS))
+    entry_cap: Decimal = Field(default=CAP, gt=0, le=1)
 
     _times = field_validator("start", "end")(utc)
-    _numbers = field_validator("capital", "daily_loss", "max_drawdown")(positive_policy_number)
+    _numbers = field_validator("capital", "daily_loss", "max_drawdown", "entry_cap")(positive_policy_number)
+
+    @field_validator("weights")
+    @classmethod
+    def valid_weights(cls, value):
+        if not 1 <= len(value) <= 10 or any(
+            not re.fullmatch(r"[A-Z0-9]{2,20}USDT", symbol) or not weight.is_finite() or not ZERO < weight <= ONE
+            for symbol, weight in value.items()
+        ) or sum(value.values()) != ONE:
+            raise ValueError("weights require canonical USDT symbols, positive fractions summing to one")
+        return value
 
     @model_validator(mode="after")
     def window(self):
@@ -51,15 +64,16 @@ class PortfolioBook:
         self.config = config
         self.cash = self.peak = self.day_start = self.last_equity = config.capital
         self.day = config.start.date()
-        self.positions = {symbol: Position() for symbol in sorted(WEIGHTS)}
+        self.weights = dict(config.weights)
+        self.positions = {symbol: Position() for symbol in sorted(self.weights)}
         self.events, self.trades, self.curve = [], [], []
         self.fees = self.slippage = self.max_drawdown = self.max_exposure = ZERO
         self.halted, self.halt_reason = False, None
 
     def equity(self, marks):
-        if set(marks) != set(WEIGHTS) or any(not p.is_finite() or p <= 0 for p in marks.values()):
-            raise ValueError("all three finite positive marks are required")
-        return self.cash + sum(self.positions[s].quantity * marks[s] for s in WEIGHTS)
+        if set(marks) != set(self.weights) or any(not p.is_finite() or p <= 0 for p in marks.values()):
+            raise ValueError("all configured finite positive marks are required")
+        return self.cash + sum(self.positions[s].quantity * marks[s] for s in self.weights)
 
     def event(self, at, kind, reason, **values):
         self.events.append({"at": utc(at).isoformat(), "kind": kind, "reason": reason, **values})
@@ -68,7 +82,7 @@ class PortfolioBook:
         equity = self.equity(marks)
         self.peak = max(self.peak, equity)
         self.max_drawdown = max(self.max_drawdown, ONE - equity / self.peak)
-        exposure = sum(self.positions[s].quantity * marks[s] for s in WEIGHTS)
+        exposure = sum(self.positions[s].quantity * marks[s] for s in self.weights)
         self.max_exposure = max(self.max_exposure, exposure / equity if equity > 0 else ZERO)
         self.last_equity = equity
         self.curve.append({"at": utc(at).isoformat(), "stage": stage,
@@ -95,7 +109,7 @@ class PortfolioBook:
 
     def enter_batch(self, at, marks, multipliers):
         equity = self.equity(marks)
-        if not set(multipliers) <= set(WEIGHTS) or any(
+        if not set(multipliers) <= set(self.weights) or any(
             not m.is_finite() or not ZERO <= m <= ONE for m in multipliers.values()
         ):
             raise ValueError("invalid entry multipliers")
@@ -104,13 +118,13 @@ class PortfolioBook:
                 self.event(at, "entry_blocked", "portfolio_loss_limit", symbol=symbol)
             return
         base = min(self.config.capital, equity)
-        exposure = sum(self.positions[s].quantity * marks[s] for s in WEIGHTS)
-        requests = {s: base * CAP * WEIGHTS[s] * multipliers[s]
+        exposure = sum(self.positions[s].quantity * marks[s] for s in self.weights)
+        requests = {s: base * self.config.entry_cap * self.weights[s] * multipliers[s]
                     for s in sorted(multipliers) if not self.positions[s].quantity and multipliers[s] > 0}
         total = sum(requests.values(), ZERO)
         if not total:
             return
-        available = max(ZERO, min(base * CAP - exposure, self.cash / (ONE + FEE + SLIP)))
+        available = max(ZERO, min(base * self.config.entry_cap - exposure, self.cash / (ONE + FEE + SLIP)))
         scale = min(ONE, available / total)
         for symbol, requested in requests.items():
             notional = requested * scale
@@ -164,7 +178,7 @@ class PortfolioBook:
         if self.halted and self.halt_reason == reason:
             return
         self.halted, self.halt_reason = True, reason
-        for symbol in sorted(WEIGHTS):
+        for symbol in sorted(self.weights):
             self.close(symbol, at, marks[symbol], reason)
         equity = self.observe(at, marks, stage="risk_flatten")
         if equity <= self.peak * (ONE - self.config.max_drawdown):

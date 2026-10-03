@@ -1,4 +1,4 @@
-# Spot portfolio research: BTC / ETH / SOL
+# Spot portfolio research: three-coin grid and five-coin confirmation
 
 Offline research only. This runner does not register candidates, update gates,
 start soak, call Jev/LLM, or access execution credentials. It does not run from
@@ -26,7 +26,23 @@ complete. The final verified backup is frozen before any simulation starts.
 Collection errors fail the study; partial artifacts remain for inspection and a
 retry must use a new output directory.
 
-## Locked experiment
+## Five-coin confirmation preset
+
+Add `--preset five-coin-confirmation` to the command above to run only the two
+previously passing settings: Donchian 30/8 plus native 1d EMA50 trend filter,
+DD 10%, and daily loss 3%/5%. The default remains `three-coin-grid` (16 runs).
+
+The five-coin preset uses BTC/ETH/SOL/NEAR/ZEC weights 40/20/20/10/10 and total
+entry cap 65%. On the initial 1,000 USDT, maximum entry targets before ATR are
+260/130/130/65/65 USDT. Sizing, fees, stops, shared risk sampling/reset, window,
+and no-transfer/no-rebalance assumptions are unchanged.
+
+Weights and entry cap are now explicit validated `PortfolioConfig` fields.
+Weights require canonical USDT symbols, finite positive fractions summing exactly
+to one; cap must be finite and within (0, 1]. Defaults preserve all original
+three-coin results and serialized identities. No runtime allocation is changed.
+
+## Locked default experiment (three coins)
 
 - One 1,000 USDT cash account; BTC/ETH/SOL weights 50/25/25.
 - Total entry cap 60% of `min(initial capital, current equity)`, divided 30/15/15%.
@@ -102,3 +118,35 @@ Self-review covered accounting/risk correctness, input/provenance validation,
 runtime isolation, deterministic ordering, and bounded data collection. No
 existing runtime module, schema, provider, gate, registered rule, or campaign
 was changed; no VPS deployment, push, merge, activation, or orders were performed.
+
+## Five-coin verification — 2026-10-03
+
+- Full regression: **950 passed**, 18 existing dependency warnings; focused suite
+  **32 passed**. Self-review checked dynamic accounting/marks, allocation validation,
+  risk loops, report identity and research/runtime isolation.
+- Re-executed all 16 archived three-coin configurations from their original
+  configs: result IDs and summaries remain unchanged.
+- Both new full-window runs were reproduced from their saved configs with
+  identical IDs and summaries; original source and frozen evidence verified again.
+- Original source SHA256 before/after:
+  `704358d0f48f97e6fa28bd2d2129b567e8d5caac318f04aff8bea6493874385b`.
+- Frozen five-coin evidence SHA256:
+  `63a099e3fdd67d9a46578d919578bc7d9231d753babc4dcf26326a02986efbb5`.
+- Only 423 missing native daily bars each for NEAR and ZEC were collected into
+  the private copy. All five coins have 4,380 replay bars plus warmup.
+- Artifacts: `~/.local/state/aigorithmic-trading/reports/spot-portfolio-20261003-five-65pct/`.
+
+Both risk settings pass the research check with identical economics: net return
+31.710161%, observed DD 8.522111%, 182 closed trades, final equity 1,317.101605
+USDT. They complete all 730 days without daily pause or terminal halt. The
+observed maximum exposure is 59.297898%; 65% is an entry ceiling, not mandatory
+deployment. Exchange fees are 40.320597 USDT and assumed slippage 20.160299 USDT.
+
+Net PnL contributions: BTC 98.151293, ETH 38.266714, SOL 73.869952, NEAR 19.432623,
+ZEC 87.381023 USDT, reconciling to total net PnL 317.101605 USDT. Consecutive
+six-month returns are +4.474920%, +15.968250%, -3.676853%, +12.859329%.
+
+This is still ex-post research, not an official gate or independent holdout.
+Relative to the old three-coin portfolio, both weights and entry cap changed;
+the return improvement cannot be attributed solely to adding coins. No existing
+registered rule, gate, campaign, provider, live database, or VPS was changed.

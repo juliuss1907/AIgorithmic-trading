@@ -12,7 +12,7 @@ from intraday.backups import create_backup, verify_backup
 from intraday.replay_v2.artifacts import _write, publish_report, read_report
 from intraday.replay_v2.contracts import Candle
 from intraday.replay_v2.metrics import fingerprint
-from intraday.replay_v2.portfolio_book import WEIGHTS, PortfolioConfig
+from intraday.replay_v2.portfolio_book import PortfolioConfig
 from intraday.replay_v2.portfolio_research import DAY_MS, daily_points, simulate_portfolio, validate_inputs
 from intraday.spot_signal import BinanceSpotDailyClient
 from intraday.store import IntradayStore
@@ -20,6 +20,21 @@ from intraday.store import IntradayStore
 
 START = datetime(2024, 10, 2, tzinfo=timezone.utc)
 END = datetime(2026, 10, 2, tzinfo=timezone.utc)
+FIVE_WEIGHTS = {"BTCUSDT": ".40", "ETHUSDT": ".20", "SOLUSDT": ".20",
+                "NEARUSDT": ".10", "ZECUSDT": ".10"}
+
+
+def study_configs(start, end, preset):
+    if preset == "five-coin-confirmation":
+        return [("30/8+EMA50-1D", PortfolioConfig(start=start, end=end, trend_filter=True,
+                    daily_loss=daily, max_drawdown=".10", weights=FIVE_WEIGHTS, entry_cap=".65"))
+                for daily in (".03", ".05")]
+    if preset != "three-coin-grid":
+        raise ValueError("unknown portfolio study preset")
+    setups = (("30/8", 8, False), ("30/6", 6, False), ("30/10", 10, False), ("30/8+EMA50-1D", 8, True))
+    return [(name, PortfolioConfig(start=start, end=end, exit_window=exit_window, trend_filter=trend,
+                                  daily_loss=daily, max_drawdown=dd))
+            for name, exit_window, trend in setups for dd in (".08", ".10") for daily in (".03", ".05")]
 
 
 def file_hash(path):
@@ -29,7 +44,7 @@ def file_hash(path):
 
 def load_inputs(store, config):
     candles, daily = {}, {}
-    for symbol in sorted(WEIGHTS):
+    for symbol in sorted(config.weights):
         candles[symbol] = tuple(Candle.from_row(row) for row in store.list_asset_candles(
             symbol, "4h", as_of=config.end) if row[0] >= int((config.start-timedelta(hours=124)).timestamp()*1000))
         daily[symbol] = tuple(row for row in store.list_asset_candles(symbol, "1d", as_of=config.end)
@@ -41,7 +56,7 @@ def collect_missing_daily(store, config, client):
     collected = []
     start = int((config.start.replace(hour=0)-timedelta(days=60)).timestamp()*1000)
     end = int(config.end.replace(hour=0).timestamp()*1000)
-    for symbol in sorted(WEIGHTS):
+    for symbol in sorted(config.weights):
         existing = {int(row[0]) for row in store.list_asset_candles(symbol, "1d")}
         missing = [t for t in range(start, end, DAY_MS) if t not in existing]
         ranges = []
@@ -66,9 +81,11 @@ def collect_missing_daily(store, config, client):
 
 
 def comparison_markdown(receipt):
-    lines = ["# BTC / ETH / SOL portfolio research", "",
+    title = " / ".join(s.removesuffix("USDT") for s in receipt["weights"])
+    weights = ", ".join(f"{s.removesuffix('USDT')}={float(w)*100:g}%" for s, w in receipt["weights"].items())
+    lines = [f"# {title} portfolio research", "",
         "Research only: no activation, official gate, Jev/LLM replay, or independent holdout.", "",
-        "Shared 1,000 USDT; weights 50/25/25; entry cap 60%, ATR14; native 4h signals.",
+        f"Shared {receipt['capital']:g} USDT; weights {weights}; entry cap {receipt['entry_cap_pct']:g}%, ATR14; native 4h signals.",
         "10bps fee + 5bps assumed slippage each fill; 10% per-coin emergency stop.",
         "Portfolio risk sampled at 4h open/close and after costs; intrabar DD unknown.", "",
         "| Setup | Daily loss | DD limit | Net return | Observed DD | Trades | Research | Terminal halt UTC+7 |",
@@ -87,14 +104,15 @@ def comparison_markdown(receipt):
 
 
 def run_study(database, report_root, *, start=START, end=END, collect=False, client_factory=BinanceSpotDailyClient,
-              progress=None):
-    config = PortfolioConfig(start=start, end=end)
+              progress=None, preset="three-coin-grid"):
+    variants = study_configs(start, end, preset)
+    config = variants[0][1]
     source = Path(database).resolve()
     verified = verify_backup(source)
     before = file_hash(source)
     source_store = IntradayStore(source, read_only=True)
     candles, daily = load_inputs(source_store, config)
-    validate_inputs(config, candles, daily)  # Verify all 4h data before creating artifacts.
+    validate_inputs(config.model_copy(update={"trend_filter": False}), candles, daily)
     root = Path(report_root).resolve()
     root.mkdir(parents=True, mode=0o700, exist_ok=False)
     working = root/"research.sqlite3"
@@ -117,31 +135,26 @@ def run_study(database, report_root, *, start=START, end=END, collect=False, cli
     if progress:
         progress({"phase": "evidence_ready", "collected": collected, "evidence": str(evidence_source)})
     results = []
-    variants = (("30/8", 8, False), ("30/6", 6, False), ("30/10", 10, False), ("30/8+EMA50-1D", 8, True))
-    for name, exit_window, trend in variants:
-        for dd in (".08", ".10"):
-            for daily_loss in (".03", ".05"):
-                variant = PortfolioConfig(start=config.start, end=config.end, capital=config.capital,
-                    exit_window=exit_window, trend_filter=trend, daily_loss=daily_loss, max_drawdown=dd)
-                report = simulate_portfolio(variant, candles, daily)
-                report["inputs"]["evidence_sha256"] = frozen
-                saved = publish_report(root/"reports", report)
-                loaded = read_report(root/"reports", saved["run_id"])
-                if loaded["result_id"] != report["result_id"]:
-                    raise ValueError("published portfolio report identity mismatch")
-                item = {"variant": name, "daily_loss_pct": float(variant.daily_loss*100),
-                    "max_drawdown_pct": float(variant.max_drawdown*100),
-                    "run_id": saved["run_id"], "result_id": report["result_id"],
-                    "dataset_checksum": report["inputs"]["dataset_checksum"], "summary": report["summary"]}
-                results.append(item)
-                if progress:
-                    progress({"phase": "replay_complete", "variant": name,
-                        "daily_loss_pct": item["daily_loss_pct"], "dd_limit_pct": item["max_drawdown_pct"],
-                        **{k: item["summary"][k] for k in ("net_return_pct", "max_drawdown_known_pct", "closed_trades", "economic_check_only")}})
+    for name, variant in variants:
+        report = simulate_portfolio(variant, candles, daily)
+        report["inputs"]["evidence_sha256"] = frozen
+        saved = publish_report(root/"reports", report)
+        loaded = read_report(root/"reports", saved["run_id"])
+        if loaded["result_id"] != report["result_id"]:
+            raise ValueError("published portfolio report identity mismatch")
+        item = {"variant": name, "daily_loss_pct": float(variant.daily_loss*100),
+            "max_drawdown_pct": float(variant.max_drawdown*100),
+            "run_id": saved["run_id"], "result_id": report["result_id"],
+            "dataset_checksum": report["inputs"]["dataset_checksum"], "summary": report["summary"]}
+        results.append(item)
+        if progress:
+            progress({"phase": "replay_complete", "variant": name,
+                "daily_loss_pct": item["daily_loss_pct"], "dd_limit_pct": item["max_drawdown_pct"],
+                **{k: item["summary"][k] for k in ("net_return_pct", "max_drawdown_known_pct", "closed_trades", "economic_check_only")}})
     after, after_evidence = file_hash(source), file_hash(evidence_source)
     if before != after or frozen != after_evidence:
         raise ValueError("immutable evidence changed during portfolio research")
-    if len({r["result_id"] for r in results}) != 16 or len({r["dataset_checksum"] for r in results}) != 1:
+    if len({r["result_id"] for r in results}) != len(variants) or len({r["dataset_checksum"] for r in results}) != 1:
         raise ValueError("portfolio grid identities or shared dataset mismatch")
     receipt = {"research_only": True, "activation_allowed": False, "official_gate_eligible": False,
         "window": {"start": config.start.isoformat(), "end": config.end.isoformat()},
@@ -149,7 +162,8 @@ def run_study(database, report_root, *, start=START, end=END, collect=False, cli
         "source_hash_after": after, "source_unchanged": True, "evidence": evidence,
         "evidence_unchanged": True, "collection": collected,
         "bars_per_coin": int((config.end-config.start)/timedelta(hours=4)), "coverage_per_coin": 1,
-        "capital": 1000, "weights": {s: str(w) for s, w in WEIGHTS.items()}, "entry_cap_pct": 60,
+        "capital": float(config.capital), "weights": {s: str(w) for s, w in config.weights.items()},
+        "entry_cap_pct": float(config.entry_cap*100), "preset": preset,
         "results": results}
     _write(root/"comparison.json", json.dumps(receipt, indent=2, allow_nan=False))
     _write(root/"comparison.md", comparison_markdown(receipt))

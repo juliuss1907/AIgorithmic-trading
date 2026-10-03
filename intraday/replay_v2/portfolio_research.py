@@ -1,4 +1,4 @@
-"""Offline BTC/ETH/SOL portfolio study; no lifecycle writes or model calls."""
+"""Offline weighted Spot portfolio study; no lifecycle writes or model calls."""
 
 from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
@@ -7,7 +7,7 @@ from decimal import Decimal
 from intraday.contracts import SpotRuleParameters
 from intraday.replay_v2.contracts import Candle
 from intraday.replay_v2.metrics import fingerprint
-from intraday.replay_v2.portfolio_book import CAP, FEE, SLIP, STOP, WEIGHTS, PortfolioBook, PortfolioConfig
+from intraday.replay_v2.portfolio_book import STOP, PortfolioBook, PortfolioConfig
 from intraday.replay_v2.study import months_before
 from intraday.spot_signal import evaluate_donchian
 
@@ -50,11 +50,11 @@ def daily_points(rows):
 
 
 def validate_inputs(config, candles, daily):
-    if set(candles) != set(WEIGHTS):
-        raise ValueError("4h inputs require BTC, ETH and SOL")
+    if set(candles) != set(config.weights):
+        raise ValueError("4h inputs require every configured portfolio asset")
     timeline = tuple(config.start + i * WIDTH for i in range(int((config.end-config.start)/WIDTH)))
     prepared, trends = {}, {}
-    for symbol in sorted(WEIGHTS):
+    for symbol in sorted(config.weights):
         rows = tuple(c for c in candles[symbol] if c.available_at <= config.end)
         if any(a.available_at != b.opened_at for a, b in zip(rows, rows[1:])):
             raise ValueError(f"{symbol}: 4h history gap or duplicate")
@@ -96,7 +96,7 @@ def six_month_summary(config, curve):
 def portfolio_result(config, candles, daily, book):
     net = book.cash-config.capital  # All positions have been closed at window end.
     contributions = {}
-    for symbol in sorted(WEIGHTS):
+    for symbol in sorted(config.weights):
         trades = [t for t in book.trades if t["symbol"] == symbol]
         contributions[symbol] = {"closed_trades": len(trades), **{
             name: float(sum((t[name] for t in trades), Decimal(0)))
@@ -106,7 +106,7 @@ def portfolio_result(config, candles, daily, book):
     for event in book.events:
         if event["kind"] == "entry":
             base = Decimal(event["batch_base_equity"])
-            maximum = base*CAP*WEIGHTS[event["symbol"]]
+            maximum = base*config.entry_cap*config.weights[event["symbol"]]
             if not 0 < Decimal(event["notional"]) <= Decimal(event["requested_notional"]) <= maximum:
                 raise ValueError("per-coin allocation violation")
     blockers = []
@@ -119,11 +119,12 @@ def portfolio_result(config, candles, daily, book):
     halts = [e for e in book.events if e["kind"] == "halt"]
     entry_times = [e["at"] for e in book.events if e["kind"] == "entry"]
     terminal = next((e["at"] for e in halts if e["reason"] == "max_drawdown"), None)
-    config_payload = {**config.model_dump(mode="json"), "symbol": "BTC+ETH+SOL", "market": "spot",
-        "weights": {s: str(w) for s, w in WEIGHTS.items()}, "entry_cap": str(CAP),
+    config_payload = {**config.model_dump(mode="json"),
+        "symbol": "+".join(s.removesuffix("USDT") for s in sorted(config.weights)), "market": "spot",
+        "weights": {s: str(w) for s, w in config.weights.items()}, "entry_cap": str(config.entry_cap),
         "entry_window": 30, "atr_period": 14, "fee_bps": 10, "slippage_bps": 5,
         "spot_stop_pct": 10, "risk_sampling": "native_4h_open_close_and_fill_costs"}
-    input_hash = fingerprint({"candles": {s: [c.row() for c in candles[s]] for s in sorted(WEIGHTS)},
+    input_hash = fingerprint({"candles": {s: [c.row() for c in candles[s]] for s in sorted(config.weights)},
                               "native_daily": daily})
     result_id = fingerprint({"version": VERSION, "config": config_payload, "data": input_hash})
     summary = {"initial_capital": float(config.capital), "final_equity_known": float(book.cash),
@@ -159,16 +160,16 @@ def portfolio_result(config, candles, daily, book):
 def simulate_portfolio(config, candles, daily):
     timeline, prepared, trends = validate_inputs(config, candles, daily)
     rule = SpotRuleParameters(entry_window=30, exit_window=config.exit_window, atr_period=14)
-    indexes = {s: {c.opened_at: i for i, c in enumerate(prepared[s])} for s in WEIGHTS}
-    raw = {s: [c.row() for c in prepared[s]] for s in WEIGHTS}
+    indexes = {s: {c.opened_at: i for i, c in enumerate(prepared[s])} for s in config.weights}
+    raw = {s: [c.row() for c in prepared[s]] for s in config.weights}
     book = PortfolioBook(config)
     for at in timeline:
-        bars = {s: prepared[s][indexes[s][at]] for s in WEIGHTS}
-        marks = {s: bars[s].open for s in WEIGHTS}
+        bars = {s: prepared[s][indexes[s][at]] for s in config.weights}
+        marks = {s: bars[s].open for s in config.weights}
         book.advance_day(at)
         book.enforce_risk(at, marks)
         just_closed, observations = set(), {}
-        for symbol in sorted(WEIGHTS):
+        for symbol in sorted(config.weights):
             index = indexes[symbol][at]
             observations[symbol] = evaluate_donchian(raw[symbol][index-31:index], rule)
             position = book.positions[symbol]
@@ -180,7 +181,7 @@ def simulate_portfolio(config, candles, daily):
                 just_closed.add(symbol)
         book.enforce_risk(at, marks)
         requests = {}
-        for symbol in sorted(WEIGHTS):
+        for symbol in sorted(config.weights):
             obs = observations[symbol]
             if not obs.entry or symbol in just_closed or book.positions[symbol].quantity:
                 continue
@@ -195,13 +196,13 @@ def simulate_portfolio(config, candles, daily):
         book.enter_batch(at, marks, requests)
         book.enforce_risk(at, marks)
         close_at = at + WIDTH - timedelta(milliseconds=1)
-        close_marks = {s: bars[s].close for s in WEIGHTS}
-        for symbol in sorted(WEIGHTS):
+        close_marks = {s: bars[s].close for s in config.weights}
+        for symbol in sorted(config.weights):
             position = book.positions[symbol]
             if position.quantity and bars[symbol].low <= position.entry_price*(1-STOP):
                 book.close(symbol, close_at, position.entry_price*(1-STOP), "emergency_stop")
         book.enforce_risk(close_at, close_marks)
-    for symbol in sorted(WEIGHTS):
+    for symbol in sorted(config.weights):
         book.close(symbol, close_at, close_marks[symbol], "window_end")
     book.enforce_risk(close_at, close_marks)
     return portfolio_result(config, prepared, daily, book)
@@ -212,12 +213,15 @@ def main(argv=None):
     import json
     from intraday.replay_v2.portfolio_study import run_study
 
-    parser = argparse.ArgumentParser(description="Research-only BTC/ETH/SOL 16-variant Spot portfolio grid")
+    parser = argparse.ArgumentParser(description="Research-only weighted Spot portfolio study")
     parser.add_argument("--database", required=True, help="Verified immutable backup with sibling manifest")
     parser.add_argument("--report-root", required=True, help="New private study directory; never overwritten")
     parser.add_argument("--collect-missing-1d", action="store_true", help="Append missing public daily bars to a private copy")
+    parser.add_argument("--preset", choices=("three-coin-grid", "five-coin-confirmation"), default="three-coin-grid",
+                        help="Legacy 16-run grid or five-coin 65%% confirmation with the two passing settings")
     arguments = parser.parse_args(argv)
     receipt = run_study(arguments.database, arguments.report_root, collect=arguments.collect_missing_1d,
+                        preset=arguments.preset,
                         progress=lambda item: print(json.dumps(item), flush=True))
     print(json.dumps({"comparison": str(arguments.report_root)+"/comparison.json", "runs": len(receipt["results"]),
                       "source_unchanged": receipt["source_unchanged"]}), flush=True)

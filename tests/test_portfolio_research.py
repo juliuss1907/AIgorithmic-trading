@@ -10,6 +10,8 @@ from intraday.replay_v2.contracts import Candle
 START = datetime(2024, 10, 2, tzinfo=timezone.utc)
 MARKS = {symbol: Decimal(100) for symbol in ("BTCUSDT", "ETHUSDT", "SOLUSDT")}
 ALL = {symbol: Decimal(1) for symbol in MARKS}
+FIVE_WEIGHTS = {"BTCUSDT": ".40", "ETHUSDT": ".20", "SOLUSDT": ".20",
+                "NEARUSDT": ".10", "ZECUSDT": ".10"}
 
 
 def config(**changes):
@@ -265,3 +267,57 @@ def test_missing_daily_collection_requests_only_missing_ranges(tmp_path):
     assert len(calls) == 3 and all(c[1] == "1d" for c in calls)
     assert all(c[2] == all_rows[c[0]][10][0] and c[3] == all_rows[c[0]][12][0]-1 for c in calls)
     assert all(r["inserted_bars"] == 2 for r in collected)
+
+
+def test_five_coin_budget_is_65_percent_with_no_transfer_and_conserved_cash():
+    cfg = config(weights=FIVE_WEIGHTS, entry_cap=".65")
+    marks = {s: Decimal(100) for s in cfg.weights}
+    book = PortfolioBook(cfg)
+    book.enter_batch(START, marks, {s: Decimal(1) for s in cfg.weights})
+    assert {s: p.quantity*100 for s, p in book.positions.items()} == {
+        "BTCUSDT": 260, "ETHUSDT": 130, "SOLUSDT": 130, "NEARUSDT": 65, "ZECUSDT": 65}
+    assert book.cash == Decimal("349.025")
+    assert book.equity(marks) == Decimal("999.025")
+    for symbol in cfg.weights:
+        book.close(symbol, START, Decimal(100), "test")
+    assert book.cash == Decimal("998.050")
+    book = PortfolioBook(cfg)
+    book.enter_batch(START, marks, {"ZECUSDT": Decimal(".5")})
+    assert book.positions["ZECUSDT"].quantity*100 == Decimal("32.5")
+    assert book.positions["BTCUSDT"].quantity == 0
+
+
+@pytest.mark.parametrize("changes", [
+    {"weights": {}}, {"weights": {"BTCUSDT": ".9"}},
+    {"weights": {"BTCUSDT": "NaN"}}, {"weights": {"BTCUSDT": 2, "ETHUSDT": -1}},
+    {"weights": {"btc": 1}}, {"entry_cap": 0}, {"entry_cap": "Infinity"},
+])
+def test_invalid_portfolio_allocation_is_rejected(changes):
+    with pytest.raises(ValueError):
+        config(**changes)
+
+
+def test_five_coin_replay_requires_all_inputs_and_config_roundtrips():
+    from intraday.replay_v2.portfolio_research import simulate_portfolio
+
+    cfg = config(end=START+timedelta(hours=4), weights=FIVE_WEIGHTS, entry_cap=".65", trend_filter=True)
+    data = {s: candles()["BTCUSDT"] for s in cfg.weights}
+    daily = {s: daily_rows()["BTCUSDT"] for s in cfg.weights}
+    report = simulate_portfolio(cfg, data, daily)
+    assert report["summary"]["closed_trades"] == 5
+    assert report["summary"]["net_pnl"] == pytest.approx(-1.95)
+    restored = PortfolioConfig.model_validate({k: report["config"][k] for k in PortfolioConfig.model_fields})
+    assert simulate_portfolio(restored, dict(reversed(list(data.items()))), daily) == report
+    assert report["config"]["entry_cap"] == "0.65"
+    with pytest.raises(ValueError, match="4h"):
+        simulate_portfolio(cfg, {s: c for s, c in data.items() if s != "ZECUSDT"}, daily)
+
+
+def test_five_coin_preset_has_only_two_previously_passing_risk_settings():
+    from intraday.replay_v2.portfolio_study import study_configs
+
+    variants = study_configs(START, START+timedelta(hours=4), "five-coin-confirmation")
+    assert len(variants) == 2
+    assert {cfg.daily_loss for _, cfg in variants} == {Decimal(".03"), Decimal(".05")}
+    assert all(cfg.trend_filter and cfg.exit_window == 8 and cfg.max_drawdown == Decimal(".10")
+               and cfg.entry_cap == Decimal(".65") and len(cfg.weights) == 5 for _, cfg in variants)
