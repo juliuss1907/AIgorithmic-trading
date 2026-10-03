@@ -150,21 +150,43 @@ def main(argv=None):
     parser.add_argument("--perp-inputs", help="Immutable historical Futures input bundle for offline reproduction")
     parser.add_argument("--collect-trailing", action="store_true", help="Collect native H1/M30 contract bars for trailing-cadence research only")
     parser.add_argument("--trailing-inputs", help="Frozen H1/M30 supplemental bundle for offline trailing-cadence reproduction")
-    parser.add_argument("--start", type=datetime.fromisoformat, help="Trailing-cadence only: aware ISO window start, default 2024-10-02 UTC")
-    parser.add_argument("--end", type=datetime.fromisoformat, help="Trailing-cadence only: aware ISO window end, default 2026-10-02 UTC")
-    parser.add_argument("--preset", choices=("baseline", "stop-extension", "perp-daily-policy", "perp-daily-compounding", "perp-realized-trailing", "perp-trailing-cadence"),
-                        help="Historical-only matrix: baseline (6), stop-extension (8), perp-daily-policy (9), perp-daily-compounding (4), perp-realized-trailing (6), or perp-trailing-cadence (3)")
+    parser.add_argument("--collect-intraday", action="store_true", help="Collect native H1/H4/H8 context and M15 contract/mark inputs")
+    parser.add_argument("--intraday-inputs", help="Frozen intraday bundle for offline three-case reproduction")
+    parser.add_argument("--reuse-perp-inputs", help="During intraday collection: reuse frozen H4 history; collect only missing warmup")
+    parser.add_argument("--reuse-trailing-inputs", help="During intraday collection: reuse frozen H1 history; collect only missing warmup")
+    parser.add_argument("--baseline-reference", help="Existing A report directory; require exact control identity/summary/three journals")
+    parser.add_argument("--start", type=datetime.fromisoformat, help="Cadence/timeframe only: aware ISO start; intraday defaults 2024-10-29 UTC")
+    parser.add_argument("--end", type=datetime.fromisoformat, help="Cadence/timeframe only: aware ISO end, default 2026-10-02 UTC")
+    parser.add_argument("--preset", choices=("baseline", "stop-extension", "perp-daily-policy", "perp-daily-compounding", "perp-realized-trailing", "perp-trailing-cadence", "perp-intraday-timeframes"),
+                        help="Historical-only matrix: baseline (6), stop-extension (8), perp-daily-policy (9), perp-daily-compounding (4), perp-realized-trailing (6), perp-trailing-cadence (3), or perp-intraday-timeframes (3)")
     parser.add_argument("--drawdown-policy", choices=("terminal", "observe-only", "initial-capital"),
                         help="Historical only: peak DD halt (default), observe DD only, or terminal loss from initial capital")
     args = parser.parse_args(argv)
     progress = lambda item: print(json.dumps(item, allow_nan=False), flush=True)
-    if (args.collect_trailing or args.trailing_inputs or args.start is not None or args.end is not None) and (
+    if (args.collect_trailing or args.trailing_inputs) and (
         args.mode != "historical-quant" or args.preset != "perp-trailing-cadence"):
         parser.error("trailing inputs require historical-quant --preset perp-trailing-cadence")
+    if (args.start is not None or args.end is not None) and (args.mode != 'historical-quant' or
+        args.preset not in {'perp-trailing-cadence', 'perp-intraday-timeframes'}):
+        parser.error('custom window requires a historical cadence or intraday-timeframe preset')
+    if (args.collect_intraday or args.intraday_inputs or args.reuse_perp_inputs or args.reuse_trailing_inputs or
+        args.baseline_reference) and (args.mode != 'historical-quant' or args.preset != 'perp-intraday-timeframes'):
+        parser.error('intraday inputs require historical-quant --preset perp-intraday-timeframes')
     if args.mode == "historical-quant":
         if args.collect_funding or args.collect_perp == bool(args.perp_inputs):
             parser.error("historical-quant requires exactly one of --collect-perp / --perp-inputs; not --collect-funding")
-        if args.preset == "perp-trailing-cadence":
+        if args.preset == 'perp-intraday-timeframes':
+            if args.collect_perp or args.collect_intraday == bool(args.intraday_inputs) or args.drawdown_policy not in (None, 'observe-only'):
+                parser.error('intraday study requires frozen --perp-inputs, one --collect-intraday / --intraday-inputs and observe-only DD')
+            if (args.reuse_perp_inputs or args.reuse_trailing_inputs) and not args.collect_intraday:
+                parser.error('reuse paths require --collect-intraday')
+            from intraday.replay_v2.intraday_study import run_study as run_intraday
+            receipt = run_intraday(args.database, args.report_root, inputs_path=args.perp_inputs,
+                collect_intraday=args.collect_intraday, intraday_inputs_path=args.intraday_inputs,
+                reuse_perp_path=args.reuse_perp_inputs, reuse_trailing_path=args.reuse_trailing_inputs,
+                baseline_reference=args.baseline_reference, progress=progress,
+                **{k:v for k,v in {'start':args.start, 'end':args.end}.items() if v is not None})
+        elif args.preset == "perp-trailing-cadence":
             if args.collect_trailing == bool(args.trailing_inputs) or args.drawdown_policy not in (None, 'observe-only'):
                 parser.error("cadence study requires exactly one --collect-trailing / --trailing-inputs and observe-only DD")
             from intraday.replay_v2.trailing_cadence_study import run_study as run_cadence
