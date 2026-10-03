@@ -157,6 +157,27 @@ uv run python -m intraday.replay_v2.mixed_portfolio_research \
 Historical mode requires exactly one of `--collect-perp` / `--perp-inputs`.
 `--collect-funding` belongs to the recorded-Jev mode; historical collection
 already includes funding. Report roots must be new, never overwritten.
+The default historical `--preset baseline` retains six runs. Select
+`--preset stop-extension` for the eight-run wider-stop experiment:
+
+```bash
+uv run python -m intraday.replay_v2.mixed_portfolio_research \
+  --mode historical-quant --preset stop-extension \
+  --database /absolute/path/to/the-same-verified-backup.sqlite3 \
+  --report-root /absolute/path/to/new-stop-extension-study \
+  --perp-inputs /absolute/path/to/first-study/perp-inputs.json
+```
+
+This preset compares fixed 5% / full size, ATR14 × 3 / full size, and
+ATR14 × 3 / two-thirds size, each with daily loss 3%/5%, plus two Spot controls.
+All retain terminal DD 10%. `HistoricalConfig.perp_stop` supports
+`fixed-1pct`, `atr14-2x`, `fixed-5pct`, `atr14-3x`; `perp_size` supports
+`full` (default) and `two-thirds`. Neither field changes the runtime strategy.
+Two-thirds scales the requested coin notional budget **before** shared
+cash/exposure constraints, not the already-trimmed order. At initial equity
+this targets roughly 100 instead of 150 USDT per Perp coin; fees and sequential
+constraints can reduce fills further. Unused USDT stays cash, not reallocated.
+It is a constant size multiplier, not automatic constant-risk sizing.
 
 ### Dataset and configurations
 
@@ -226,7 +247,7 @@ study. Any `economic_check_only=pass` is research-only, never a gate activation.
 
 ### Accepted local research evidence — 2026-10-03
 
-Final evaluator: `historical-mixed-quant-v1.1` (native closeTime / UTC-day
+Baseline evaluator: `historical-mixed-quant-v1.1` (native closeTime / UTC-day
 attribution). Authoritative study:
 `~/.local/state/aigorithmic-trading/reports/historical-mixed-20261003-v1-1-final/`.
 Earlier collection/debug runs are retained as preliminary evidence, not accepted
@@ -256,3 +277,55 @@ Source SHA256 remains
 `63a099e3fdd67d9a46578d919578bc7d9231d753babc4dcf26326a02986efbb5`.
 Entry caps are not forced continuous rebalancing limits: price moves and equity
 changes can push observed notional/margin percentages above entry caps.
+
+### Wider-stop experiment — 2026-10-03
+
+Evaluator `historical-mixed-quant-v1.2`, preset `stop-extension`, output:
+`~/.local/state/aigorithmic-trading/reports/historical-mixed-20261003-stop5-atr3/`.
+No API calls, Jev/LLM calls, runtime configuration changes or activation.
+Spot's 10% emergency stop and all other signals/costs remain unchanged.
+
+| Perp stop | Perp size | Daily loss | Portfolio net return | Observed DD | Perp trades | Stop exits | Research check |
+|---|---|---:|---:|---:|---:|---:|---|
+| Fixed 5% | Full | 3% | -0.2022% | 10.1928% | 30 | 10 | reject |
+| Fixed 5% | Full | 5% | -0.0769% | 10.0800% | 29 | 9 | reject |
+| ATR14 × 3 | Full | 3% | 0.0184% | 10.1252% | 29 | 9 | reject |
+| ATR14 × 3 | Full | 5% | -0.2243% | 10.3432% | 28 | 9 | reject |
+| ATR14 × 3 | Two-thirds | 3% | -0.7115% | 10.0247% | 38 | 12 | reject |
+| ATR14 × 3 | Two-thirds | 5% | -0.7115% | 10.0247% | 38 | 12 | reject |
+| Spot-only control | — | 3% | 29.2802% | 7.9954% | 0 | 0 | pass |
+| Spot-only control | — | 5% | 29.2802% | 7.9954% | 0 | 0 | pass |
+
+All six mixed accounts breach DD 10%. Full-size accounts halt in January
+2025; two-thirds accounts last until 2025-04-02 02:59:59.999 UTC+7 and then
+remain idle. These are whole-window returns, not 24 months of uninterrupted
+trading. Size reduction postpones the halt but does not produce a passing
+configuration. Daily 3% and 5% two-thirds runs have the same economic result
+but different pause events, hence distinct configurations/identities.
+
+Stop exits fall to about 31–33% of Perp trades, versus 76–77% for the old
+fixed 1% benchmark. Fewer stop exits are **not** sufficient for better returns:
+these Perp sleeves lose approximately 39.73–47.53 USDT net, with negative
+short contributions and positive long contributions over their different
+active windows. This is descriptive, not a causal long-only test. Paired
+Spot controls still return 29.2802%, without a terminal halt.
+
+Baseline fixed 1% returns were 17.5487%/16.6008%, ATR14 × 2 returns
+0.7384%/0.6340% (daily 3%/5% respectively), all rejected DD. Wider stops
+therefore do not improve this particular quantitative Perp setup. Changing
+size changes the sequence of risk halts and trades; it cannot be interpreted
+as a pure stop-distance comparison or proof about current Jev-based Perp.
+
+All eight new summaries and complete equity/trade/event journals reproduce
+offline. Separately replaying the six baseline configurations with the new
+evaluator reproduces every original economic metric and journal exactly;
+only version/config metadata, result identities and the additive stop-count
+summary field change. Source and frozen input SHA256 match the v1.1 study:
+
+- Source: `63a099e3fdd67d9a46578d919578bc7d9231d753babc4dcf26326a02986efbb5`.
+- Spot bundle: `7102d12761db783237fb933359a4bae6fee4398c44f734ff583d7fc976acdf15`.
+- Futures bundle: `5aaee92a2a5450b842e7a8a3499cfd87c485f894df7a403bffeca52cc1a61bfd`.
+
+The private `benchmark-review.md` records the immutable baseline comparison
+and receipt hashes. Neither research pass nor this comparison authorizes
+soak, Demo or real-trading activation.
