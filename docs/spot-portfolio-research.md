@@ -4,6 +4,10 @@ Offline research only. This runner does not register candidates, update gates,
 start soak, call Jev/LLM, or access execution credentials. It does not run from
 the scheduler or dashboard. Single-asset replay remains unchanged.
 
+For the separate short-window Spot + recorded-Jev Perp experiment, see
+[mixed portfolio research](mixed-portfolio-research.md). Its shared 44-hour
+window and 60% Spot cap are not comparable to this 24-month 65% confirmation.
+
 ## Run
 
 ```bash
