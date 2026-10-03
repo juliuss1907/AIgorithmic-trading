@@ -21,7 +21,8 @@ from intraday.spot_signal import evaluate_donchian
 class HistoricalConfig(MixedConfig):
     model_config = ConfigDict(extra='forbid', frozen=True, allow_inf_nan=False, validate_default=True)
     exit_window: Literal[8] = 8
-    perp_stop: Literal['fixed-1pct', 'atr14-2x'] = 'fixed-1pct'
+    perp_stop: Literal['fixed-1pct', 'atr14-2x', 'fixed-5pct', 'atr14-3x'] = 'fixed-1pct'
+    perp_size: Literal['full', 'two-thirds'] = 'full'
 
     @field_validator('weights', 'perp_weights')
     @classmethod
@@ -30,7 +31,7 @@ class HistoricalConfig(MixedConfig):
         return dict(sorted(value.items()))
 
 
-VERSION = 'historical-mixed-quant-v1.1'  # Native closeTime / UTC-day attribution.
+VERSION = 'historical-mixed-quant-v1.2'  # Explicit stop and notional-size experiments.
 
 
 @dataclass(frozen=True)
@@ -67,7 +68,10 @@ def daily_directions(rows):
 
 
 def stop_fraction(config, entry_price, atr):
-    return Decimal('.01') if config.perp_stop == 'fixed-1pct' else 2*atr/entry_price
+    fixed = {'fixed-1pct': Decimal('.01'), 'fixed-5pct': Decimal('.05')}
+    if config.perp_stop in fixed:
+        return fixed[config.perp_stop]
+    return {'atr14-2x': 2, 'atr14-3x': 3}[config.perp_stop]*atr/entry_price
 
 
 def prepare_history(config, perp):
@@ -171,9 +175,14 @@ def open_entries(book, at, marks, perp_bars, spot_obs, perp_obs, spot_trends, pe
             continue
         if book.halted:
             book.event(at, 'entry_blocked', 'portfolio_loss_limit', symbol=s, market='perp')
-        elif book.enter_perp(s, at, marks, perp_bars[s].open, side, distance):
-            book.events[-1].update(reason='historical_donchian', stop_fraction=str(distance),
-                                  stop_price=str(book.perps[s].stop), signal_available_at=at.isoformat())
+        else:
+            # Scale the requested coin budget BEFORE cash/exposure trimming, not
+            # the already-constrained target. Unused allocation stays in cash.
+            target = (min(cfg.capital, book.equity(marks))*cfg.perp_cap*cfg.perp_weights[s]*2/3
+                      if cfg.perp_size == 'two-thirds' else None)
+            if book.enter_perp(s, at, marks, perp_bars[s].open, side, distance, approved_target=target):
+                book.events[-1].update(reason='historical_donchian', stop_fraction=str(distance),
+                                      stop_price=str(book.perps[s].stop), signal_available_at=at.isoformat())
         book.enforce_risk(at, marks)
 
 
@@ -303,6 +312,8 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
             'perp_sides': {side: {'closed_trades': sum(t['market'] == 'perp' and t['side'] == side for t in book.trades),
                 'net_pnl': float(sum((t['net_pnl'] for t in book.trades if t['market'] == 'perp' and t['side'] == side), ZERO))}
                 for side in ('long', 'short')},
+            'perp_stop_exit_count': sum(t['market'] == 'perp' and t['exit_reason'].startswith('contract_stop')
+                                        for t in book.trades),
             'blocked_entries': dict(Counter(e['reason'] for e in book.events if e['kind'] == 'entry_blocked')),
             'daily_pause_count': sum(e['kind'] == 'halt' and e['reason'] == 'daily_loss_limit' for e in book.events),
             'daily_resume_count': sum(e['kind'] == 'resume' for e in book.events),
@@ -323,7 +334,9 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
                 'spot_fee_source': 'https://www.binance.com/en/fee/trading',
                 'perp_fee_source': 'https://www.binance.com/en/fee/futureFee', 'fee_observed_at': '2026-10-01T00:00:00Z',
                 'historical_account_fee_verified': False},
-            'allocation': 'notional caps on min(initial capital, equity); fixed Perp weights, Spot ATR multiplier; no rebalance'},
+            'perp_stop': 'fixed at entry; ATR14 is simple mean true range on closed native 4h, not Wilder/RMA or trailing',
+            'perp_size': config.perp_size,
+            'allocation': 'notional caps on min(initial capital, equity); fixed Perp weights with optional 2/3 coin budget before shared constraints; unused stays cash; Spot ATR multiplier; no rebalance'},
         'limitations': sorted(book.limitations | {'research_only_not_activation_gate', 'not_current_jev_confidence_replay',
             'ex_post_not_independent_holdout', 'llm_not_called', 'intrabar_portfolio_dd_and_stop_timing_unknown',
             'funding_before_stop_detection_can_differ_from_intrabar_execution', 'assumed_cash_charged_slippage',

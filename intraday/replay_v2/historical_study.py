@@ -18,9 +18,13 @@ from intraday.replay_v2.portfolio_study import START, END, file_hash, load_input
 from intraday.store import IntradayStore
 
 
-def study_configs(start, end, trend_filter=True):
+def study_configs(start, end, trend_filter=True, preset='baseline'):
+    setups = {'baseline': [('fixed-1pct', 'full'), ('atr14-2x', 'full')],
+              'stop-extension': [('fixed-5pct', 'full'), ('atr14-3x', 'full'), ('atr14-3x', 'two-thirds')]}
+    if preset not in setups:
+        raise ValueError('unknown historical study preset')
     variants = [('Spot+Perp', HistoricalConfig(start=start, end=end, trend_filter=trend_filter,
-        perp_stop=stop, daily_loss=daily)) for stop in ('fixed-1pct', 'atr14-2x') for daily in ('.03', '.05')]
+        perp_stop=stop, perp_size=size, daily_loss=daily)) for stop, size in setups[preset] for daily in ('.03', '.05')]
     return variants+ [('Spot-only control', HistoricalConfig(start=start, end=end, trend_filter=trend_filter,
         include_perp=False, daily_loss=daily)) for daily in ('.03', '.05')]
 
@@ -101,24 +105,26 @@ def comparison_markdown(receipt):
             for k in ('start', 'end')),
         'Capital 1,000 USDT; Spot cap 60%, Perp NOTIONAL cap 30% (BTC/ETH 15% each), isolated 3x, reserve 10%.',
         'Spot weights BTC/ETH/SOL/NEAR/ZEC = 40/20/20/10/10. Both markets Donchian 30/8 + native daily EMA50.',
-        'Perp has mirrored long/short signals; fixed sizing. Stop ATR is fixed at entry, not trailing.', '',
-        '| Portfolio | Perp stop | Daily loss | Net return | Observed DD | Spot trades | Perp trades | Research check |',
-        '|---|---|---:|---:|---:|---:|---:|---|']
+        'Preset: '+receipt['preset']+'. Perp has mirrored long/short signals. ATR14 is simple mean TR, fixed at entry, not trailing.',
+        'Two-thirds scales each Perp coin budget before shared constraints; unused USDT stays cash. Not automatic constant-risk sizing.', '',
+        '| Portfolio | Perp stop | Perp size | Daily loss | Net return | Observed DD | Spot trades | Perp trades | Stop exits | Research check |',
+        '|---|---|---|---:|---:|---:|---:|---:|---:|---|']
     for row in receipt['results']:
         s = row['summary']
         net = f"{s['net_return_pct']:.4f}%" if s['net_return_pct'] is not None else 'UNKNOWN'
         counts = {m: sum(v['closed_trades'] for k, v in s['contributions'].items() if k.startswith(m+':'))
                   for m in ('spot', 'perp')}
         lines.append(f"| {row['variant']} | {row['perp_stop'] if row['include_perp'] else '—'} | "
+            f"{row['perp_size'] if row['include_perp'] else '—'} | "
             f"{row['daily_loss_pct']:g}% | {net} | {s['max_drawdown_known_pct']:.4f}% | "
-            f"{counts['spot']} | {counts['perp']} | {s['economic_check_only']} |")
+            f"{counts['spot']} | {counts['perp']} | {s['perp_stop_exit_count']} | {s['economic_check_only']} |")
     lines += ['', '## Paired comparison', '',
-        '| Perp stop | Daily loss | Mixed minus Spot-control return, percentage points |', '|---|---:|---:|']
+        '| Perp stop | Perp size | Daily loss | Mixed minus Spot-control return, percentage points |', '|---|---|---:|---:|']
     for row in receipt['results']:
         if not row['include_perp']:
             continue
         delta = row['paired_spot_control_return_difference_pp']
-        lines.append(f"| {row['perp_stop']} | {row['daily_loss_pct']:g}% | {delta if delta is not None else 'UNKNOWN'} |")
+        lines.append(f"| {row['perp_stop']} | {row['perp_size']} | {row['daily_loss_pct']:g}% | {delta if delta is not None else 'UNKNOWN'} |")
     lines += ['', '## Reading the results', '',
         'Daily loss 3%/5%, DD 10%. DD terminal halt does not reset; daily halt resumes only next UTC day AND flat.',
         'Compare to the paired 60% Spot control, not the earlier 65% Spot study.',
@@ -131,8 +137,8 @@ def comparison_markdown(receipt):
 
 
 def run_study(database, report_root, *, start=START, end=END, collect_perp=False, inputs_path=None,
-              loader=load_inputs, perp_inputs=None, trend_filter=True, progress=None):
-    variants = study_configs(start, end, trend_filter)
+              loader=load_inputs, perp_inputs=None, trend_filter=True, progress=None, preset='baseline'):
+    variants = study_configs(start, end, trend_filter, preset)
     config = variants[0][1]
     if collect_perp and (inputs_path is not None or perp_inputs is not None):
         raise ValueError('choose collection OR immutable offline inputs')
@@ -189,26 +195,26 @@ def run_study(database, report_root, *, start=START, end=END, collect_perp=False
                 digest.update((encoded(row)+'\n').encode())
             if file_hash(Path(saved['report_directory'])/(series+'.jsonl')) != digest.hexdigest():
                 raise ValueError('historical published ledger does not reproduce')
-        item = dict(variant=name, include_perp=cfg.include_perp, perp_stop=cfg.perp_stop,
+        item = dict(variant=name, include_perp=cfg.include_perp, perp_stop=cfg.perp_stop, perp_size=cfg.perp_size,
             daily_loss_pct=float(cfg.daily_loss*100), max_drawdown_pct=float(cfg.max_drawdown*100),
             run_id=saved['run_id'], result_id=report['result_id'], dataset_checksum=report['inputs']['dataset_checksum'],
             summary=report['summary'], status=report['status'], deterministic_rerun_verified=True)
         results.append(item)
         if progress:
-            progress({'phase': 'historical_replay_complete', 'variant': name, 'perp_stop': cfg.perp_stop,
+            progress({'phase': 'historical_replay_complete', 'variant': name, 'perp_stop': cfg.perp_stop, 'perp_size': cfg.perp_size,
                 'daily_loss_pct': item['daily_loss_pct'], 'run_id': saved['run_id'],
                 **{key: report['summary'][key] for key in
                    ('net_return_pct', 'max_drawdown_known_pct', 'closed_trades', 'economic_check_only')},
                 'deterministic_rerun_verified': True})
     if file_hash(source) != before or any(file_hash(root/name) != value for name, value in hashes.items()):
         raise ValueError('immutable historical inputs changed')
-    if len({r['result_id'] for r in results}) != 6 or len({r['dataset_checksum'] for r in results}) != 1:
-        raise ValueError('historical study needs six distinct configs on one dataset')
+    if len({r['result_id'] for r in results}) != len(variants) or len({r['dataset_checksum'] for r in results}) != 1:
+        raise ValueError('historical study needs distinct configs on one dataset')
     controls = {r['daily_loss_pct']: r['summary']['net_return_pct'] for r in results if not r['include_perp']}
     for row in results:
         mixed, control = row['summary']['net_return_pct'], controls[row['daily_loss_pct']]
         row['paired_spot_control_return_difference_pp'] = mixed-control if row['include_perp'] and mixed is not None and control is not None else None
-    receipt = dict(research_only=True, activation_allowed=False, official_gate_eligible=False,
+    receipt = dict(preset=preset, research_only=True, activation_allowed=False, official_gate_eligible=False,
         signal_mode='historical_deterministic', window={'start': start.isoformat(), 'end': end.isoformat()},
         original_source=str(source), source_manifest=manifest, source_sha256=before, source_unchanged=True,
         snapshot_files_sha256=hashes, bars_per_coin=int((end-start)/timedelta(hours=4)),
