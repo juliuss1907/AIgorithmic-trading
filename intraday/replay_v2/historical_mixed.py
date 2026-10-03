@@ -11,7 +11,8 @@ from pydantic import ConfigDict, field_validator, model_validator
 
 from intraday.contracts import SpotRuleParameters
 from intraday.replay_v2.metrics import fingerprint
-from intraday.replay_v2.mixed_book import MixedBook, MixedConfig
+from intraday.replay_v2.historical_capital import HistoricalBook
+from intraday.replay_v2.mixed_book import MixedConfig
 from intraday.replay_v2.perp_daily import PerpDailyBook, daily_summary
 from intraday.replay_v2.portfolio_book import ONE, ZERO, STOP
 from intraday.replay_v2.portfolio_research import WIDTH, daily_points, validate_inputs
@@ -25,6 +26,7 @@ class HistoricalConfig(MixedConfig):
     perp_stop: Literal['fixed-1pct', 'atr14-2x', 'fixed-5pct', 'atr14-3x'] = 'fixed-1pct'
     perp_size: Literal['full', 'two-thirds'] = 'full'
     perp_daily_policy: Literal['disabled', 'none', 'target3', 'target5', 'trailing'] = 'disabled'
+    capital_growth: Literal['capped', 'equity'] = 'capped'
 
     @model_validator(mode='after')
     def daily_policy_requires_perp(self):
@@ -41,6 +43,7 @@ class HistoricalConfig(MixedConfig):
 
 VERSION = 'historical-mixed-quant-v1.2'  # Explicit stop and notional-size experiments.
 DAILY_VERSION = 'historical-perp-daily-policy-v1.0'
+GROWTH_VERSION = 'historical-equity-growth-v1.0'
 
 
 @dataclass(frozen=True)
@@ -188,7 +191,7 @@ def open_entries(book, at, marks, perp_bars, spot_obs, perp_obs, spot_trends, pe
         else:
             # Scale the requested coin budget BEFORE cash/exposure trimming, not
             # the already-constrained target. Unused allocation stays in cash.
-            target = (min(cfg.capital, book.equity(marks))*cfg.perp_cap*cfg.perp_weights[s]*2/3
+            target = (book.allocation_base(marks)*cfg.perp_cap*cfg.perp_weights[s]*2/3
                       if cfg.perp_size == 'two-thirds' else None)
             if book.enter_perp(s, at, marks, perp_bars[s].open, side, distance, approved_target=target):
                 book.events[-1].update(reason='historical_donchian', stop_fraction=str(distance),
@@ -205,7 +208,7 @@ def simulate_historical(config, candles, daily, perp, funding):
     perp_rows = {s: [c.row() for c in rows] for s, rows in trades.items()}
     settlements = defaultdict(list)
     audit = funding_audit(config, funding)
-    book = PerpDailyBook(config) if config.include_perp and config.perp_daily_policy != 'disabled' else MixedBook(config)
+    book = PerpDailyBook(config) if config.include_perp and config.perp_daily_policy != 'disabled' else HistoricalBook(config)
     if config.include_perp:
         for s, state in audit.items():
             if not state['complete']:
@@ -305,7 +308,10 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
         'entry_window': 30, 'atr_period': 14, 'perp_exit_window': 8}
     if config.perp_daily_policy == 'disabled':
         payload.pop('perp_daily_policy')  # Preserve old config hashes and journal identities.
-    version = DAILY_VERSION if isinstance(book, PerpDailyBook) else VERSION
+    if config.capital_growth == 'capped':
+        payload.pop('capital_growth')
+    version = GROWTH_VERSION if config.capital_growth == 'equity' else (
+        DAILY_VERSION if isinstance(book, PerpDailyBook) else VERSION)
     data_hash = fingerprint({'spot': {s: [c.row() for c in rows] for s, rows in sorted(spot.items())},
         'spot_daily': daily, 'perp': {s: {'trade': [c.row() for c in p['trade']],
             'mark': [c.row() for c in p['mark']], 'daily': p['daily']} for s, p in sorted(perp.items())},
@@ -358,6 +364,12 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
             'ideal_fractional_fills_without_partial_fills_or_historical_instrument_filters',
             'no_exact_liquidation_or_verified_historical_demo_execution', 'risk_gaps_and_exit_costs_can_overshoot'}),
         'v1_reference': None, 'equity_curve': book.curve, 'trades': book.trades, 'events': book.events}
+    if config.capital_growth == 'equity':
+        report['methodology']['allocation'] = (
+            'notional caps and reserve on current mark-to-market portfolio equity at each new entry; '
+            'realized and unrealized net PnL included; fixed market/coin weights; no initial-capital ceiling; '
+            'optional 2/3 Perp coin budget before shared constraints; Spot ATR multiplier; '
+            'cash/margin/exposure constraints unchanged; no existing-position rebalance or virtual sleeve transfers')
     if isinstance(book, PerpDailyBook):
         report['summary']['perp_daily'] = daily_summary(book, valid)
         perp_curve = [{**row, 'equity_known': row['perp_equity']} for row in book.curve]

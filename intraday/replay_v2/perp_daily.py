@@ -4,7 +4,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from intraday.replay_v2.contracts import utc
-from intraday.replay_v2.mixed_book import MixedBook
+from intraday.replay_v2.historical_capital import HistoricalBook
 from intraday.replay_v2.portfolio_book import ZERO
 
 
@@ -66,7 +66,7 @@ class PerpDailyState:
         return reason
 
 
-class PerpDailyBook(MixedBook):
+class PerpDailyBook(HistoricalBook):
     def __init__(self, config):
         super().__init__(config)
         self.daily = PerpDailyState(config.capital*config.perp_cap, config.start, config.perp_daily_policy)

@@ -120,6 +120,9 @@ class MixedBook(PortfolioBook):
             self.pause_until = at.replace(hour=0, minute=0, second=0, microsecond=0)+timedelta(days=1)
             self.event(at, "halt", reason, equity_known=str(equity))
 
+    def allocation_base(self, marks):
+        return min(self.config.capital, self.equity(marks))
+
     def enter_batch(self, at, marks, multipliers):
         if not set(multipliers) <= set(self.weights) or any(
             not m.is_finite() or not ZERO <= m <= ONE for m in multipliers.values()
@@ -129,7 +132,7 @@ class MixedBook(PortfolioBook):
             for s in sorted(multipliers):
                 self.event(at, "entry_blocked", "portfolio_loss_limit", symbol=s, market="spot")
             return
-        base = min(self.config.capital, self.equity(marks))
+        base = self.allocation_base(marks)
         spot, perp = self.exposures(marks)
         requests = {s: base*self.config.entry_cap*self.weights[s]*multipliers[s]
                     for s in sorted(multipliers) if not self.positions[s].quantity and multipliers[s] > 0}
@@ -191,7 +194,7 @@ class MixedBook(PortfolioBook):
         return True
 
     def perp_target(self, symbol, marks):
-        base = min(self.config.capital, self.equity(marks))
+        base = self.allocation_base(marks)
         spot, perp = self.exposures(marks)
         requested = base*self.config.perp_cap*self.config.perp_weights[symbol]
         target = max(ZERO, min(requested, base*self.config.perp_cap-perp,

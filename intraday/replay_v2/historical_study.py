@@ -19,6 +19,12 @@ from intraday.store import IntradayStore
 
 
 def study_configs(start, end, trend_filter=True, preset='baseline'):
+    if preset == 'perp-daily-compounding':
+        return [(name, HistoricalConfig(start=start, end=end, trend_filter=trend_filter,
+                 include_perp=include, capital_growth=growth,
+                 **({'perp_stop': 'atr14-3x', 'perp_daily_policy': 'target5'} if include else {})))
+                for name, include in (('Spot+Perp', True), ('Spot-only control', False))
+                for growth in ('capped', 'equity')]
     if preset == 'perp-daily-policy':
         variants = [('Spot+Perp', HistoricalConfig(start=start, end=end, trend_filter=trend_filter,
                      perp_stop=stop, perp_daily_policy=policy))
@@ -104,6 +110,8 @@ def decode_inputs(config, raw):
 
 
 def comparison_markdown(receipt):
+    if receipt['preset'] == 'perp-daily-compounding':
+        return growth_comparison_markdown(receipt)
     if receipt['preset'] == 'perp-daily-policy':
         return daily_comparison_markdown(receipt)
     local = timezone(timedelta(hours=7))
@@ -186,6 +194,33 @@ def daily_comparison_markdown(receipt):
     return '\n'.join(lines)
 
 
+def growth_comparison_markdown(receipt):
+    lines = ['# Equity compounding — 24-month paired research', '',
+        'Research only; not an activation gate or independent holdout.', '',
+        'Capital 1,000 USDT. Spot cap 60%, Perp NOTIONAL cap 30%, reserve 10%; isolated 3x.',
+        'Spot BTC/ETH/SOL/NEAR/ZEC 40/20/20/10/10; Perp BTC/ETH equal weights.',
+        'Capped: min(initial capital, equity). Equity: current mark-to-market equity at each new entry.',
+        'Both realized and unrealized net PnL enter sizing; existing positions are never rebalanced.',
+        'ATR14 x3 full Perp size, daily target +5% / loss -3%; parent daily loss 3% / terminal DD 10%.',
+        'Daily Perp percentages still use its own virtual day-start equity, not a portfolio allocation transfer.', '',
+        '| Portfolio | Sizing | Net return | Portfolio DD | Perp net USDT | Perp sleeve DD | Difference vs capped, pp | Difference vs same-sizing Spot, pp | Research check |',
+        '|---|---|---:|---:|---:|---:|---:|---:|---|']
+    for row in receipt['results']:
+        s, p = row['summary'], row['summary'].get('perp_daily')
+        def number(value):
+            return f'{value:.4f}' if value is not None else 'UNKNOWN'
+        lines.append(f"| {row['variant']} | {row['capital_growth']} | {number(s['net_return_pct'])}% | "
+            f"{s['max_drawdown_known_pct']:.4f}% | {number(p['net_pnl']) if p else '—'} | "
+            f"{number(p['max_drawdown_known_pct'])+'%' if p else '—'} | "
+            f"{number(row['paired_capped_return_difference_pp'])} | "
+            f"{number(row['paired_spot_control_return_difference_pp']) if row['include_perp'] else '—'} | {s['economic_check_only']} |")
+    lines += ['', 'Costs, signals, native next-open execution, funding and risk limits unchanged.',
+        'Compounding can increase losses and terminal-halt risk; caps are entry-time constraints, not continuous rebalancing.',
+        'Four-hour/funding sampling cannot establish exact intraday DD or guarantee daily targets/loss limits.',
+        'All four complete journals reproduced offline; original source and snapshots unchanged. No LLM or activation.', '']
+    return '\n'.join(lines)
+
+
 def run_study(database, report_root, *, start=START, end=END, collect_perp=False, inputs_path=None,
               loader=load_inputs, perp_inputs=None, trend_filter=True, progress=None, preset='baseline'):
     variants = study_configs(start, end, trend_filter, preset)
@@ -250,12 +285,15 @@ def run_study(database, report_root, *, start=START, end=END, collect_perp=False
             daily_loss_pct=float(cfg.daily_loss*100), max_drawdown_pct=float(cfg.max_drawdown*100),
             run_id=saved['run_id'], result_id=report['result_id'], dataset_checksum=report['inputs']['dataset_checksum'],
             summary=report['summary'], status=report['status'], deterministic_rerun_verified=True)
-        if preset == 'perp-daily-policy':
+        if preset in {'perp-daily-policy', 'perp-daily-compounding'}:
             item['perp_daily_policy'] = cfg.perp_daily_policy
+        if preset == 'perp-daily-compounding':
+            item['capital_growth'] = cfg.capital_growth
         results.append(item)
         if progress:
             progress({'phase': 'historical_replay_complete', 'variant': name, 'perp_stop': cfg.perp_stop, 'perp_size': cfg.perp_size,
-                **({'perp_daily_policy': cfg.perp_daily_policy} if preset == 'perp-daily-policy' else {}),
+                **({'perp_daily_policy': cfg.perp_daily_policy} if preset in {'perp-daily-policy', 'perp-daily-compounding'} else {}),
+                **({'capital_growth': cfg.capital_growth} if preset == 'perp-daily-compounding' else {}),
                 'daily_loss_pct': item['daily_loss_pct'], 'run_id': saved['run_id'],
                 **{key: report['summary'][key] for key in
                    ('net_return_pct', 'max_drawdown_known_pct', 'closed_trades', 'economic_check_only')},
@@ -264,10 +302,16 @@ def run_study(database, report_root, *, start=START, end=END, collect_perp=False
         raise ValueError('immutable historical inputs changed')
     if len({r['result_id'] for r in results}) != len(variants) or len({r['dataset_checksum'] for r in results}) != 1:
         raise ValueError('historical study needs distinct configs on one dataset')
-    controls = {r['daily_loss_pct']: r['summary']['net_return_pct'] for r in results if not r['include_perp']}
+    controls = {(r['daily_loss_pct'], r.get('capital_growth', 'capped')): r['summary']['net_return_pct']
+                for r in results if not r['include_perp']}
     for row in results:
-        mixed, control = row['summary']['net_return_pct'], controls[row['daily_loss_pct']]
+        mixed, control = row['summary']['net_return_pct'], controls[
+            row['daily_loss_pct'], row.get('capital_growth', 'capped')]
         row['paired_spot_control_return_difference_pp'] = mixed-control if row['include_perp'] and mixed is not None and control is not None else None
+        if preset == 'perp-daily-compounding':
+            reference = next(r['summary']['net_return_pct'] for r in results
+                if r['include_perp'] == row['include_perp'] and r['capital_growth'] == 'capped')
+            row['paired_capped_return_difference_pp'] = mixed-reference if mixed is not None and reference is not None else None
         if preset == 'perp-daily-policy':
             reference = next((r['summary']['net_return_pct'] for r in results if r['include_perp']
                 and r['perp_stop'] == row['perp_stop'] and r['perp_daily_policy'] == 'none'), None)
