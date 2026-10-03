@@ -140,13 +140,26 @@ def run_study(database, report_root, *, start=START, end=END, collect_funding=Fa
 def main(argv=None):
     import argparse
 
-    parser = argparse.ArgumentParser(description="Offline paired Spot + recorded-Jev Perp research; no activation")
+    parser = argparse.ArgumentParser(description="Offline paired Spot + Perp research (recorded Jev or historical quant); no activation")
     parser.add_argument("--database", required=True, help="Verified immutable SQLite backup with matching manifest")
     parser.add_argument("--report-root", required=True, help="New private report directory, never overwritten")
     parser.add_argument("--collect-funding", action="store_true", help="Collect and freeze public historical funding")
+    parser.add_argument("--mode", choices=("recorded-jev", "historical-quant"), default="recorded-jev",
+                        help="Recorded Jev window (default) or separate 24-month deterministic Perp study")
+    parser.add_argument("--collect-perp", action="store_true", help="Explicitly collect public native Futures candles, marks and funding")
+    parser.add_argument("--perp-inputs", help="Immutable historical Futures input bundle for offline reproduction")
     args = parser.parse_args(argv)
-    receipt = run_study(args.database, args.report_root, collect_funding=args.collect_funding,
-        progress=lambda item: print(json.dumps(item, allow_nan=False), flush=True))
+    progress = lambda item: print(json.dumps(item, allow_nan=False), flush=True)
+    if args.mode == "historical-quant":
+        if args.collect_funding or args.collect_perp == bool(args.perp_inputs):
+            parser.error("historical-quant requires exactly one of --collect-perp / --perp-inputs; not --collect-funding")
+        from intraday.replay_v2.historical_study import run_study as run_historical
+        receipt = run_historical(args.database, args.report_root, collect_perp=args.collect_perp,
+                                 inputs_path=args.perp_inputs, progress=progress)
+    else:
+        if args.collect_perp or args.perp_inputs:
+            parser.error("--collect-perp / --perp-inputs require --mode historical-quant")
+        receipt = run_study(args.database, args.report_root, collect_funding=args.collect_funding, progress=progress)
     print(json.dumps({"comparison": str(Path(args.report_root).expanduser()/"comparison.md"),
                       "runs": len(receipt["results"]), "source_unchanged": receipt["source_unchanged"]}))
 

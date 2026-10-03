@@ -47,7 +47,8 @@ def validate_rows(rows, interval, start, end):
     width = WIDTHS[interval]
     width_ms = int(width.total_seconds()*1000)
     expected = list(range(int(start.timestamp()*1000), int(end.timestamp()*1000), width_ms))
-    if any(len(row) < 7 or isinstance(row[0], bool) or row[0] != int(row[0]) or
+    if any(not isinstance(row, (list, tuple)) or len(row) < 7 or
+           isinstance(row[0], bool) or isinstance(row[6], bool) or row[0] != int(row[0]) or
            row[0] % width_ms or row[6] != row[0]+width_ms-1 for row in rows):
         raise ValueError('invalid native Futures timestamps or interval')
     if [row[0] for row in rows] != expected:
