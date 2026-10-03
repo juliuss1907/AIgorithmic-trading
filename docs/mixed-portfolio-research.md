@@ -634,3 +634,119 @@ guards, collateral protection, config validation and historical-only CLI use.
 Only research code, tests and documentation changed locally. Runtime rules,
 risk settings, database, workers, soak and Demo/real trading remain untouched;
 no push, merge, deployment or activation occurred.
+
+## Separate realized sizing and per-trade trailing — 2026-10-03
+
+Historical research now has two additional opt-in contracts. They do not
+change recorded-Jev/runtime allocation or any previous research mode:
+
+- `capital_growth=realized`: initial Spot capital is 600 USDT, Perp capital
+  300 and unallocated capital 100 on a 1,000 USDT portfolio. Each market
+  reinvests only its own realized price PnL; entry/exit fees, cash-charged
+  slippage and settled funding are charged immediately, exactly once.
+  Unrealized PnL never grows the sizing base; no Spot-to-Perp profit transfer.
+- Market entry budgets use their own realized capital and coin weights.
+  Existing principal and marked exposure occupy budget; shared cash,
+  isolated margin, combined exposure and a 10% total-realized-capital reserve
+  remain constraints. Negative sleeve capital blocks entries. Existing
+  positions are never resized. Budget proportions can drift as each sleeve
+  earns/loses; there is no automatic rebalance to 60/30/10.
+- `perp_trade_exit=net-trailing-3pp`: requires Perp, frozen `atr14-3x` and
+  `perp_daily_policy=none`. The last setting removes fixed daily profit
+  taking, **not** the -3% Perp daily loss guard. Parent daily/capital and
+  collateral guards, ATR stops and Donchian 8-bar exits remain active.
+- Trailing uses each trade's projected net PnL divided by its frozen entry
+  notional, **not margin**. Entry costs, funding already paid/received and
+  estimated exit fee/slippage are included. Arm at +3%; thereafter the
+  floor is observed peak minus **3 percentage points**, never lowered or
+  reset at UTC midnight: +3% → 0%, +4.5% → +1.5%, +6% → +3%.
+- Peaks update only at observed native contract 4h closes, not favorable
+  intrabar highs/lows or future bars. A close breach remains latched until
+  the next native contract open even if price bounces. An opening gap
+  through an existing floor exits at that open. Initial ATR touch stops
+  retain their previous close-detection model. This is not a native Binance
+  stop-order simulator; gap/costs can produce fills below the intended floor.
+
+The new six-run factorial preset isolates sizing and exit-policy changes:
+four mixed configurations (capped/realized × daily target5/per-trade trailing),
+plus capped and realized Spot-only controls. It reuses the frozen 24-month
+inputs, publishes complete journals, and reproduces every summary and series.
+The reported capped delta uses the **same exit policy**; the trailing delta
+uses the **same sizing policy**. These are whole-path comparisons, not a
+fixed entry/exit journal rescaled after the fact.
+
+```bash
+uv run python -m intraday.replay_v2.mixed_portfolio_research \
+  --mode historical-quant --preset perp-realized-trailing \
+  --drawdown-policy observe-only \
+  --database /path/to/verified-backup.sqlite3 \
+  --perp-inputs /path/to/frozen/perp-inputs.json \
+  --report-root /path/to/new-private-report-directory
+```
+
+The default drawdown policy remains terminal if not explicitly supplied.
+`observe-only` removes the peak-DD trading lock, not DD measurement, the
+unchanged peak-DD research check, or daily/collateral protection.
+The new options are historical-only and do not grant activation permission.
+All previous presets, default config hashes/result IDs and journal shapes
+remain unchanged. No LLM, new data collection or live account access is used.
+
+### Frozen 24-month results
+
+Private root:
+`/home/julius/.local/state/aigorithmic-trading/reports/perp-realized-trailing-20261003-24months/`.
+Window 2024-10-02 00:00 UTC → 2026-10-02 00:00 UTC, 730 days / 4,380 native
+4h bars per coin. This run explicitly uses `observe-only` peak DD, while
+retaining parent daily loss, Perp daily loss and collateral protection.
+
+| Portfolio | Sizing | Perp exit | Final USDT | Net return | Portfolio peak DD | Perp net USDT | Research check |
+|---|---|---|---:|---:|---:|---:|---|
+| Mixed | Capped | Daily target5 | 1,400.8145 | +40.0815% | 9.5172% | +96.6608 | pass |
+| Mixed | Capped | Per-trade trailing | 1,299.3156 | +29.9316% | 13.6481% | -0.6149 | reject |
+| Mixed | Separate realized | Daily target5 | 1,407.4458 | +40.7446% | 11.9033% | +47.0150 | reject |
+| Mixed | Separate realized | Per-trade trailing | 1,337.3962 | +33.7396% | 15.6594% | -22.9348 | reject |
+| Spot control | Capped | — | 1,292.8024 | +29.2802% | 7.9954% | — | pass |
+| Spot control | Separate realized | — | 1,338.3902 | +33.8390% | 10.3073% | — | reject |
+
+All six have complete funding coverage and finish the window without a
+capital terminal halt. Four reject the unchanged peak-DD-under-10% research
+check; a profitable return is not sufficient for a pass. These are research
+checks, not official gate acceptances or trading authorizations.
+
+The requested realized+trailing book has 331 closed trades. Spot contributes
+**+360.3310 USDT**, Perp **-22.9348 USDT**; final realized capital is Spot
+960.3310, Perp 277.0652 and unallocated 100. Its Perp sleeve peak DD is
+**25.7704%**, not the portfolio's 15.6594%. It records 59 armed Perp trades,
+46 trailing exits, 20 Perp daily loss pauses and zero fixed daily profit
+pauses. Its total return is 0.0994 percentage points below its paired
+realized Spot-only control and 7.0050 points below the realized target5 book.
+Per-trade trailing does **not** improve returns or observed DD on this dataset.
+
+The capped target5 control exactly retains the previous result identity
+`e3bf30089dff4a3fb97b707e0caaddf45c4a6f14881f12496624899acd423b68`;
+the capped Spot control also retains its previous identity. The realized
+trailing result is
+`12a4d800a58b97ceb8a2205eadf4109f9fa7be1b998c7f0b403a5416aebf9e8f`.
+
+- Every new report's complete summary and all three ledger series reproduce
+  offline from the published frozen inputs.
+- A separate process regenerated **18 complete reports and journal sets**:
+  all six new runs and 12 previous equity/capital-guard references. Summaries,
+  result IDs and complete ledger checksums matched; immutable source/input
+  checksums remained unchanged.
+- Independent review found no Required/Critical issue, passed 120 focused
+  tests and compared 36 old-mode fixture reports against `8c0d705`: reports,
+  result IDs and journals unchanged.
+- Full regression: `uv run pytest -q` — **1,137 passed**, 29 existing
+  dependency deprecation warnings. No disabled tests or new dependencies.
+- Package verification: `uv build` produced the source distribution and wheel;
+  CLI help exposes the new historical-only preset; `git diff --check` passed.
+- Comparison SHA256:
+  `d65c8ca4bb8e678fc77d337d3c96f8f4eb980dea423de0d94c635d83f7985828`.
+- Source SQLite SHA256:
+  `63a099e3fdd67d9a46578d919578bc7d9231d753babc4dcf26326a02986efbb5`.
+- Native Futures bundle SHA256:
+  `5aaee92a2a5450b842e7a8a3499cfd87c485f894df7a403bffeca52cc1a61bfd`.
+
+No runtime, source database, worker, rule, gate, soak or exchange account was
+changed. Work remains local: no push, merge, deployment or activation.
