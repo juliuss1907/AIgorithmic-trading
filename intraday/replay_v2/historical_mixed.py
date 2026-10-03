@@ -29,10 +29,13 @@ class HistoricalConfig(MixedConfig):
     perp_daily_policy: Literal['disabled', 'none', 'target3', 'target5', 'trailing'] = 'disabled'
     capital_growth: Literal['capped', 'equity', 'realized'] = 'capped'
     perp_trade_exit: Literal['baseline', 'net-trailing-3pp'] = 'baseline'
+    perp_trailing_interval: Literal['4h', '1h', '30m'] = '4h'
     drawdown_policy: Literal['terminal', 'observe-only', 'initial-capital'] = 'terminal'
 
     @model_validator(mode='after')
     def daily_policy_requires_perp(self):
+        if self.perp_trailing_interval != '4h' and self.perp_trade_exit != 'net-trailing-3pp':
+            raise ValueError('finer cadence requires trade trailing')
         if self.perp_daily_policy != 'disabled' and not self.include_perp:
             raise ValueError('daily policy requires Perp; use disabled for Spot-only control')
         if self.perp_trade_exit != 'baseline' and (
@@ -54,6 +57,7 @@ GROWTH_VERSION = 'historical-equity-growth-v1.0'
 GUARD_VERSION = 'historical-capital-guard-v1.0'
 REALIZED_VERSION = 'historical-realized-sizing-v1.0'
 TRADE_TRAILING_VERSION = 'historical-net-trade-trailing-v1.0'
+TRAILING_CADENCE_VERSION = 'historical-trailing-cadence-v1.0'
 
 
 @dataclass(frozen=True)
@@ -211,7 +215,19 @@ def open_entries(book, at, marks, perp_bars, spot_obs, perp_obs, spot_trends, pe
         book.enforce_risk(at, marks)
 
 
-def simulate_historical(config, candles, daily, perp, funding):
+def simulate_historical(config, candles, daily, perp, funding, *, trailing_bars=None):
+    fine_open, fine_close = {}, {}
+    if config.perp_trailing_interval != '4h':
+        from intraday.replay_v2.trailing_data import validate_inputs as validate_trailing
+        if trailing_bars is None:
+            raise ValueError('finer trailing requires frozen native trailing inputs')
+        validate_trailing(config, trailing_bars, perp)
+        for s, rows in trailing_bars.items():
+            for c in rows:
+                fine_open.setdefault(c.opened_at, {})[s] = c
+                fine_close.setdefault(c.available_at-timedelta(milliseconds=1), {})[s] = c
+    elif trailing_bars is not None:
+        raise ValueError('H4 trailing must use original H4 inputs')
     opens, spot, spot_trends = validate_inputs(config, candles, daily)
     trades, mark_bars, perp_trends = prepare_history(config, perp)
     spot_idx = {s: {c.opened_at: i for i, c in enumerate(rows)} for s, rows in spot.items()}
@@ -236,7 +252,7 @@ def simulate_historical(config, candles, daily, perp, funding):
     closing_times = {at+WIDTH-timedelta(milliseconds=1): at for at in opens}
     opening_times = set(opens)
     recently_closed = {}
-    for at in sorted(opening_times | set(closing_times) | {config.end} | set(settlements)):
+    for at in sorted(opening_times | set(closing_times) | {config.end} | set(settlements) | set(fine_open) | set(fine_close)):
         book.advance_day(at)
         closed = recently_closed.pop(at, set())
         if at in closing_times:
@@ -250,16 +266,20 @@ def simulate_historical(config, candles, daily, perp, funding):
             perp_open = {s: trades[s][perp_idx[s][at]] for s in trades}
             marks.update({s: c.open for s, c in spot_open.items()})
             book.perp_marks.update({s: mark_bars[s][at].open for s in trades})
-        for s, row in sorted(settlements[at]):
+        for s, row in sorted(settlements.get(at, ())):
             book.perp_marks[s] = row.mark
             book.settle_funding(s, at, row.rate, row.mark)
         if at in closing_times:
             closed = close_touched_stops(book, at, spot_close, perp_close)
             recently_closed[at+timedelta(milliseconds=1)] = closed
-        book.check_isolated_collateral(at)
-        book.enforce_risk(at, marks)
-        if isinstance(book, TradeTrailingBook) and at in closing_times and not book.halted and not book.daily.locked:
-            book.observe_trade_trailing(at, perp_close)
+        regular = at in opening_times or at in closing_times or at in settlements or at == config.end
+        if regular:
+            book.check_isolated_collateral(at)
+            book.enforce_risk(at, marks)
+        if isinstance(book, TradeTrailingBook) and not book.halted and not book.daily.locked:
+            observed = fine_close.get(at) if fine_close else perp_close if at in closing_times else None
+            if observed is not None:
+                book.observe_trade_trailing(at, observed)
         if at == config.end:
             for s in sorted(spot):
                 book.close(s, at, spot_close[s].close, 'window_end')
@@ -276,7 +296,20 @@ def simulate_historical(config, candles, daily, perp, funding):
             if isinstance(book, PerpDailyBook):
                 book.maybe_resume_perp(at)
             open_entries(book, at, marks, perp_open, spot_obs, perp_obs, spot_trends, perp_trends, closed)
-    return historical_result(config, spot, daily, perp, funding, audit, book)
+        elif at in fine_open and not book.halted and not book.daily.locked:
+            # Only trailing at finer opens. ATR/Donchian/daily flatten remain H4.
+            filled = False
+            for s, bar in sorted(fine_open[at].items()):
+                reason = book.perp_exit_reason(s, bar.open, at)
+                if reason:
+                    book.close_perp(s, at, bar.open, reason)
+                    filled = True
+            if filled:
+                # Cost-event check with the last permitted H4/funding marks;
+                # finer contract prices never become the risk mark feed.
+                book.check_isolated_collateral(at)
+                book.enforce_risk(at, marks)
+    return historical_result(config, spot, daily, perp, funding, audit, book, trailing_bars=trailing_bars)
 
 
 def continuous_periods(config, curve):
@@ -299,7 +332,7 @@ def continuous_periods(config, curve):
     return results
 
 
-def historical_result(config, spot, daily, perp, funding, audit, book):
+def historical_result(config, spot, daily, perp, funding, audit, book, *, trailing_bars=None):
     if not book.flat:
         raise ValueError('historical mixed research must end flat')
     net = book.cash-config.capital
@@ -327,6 +360,8 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
         payload.pop('capital_growth')
     if config.perp_trade_exit == 'baseline':
         payload.pop('perp_trade_exit')
+    if config.perp_trailing_interval == '4h':
+        payload.pop('perp_trailing_interval')
     if config.drawdown_policy == 'terminal':
         payload.pop('drawdown_policy')
     version = TRADE_TRAILING_VERSION if config.perp_trade_exit != 'baseline' else REALIZED_VERSION if config.capital_growth == 'realized' else GUARD_VERSION if config.drawdown_policy != 'terminal' else (
@@ -336,6 +371,11 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
         'spot_daily': daily, 'perp': {s: {'trade': [c.row() for c in p['trade']],
             'mark': [c.row() for c in p['mark']], 'daily': p['daily']} for s, p in sorted(perp.items())},
         'funding': {s: h.model_dump(mode='json') for s, h in sorted(funding.items())}})
+    base_hash = data_hash
+    if trailing_bars is not None:
+        version = TRAILING_CADENCE_VERSION
+        trailing_hash = fingerprint({s: [c.row() for c in rows] for s, rows in sorted(trailing_bars.items())})
+        data_hash = fingerprint({'base': base_hash, 'interval': config.perp_trailing_interval, 'trailing': trailing_hash})
     terminal = next((e['at'] for e in book.events if e['kind'] == 'halt' and e['reason'] in {
         'max_drawdown', 'initial_capital_loss'}), None)
     report = {'schema_version': '2', 'evaluator_version': version,
@@ -385,6 +425,9 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
             'ideal_fractional_fills_without_partial_fills_or_historical_instrument_filters',
             'no_exact_liquidation_or_verified_historical_demo_execution', 'risk_gaps_and_exit_costs_can_overshoot'}),
         'v1_reference': None, 'equity_curve': book.curve, 'trades': book.trades, 'events': book.events}
+    if trailing_bars is not None:
+        report['inputs'].update(base_dataset_checksum=base_hash, trailing_dataset_checksum=trailing_hash)
+        report['methodology']['risk_sampling'] += '; finer trailing fills add cost checks with last permitted marks, not finer mark observations'
     if config.capital_growth == 'realized':
         if abs(sum(book.realized_capital.values(), ZERO)-book.cash) > Decimal('1e-18'):
             raise ValueError('realized sleeve capital does not reconcile to flat cash')
@@ -449,4 +492,7 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
         if isinstance(book, PerpDailyBook):
             report['methodology']['perp_daily']['priority'] = 'parent collateral/capital guard/daily loss before Perp loss/profit/trailing'
         report['limitations'] = sorted(set(report['limitations']) | {'capital_guard_trigger_not_guaranteed_fill_loss'})
+    if trailing_bars is not None:
+        report['methodology']['perp_trade_trailing']['sampling_interval'] = config.perp_trailing_interval
+        report['limitations'] = sorted(set(report['limitations']) | {'finer_close_sampling_not_realtime_exchange_trailing'})
     return report
