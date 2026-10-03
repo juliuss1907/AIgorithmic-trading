@@ -142,7 +142,7 @@ class PerpDailyBook(HistoricalBook):
         self.event(at, 'perp_daily_resume', 'next_utc_day_and_perp_flat', previous_reason=previous, market='perp')
 
 
-def daily_summary(book, valid=True):
+def daily_summary(book, valid=True, *, curve=None):
     """Descriptive statistics, not an activation or a newly optimized gate."""
     d = book.daily
     trades = [t for t in book.trades if t['market'] == 'perp']
@@ -151,7 +151,7 @@ def daily_summary(book, valid=True):
         raise ValueError('Perp sleeve does not reconcile to trade journal')
     days = {}
     giveback = ZERO
-    for row in book.curve:
+    for row in book.curve if curve is None else curve:
         day = row['at'][:10]
         daily_return = Decimal(row['perp_daily_return'])
         days[day] = daily_return
