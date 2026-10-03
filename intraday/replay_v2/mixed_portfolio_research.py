@@ -150,6 +150,8 @@ def main(argv=None):
     parser.add_argument("--perp-inputs", help="Immutable historical Futures input bundle for offline reproduction")
     parser.add_argument("--preset", choices=("baseline", "stop-extension", "perp-daily-policy", "perp-daily-compounding"),
                         help="Historical-only matrix: baseline (6), stop-extension (8), perp-daily-policy (9), or perp-daily-compounding (4)")
+    parser.add_argument("--drawdown-policy", choices=("terminal", "observe-only", "initial-capital"),
+                        help="Historical only: peak DD halt (default), observe DD only, or terminal loss from initial capital")
     args = parser.parse_args(argv)
     progress = lambda item: print(json.dumps(item, allow_nan=False), flush=True)
     if args.mode == "historical-quant":
@@ -157,10 +159,11 @@ def main(argv=None):
             parser.error("historical-quant requires exactly one of --collect-perp / --perp-inputs; not --collect-funding")
         from intraday.replay_v2.historical_study import run_study as run_historical
         receipt = run_historical(args.database, args.report_root, collect_perp=args.collect_perp,
-                                 inputs_path=args.perp_inputs, progress=progress, preset=args.preset or "baseline")
+                                 inputs_path=args.perp_inputs, progress=progress, preset=args.preset or "baseline",
+                                 **({'drawdown_policy': args.drawdown_policy} if args.drawdown_policy is not None else {}))
     else:
-        if args.collect_perp or args.perp_inputs or args.preset:
-            parser.error("--collect-perp / --perp-inputs / --preset require --mode historical-quant")
+        if args.collect_perp or args.perp_inputs or args.preset or args.drawdown_policy is not None:
+            parser.error("--collect-perp / --perp-inputs / --preset / --drawdown-policy require --mode historical-quant")
         receipt = run_study(args.database, args.report_root, collect_funding=args.collect_funding, progress=progress)
     print(json.dumps({"comparison": str(Path(args.report_root).expanduser()/"comparison.md"),
                       "runs": len(receipt["results"]), "source_unchanged": receipt["source_unchanged"]}))

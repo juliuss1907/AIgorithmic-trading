@@ -110,6 +110,8 @@ def decode_inputs(config, raw):
 
 
 def comparison_markdown(receipt):
+    if receipt.get('drawdown_policy', 'terminal') != 'terminal':
+        return capital_guard_comparison_markdown(receipt)
     if receipt['preset'] == 'perp-daily-compounding':
         return growth_comparison_markdown(receipt)
     if receipt['preset'] == 'perp-daily-policy':
@@ -221,9 +223,41 @@ def growth_comparison_markdown(receipt):
     return '\n'.join(lines)
 
 
+def capital_guard_comparison_markdown(receipt):
+    policy = receipt['drawdown_policy']
+    lines = ['# Historical capital guard research', '',
+        'Research only; not an activation gate or independent holdout. Policy: '+policy+'.', '',
+        'Window UTC: '+receipt['window']['start']+' → '+receipt['window']['end'],
+        ('Terminal floor is initial portfolio capital times (1 - limit); never profit-trailed or daily-reset.'
+         if policy == 'initial-capital' else
+         'Peak DD is observed only; no drawdown-based closing, lock or resume restriction.'),
+        'Daily guards, stops, sizing, signals and costs unchanged. Collateral/capital-exhaustion protection remains.',
+        'Equity includes Spot+Perp unrealized PnL and recorded costs/funding. Trigger loss is not a guaranteed fill loss.', '',
+        '| Portfolio | Sizing | Stop / daily policy | Net return | Peak DD | Initial-capital max loss | Floor USDT | Terminal halt UTC | Research check |',
+        '|---|---|---|---:|---:|---:|---:|---|---|']
+    for row in receipt['results']:
+        s, g = row['summary'], row['summary']['capital_guard']
+        net = f"{s['net_return_pct']:.4f}%" if s['net_return_pct'] is not None else 'UNKNOWN'
+        stop = row['perp_stop']+' / '+row.get('perp_daily_policy', 'disabled') if row['include_perp'] else '—'
+        lines.append(f"| {row['variant']} | {row.get('capital_growth', 'capped')} | {stop} | {net} | "
+            f"{s['max_drawdown_known_pct']:.4f}% | {g['max_initial_capital_loss_pct']:.4f}% | "
+            f"{g['initial_capital_floor'] if g['initial_capital_floor'] is not None else '—'} | "
+            f"{s['terminal_halt_at'] or '—'} | {s['economic_check_only']} |")
+    lines += ['', 'Research check still uses peak DD below the configured limit, positive net return and six closed trades.',
+        'Passing the initial-capital floor does not imply passing the peak-DD check.',
+        'Minimum equity, both first-crossing timestamps, Perp sleeve DD/PnL, daily guards and coin contributions are in summary.json.',
+        'Four-hour/funding sampling cannot establish exact intraday drawdown or hard loss caps.',
+        'Summaries and complete journals reproduced offline; source and frozen inputs unchanged. No automatic activation.', '']
+    return '\n'.join(lines)
+
+
 def run_study(database, report_root, *, start=START, end=END, collect_perp=False, inputs_path=None,
-              loader=load_inputs, perp_inputs=None, trend_filter=True, progress=None, preset='baseline'):
+              loader=load_inputs, perp_inputs=None, trend_filter=True, progress=None, preset='baseline',
+              drawdown_policy='terminal'):
     variants = study_configs(start, end, trend_filter, preset)
+    # Validate before creating any artifacts; don't bypass Pydantic with model_copy.
+    variants = [(name, HistoricalConfig.model_validate({**cfg.model_dump(), 'drawdown_policy': drawdown_policy}))
+                for name, cfg in variants]
     config = variants[0][1]
     if collect_perp and (inputs_path is not None or perp_inputs is not None):
         raise ValueError('choose collection OR immutable offline inputs')
@@ -289,11 +323,14 @@ def run_study(database, report_root, *, start=START, end=END, collect_perp=False
             item['perp_daily_policy'] = cfg.perp_daily_policy
         if preset == 'perp-daily-compounding':
             item['capital_growth'] = cfg.capital_growth
+        if drawdown_policy != 'terminal':
+            item['drawdown_policy'] = drawdown_policy
         results.append(item)
         if progress:
             progress({'phase': 'historical_replay_complete', 'variant': name, 'perp_stop': cfg.perp_stop, 'perp_size': cfg.perp_size,
                 **({'perp_daily_policy': cfg.perp_daily_policy} if preset in {'perp-daily-policy', 'perp-daily-compounding'} else {}),
                 **({'capital_growth': cfg.capital_growth} if preset == 'perp-daily-compounding' else {}),
+                **({'drawdown_policy': drawdown_policy} if drawdown_policy != 'terminal' else {}),
                 'daily_loss_pct': item['daily_loss_pct'], 'run_id': saved['run_id'],
                 **{key: report['summary'][key] for key in
                    ('net_return_pct', 'max_drawdown_known_pct', 'closed_trades', 'economic_check_only')},
@@ -321,6 +358,8 @@ def run_study(database, report_root, *, start=START, end=END, collect_perp=False
         original_source=str(source), source_manifest=manifest, source_sha256=before, source_unchanged=True,
         snapshot_files_sha256=hashes, bars_per_coin=int((end-start)/timedelta(hours=4)),
         funding_audit=funding_audit(config, funding), results=results)
+    if drawdown_policy != 'terminal':
+        receipt['drawdown_policy'] = drawdown_policy
     _write(root/'comparison.json', json.dumps(receipt, indent=2, allow_nan=False))
     _write(root/'comparison.md', comparison_markdown(receipt))
     return receipt

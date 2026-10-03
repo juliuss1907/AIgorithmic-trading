@@ -27,6 +27,7 @@ class HistoricalConfig(MixedConfig):
     perp_size: Literal['full', 'two-thirds'] = 'full'
     perp_daily_policy: Literal['disabled', 'none', 'target3', 'target5', 'trailing'] = 'disabled'
     capital_growth: Literal['capped', 'equity'] = 'capped'
+    drawdown_policy: Literal['terminal', 'observe-only', 'initial-capital'] = 'terminal'
 
     @model_validator(mode='after')
     def daily_policy_requires_perp(self):
@@ -44,6 +45,7 @@ class HistoricalConfig(MixedConfig):
 VERSION = 'historical-mixed-quant-v1.2'  # Explicit stop and notional-size experiments.
 DAILY_VERSION = 'historical-perp-daily-policy-v1.0'
 GROWTH_VERSION = 'historical-equity-growth-v1.0'
+GUARD_VERSION = 'historical-capital-guard-v1.0'
 
 
 @dataclass(frozen=True)
@@ -310,13 +312,17 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
         payload.pop('perp_daily_policy')  # Preserve old config hashes and journal identities.
     if config.capital_growth == 'capped':
         payload.pop('capital_growth')
-    version = GROWTH_VERSION if config.capital_growth == 'equity' else (
-        DAILY_VERSION if isinstance(book, PerpDailyBook) else VERSION)
+    if config.drawdown_policy == 'terminal':
+        payload.pop('drawdown_policy')
+    version = GUARD_VERSION if config.drawdown_policy != 'terminal' else (
+        GROWTH_VERSION if config.capital_growth == 'equity' else (
+            DAILY_VERSION if isinstance(book, PerpDailyBook) else VERSION))
     data_hash = fingerprint({'spot': {s: [c.row() for c in rows] for s, rows in sorted(spot.items())},
         'spot_daily': daily, 'perp': {s: {'trade': [c.row() for c in p['trade']],
             'mark': [c.row() for c in p['mark']], 'daily': p['daily']} for s, p in sorted(perp.items())},
         'funding': {s: h.model_dump(mode='json') for s, h in sorted(funding.items())}})
-    terminal = next((e['at'] for e in book.events if e['kind'] == 'halt' and e['reason'] == 'max_drawdown'), None)
+    terminal = next((e['at'] for e in book.events if e['kind'] == 'halt' and e['reason'] in {
+        'max_drawdown', 'initial_capital_loss'}), None)
     report = {'schema_version': '2', 'evaluator_version': version,
         'result_id': fingerprint({'version': version, 'config': payload, 'data': data_hash}),
         'research_only': True, 'activation_allowed': False, 'official_gate_eligible': False,
@@ -389,4 +395,19 @@ def historical_result(config, spot, daily, perp, funding, audit, book):
         report['limitations'] = sorted(set(report['limitations']) | {
             'four_hour_sampling_not_intraday_jev_llm_execution', 'virtual_perp_sleeve_not_segregated_exchange_wallet',
             'profit_target_not_guaranteed_after_exit_costs_or_gap'})
+    if config.drawdown_policy != 'terminal':
+        report['summary']['capital_guard'] = book.capital_guard_summary()
+        report['methodology']['capital_guard'] = {
+            'policy': config.drawdown_policy, 'limit_pct': float(config.max_drawdown*100),
+            'basis': 'initial portfolio capital, never daily-reset or profit-trailed' if config.drawdown_policy == 'initial-capital'
+                     else 'peak drawdown recorded only; no drawdown-based trading lock',
+            'equity': 'shared Spot+Perp marked equity including unrealized PnL and recorded fees/slippage/funding',
+            'terminal': config.drawdown_policy == 'initial-capital',
+            'execution': 'flatten at next native open; gap and closing costs may exceed the trigger loss',
+            'research_check': 'unchanged: positive net return, peak DD below limit and minimum six closed trades',
+        }
+        report['methodology']['daily_reset'] = 'next UTC day AND flat; peak never reset; capital guard policy recorded separately'
+        if isinstance(book, PerpDailyBook):
+            report['methodology']['perp_daily']['priority'] = 'parent collateral/capital guard/daily loss before Perp loss/profit/trailing'
+        report['limitations'] = sorted(set(report['limitations']) | {'capital_guard_trigger_not_guaranteed_fill_loss'})
     return report

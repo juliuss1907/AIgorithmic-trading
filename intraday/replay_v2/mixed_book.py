@@ -97,13 +97,21 @@ class MixedBook(PortfolioBook):
         if at.date() != self.day:
             self.day, self.day_start = at.date(), self.last_equity
 
+    @property
+    def terminal_risk_halted(self):
+        return self.halt_reason in {"max_drawdown", "unsupported_liquidation"}
+
+    def capital_stop_reason(self, equity):
+        return "max_drawdown" if equity <= self.peak*(ONE-self.config.max_drawdown) else None
+
     def maybe_resume(self, at, marks):
         if self.halt_reason != "daily_loss_limit" or at < self.pause_until or not self.flat:
             return
         equity = self.equity(marks)
-        if equity <= self.peak * (ONE-self.config.max_drawdown):
-            self.halt_reason = "max_drawdown"
-            self.event(at, "halt", "max_drawdown", upgraded_from="daily_loss_limit")
+        reason = self.capital_stop_reason(equity)
+        if reason:
+            self.halt_reason = reason
+            self.event(at, "halt", reason, upgraded_from="daily_loss_limit")
         else:
             self.halted, self.halt_reason = False, None
             self.day_start = equity
@@ -111,10 +119,10 @@ class MixedBook(PortfolioBook):
 
     def enforce_risk(self, at, marks):
         equity = self.observe(at, marks)
-        if self.halt_reason in {"max_drawdown", "unsupported_liquidation"}:
+        if self.terminal_risk_halted:
             return
-        reason = ("max_drawdown" if equity <= self.peak*(ONE-self.config.max_drawdown) else
-                  "daily_loss_limit" if equity <= self.day_start*(ONE-self.config.daily_loss) else None)
+        reason = self.capital_stop_reason(equity) or (
+            "daily_loss_limit" if equity <= self.day_start*(ONE-self.config.daily_loss) else None)
         if reason and reason != self.halt_reason:
             self.halted, self.halt_reason = True, reason
             self.pause_until = at.replace(hour=0, minute=0, second=0, microsecond=0)+timedelta(days=1)
