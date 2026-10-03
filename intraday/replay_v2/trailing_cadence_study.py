@@ -125,7 +125,7 @@ def comparison_markdown(receipt):
             for k in ('start','end')),
         '1,000 USDT; separate realized sizing: Spot 600, Perp notional 300, reserve 100; isolated 3x.',
         'Only contract trailing cadence changes. H4 entries/ATR14 x3/Donchian 30/8 and daily/funding risk unchanged.',
-        'Net per-trade return on entry notional: arm +3%, continuous peak minus 3 percentage points.',
+        'Net per-trade return on entry notional: arm +3%, peak observed at native closes minus 3 percentage points.',
         'Close breach latches until next native open, even on rebound. Open gaps exit at open; high/low never arm trailing.',
         'No fixed daily profit cap; Perp daily loss -3%. Peak DD observe-only; research check still requires DD <10%.', '',
         '| Trailing | Final USDT | Return | Spot PnL | Perp PnL | Observed DD | Perp trades | Trail exits | Mean hold hours | Delta vs H4 USDT | Check |',

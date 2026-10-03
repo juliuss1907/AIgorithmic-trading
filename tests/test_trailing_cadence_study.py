@@ -45,10 +45,12 @@ def test_cli_requires_explicit_trailing_inputs_and_keeps_other_modes_unchanged(m
         {'results': [None]*3, 'source_unchanged': True})
     base = ['--database','x','--report-root','y']
     cli.main(base+['--mode','historical-quant','--preset','perp-trailing-cadence',
-                   '--perp-inputs','p','--collect-trailing'])
+                   '--perp-inputs','p','--collect-trailing','--start','2024-10-29T00:00:00+00:00'])
     assert calls[0]['collect_trailing'] and calls[0]['inputs_path'] == 'p'
+    assert calls[0]['start'].isoformat() == '2024-10-29T00:00:00+00:00'
     for flags in [
         ['--collect-trailing'],
+        ['--start','2024-10-29T00:00:00+00:00'],
         ['--mode','historical-quant','--perp-inputs','p','--collect-trailing'],
         ['--mode','historical-quant','--preset','perp-trailing-cadence','--perp-inputs','p'],
         ['--mode','historical-quant','--preset','perp-trailing-cadence','--perp-inputs','p',

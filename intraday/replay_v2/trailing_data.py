@@ -1,7 +1,5 @@
 """Supplemental native contract history; never replaces frozen H4 evidence."""
 
-from datetime import timedelta
-
 from intraday.replay_v2.artifacts import _write
 from intraday.replay_v2.historical_data import CandleSnapshot, fetch_candle_snapshot, validate_rows
 from intraday.replay_v2.metrics import encoded, fingerprint

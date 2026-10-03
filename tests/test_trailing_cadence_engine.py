@@ -91,6 +91,16 @@ def test_nondefault_cadence_requires_trailing_and_complete_evidence():
         simulate_historical(cfg, *inputs, trailing_bars=finer)
 
 
+def test_h4_result_and_complete_journals_retain_pre_cadence_identity():
+    from intraday.replay_v2.metrics import fingerprint
+    from intraday.replay_v2.artifacts import SERIES
+    cfg = config()
+    report = simulate_historical(cfg, *fixture_inputs(cfg))
+    # Independently confirmed against evaluator commit 670ade0.
+    assert report['result_id'] == 'f23f2885beebc72955771a9e506799049f41154662420ddfb33197c78a2959d1'
+    assert fingerprint({s: report[s] for s in SERIES}) == '269c1958317146d8d151fc80788ae2be9f81e257ead2d7b13bd84f8a478c775e'
+
+
 @pytest.mark.parametrize('interval', ['1h', '30m'])
 def test_atr_and_daily_risk_do_not_run_at_finer_ticks(interval):
     from intraday.replay_v2.trailing_candle import WIDTHS

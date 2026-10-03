@@ -150,13 +150,15 @@ def main(argv=None):
     parser.add_argument("--perp-inputs", help="Immutable historical Futures input bundle for offline reproduction")
     parser.add_argument("--collect-trailing", action="store_true", help="Collect native H1/M30 contract bars for trailing-cadence research only")
     parser.add_argument("--trailing-inputs", help="Frozen H1/M30 supplemental bundle for offline trailing-cadence reproduction")
+    parser.add_argument("--start", type=datetime.fromisoformat, help="Trailing-cadence only: aware ISO window start, default 2024-10-02 UTC")
+    parser.add_argument("--end", type=datetime.fromisoformat, help="Trailing-cadence only: aware ISO window end, default 2026-10-02 UTC")
     parser.add_argument("--preset", choices=("baseline", "stop-extension", "perp-daily-policy", "perp-daily-compounding", "perp-realized-trailing", "perp-trailing-cadence"),
-                        help="Historical-only matrix: baseline (6), stop-extension (8), perp-daily-policy (9), perp-daily-compounding (4), or perp-realized-trailing (6)")
+                        help="Historical-only matrix: baseline (6), stop-extension (8), perp-daily-policy (9), perp-daily-compounding (4), perp-realized-trailing (6), or perp-trailing-cadence (3)")
     parser.add_argument("--drawdown-policy", choices=("terminal", "observe-only", "initial-capital"),
                         help="Historical only: peak DD halt (default), observe DD only, or terminal loss from initial capital")
     args = parser.parse_args(argv)
     progress = lambda item: print(json.dumps(item, allow_nan=False), flush=True)
-    if (args.collect_trailing or args.trailing_inputs) and (
+    if (args.collect_trailing or args.trailing_inputs or args.start is not None or args.end is not None) and (
         args.mode != "historical-quant" or args.preset != "perp-trailing-cadence"):
         parser.error("trailing inputs require historical-quant --preset perp-trailing-cadence")
     if args.mode == "historical-quant":
@@ -168,7 +170,8 @@ def main(argv=None):
             from intraday.replay_v2.trailing_cadence_study import run_study as run_cadence
             receipt = run_cadence(args.database, args.report_root, collect_perp=args.collect_perp,
                 inputs_path=args.perp_inputs, collect_trailing=args.collect_trailing,
-                trailing_inputs_path=args.trailing_inputs, progress=progress)
+                trailing_inputs_path=args.trailing_inputs, progress=progress,
+                **{k:v for k,v in {'start': args.start, 'end': args.end}.items() if v is not None})
         else:
             from intraday.replay_v2.historical_study import run_study as run_historical
             receipt = run_historical(args.database, args.report_root, collect_perp=args.collect_perp,
