@@ -95,6 +95,8 @@ Research batch ETH/NEAR/ZEC/SOL có `aigt replay study`, `aigt replay confidence
 review|status COIN`; proposal confidence69–100% (không có trần85%) qua LLM review
 tuần mặc định tắt, đọc tại `/assets` → Perp. Không apply/promotion tự động.
 [Four-coin runbook và kết quả](docs/four-coin-replay-runbook.md).
+Nghiên cứu Perp H1/H4/H8 với trailing/risk M15 có preset offline riêng;
+không thay runtime hay gate. [Cách chạy và giả định](docs/perp-intraday-timeframes-research.md).
 Gate operator riêng: `aigt assets rules replay RULE_ID --engine v2`, sau passing
 evaluation mới explicit start validation 14 ngày và promote. Spot fee/slippage
 10/5 bps, Perp 5/5 bps mỗi fill; không rewrite v1 và không tự bật execution.

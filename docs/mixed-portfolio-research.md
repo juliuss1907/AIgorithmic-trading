@@ -917,8 +917,8 @@ uv run python -m intraday.replay_v2.mixed_portfolio_research \
   --report-root /path/to/new-private-report-directory
 ```
 
-`--start`/`--end` are restricted to this historical cadence preset; default
-dates and all other historical/recorded-Jev modes remain unchanged.
+`--start`/`--end` are available for this historical cadence preset and the
+separate intraday-timeframe preset below; other defaults/modes remain unchanged.
 
 - Shared base dataset checksum:
   `1efd518e17072c05fb73772c970a78d0bdccdb13ea319c94b34e77374403132c`.
@@ -941,3 +941,11 @@ dates and all other historical/recorded-Jev modes remain unchanged.
 
 Research-only code/tests/docs and private reports are local. No runtime,
 worker, rule, gate, database, soak, Demo/real account, push, merge or deploy change.
+
+### H1 signals, H4/H8 trend and M15 trailing/risk comparison
+
+The separate `perp-intraday-timeframes` preset keeps the validated H4/D1/H1
+research control unchanged and compares two H1 signal / H4+H8 EMA50 / M15
+Perp risk cases, with H1 versus M15 trailing. Parent risk and Spot cadence
+remain H4. See [intraday timeframe research](perp-intraday-timeframes-research.md)
+for contracts, exact reuse lineage, offline CLI and passive common-M15 DD audit.
