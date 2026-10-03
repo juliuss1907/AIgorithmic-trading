@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -13,6 +13,7 @@ WIDTHS = {'1h': timedelta(hours=1), '30m': timedelta(minutes=30)}
 
 
 class TrailingCandle(FrozenModel):
+    widths: ClassVar[dict[str, timedelta]] = WIDTHS
     interval: Literal['1h', '30m']
     opened_at: datetime
     available_at: datetime
@@ -27,7 +28,7 @@ class TrailingCandle(FrozenModel):
 
     @model_validator(mode='after')
     def valid_bar(self):
-        width = WIDTHS[self.interval]
+        width = self.widths[self.interval]
         if self.available_at-self.opened_at != width or self.opened_at.microsecond or (
             int(self.opened_at.timestamp()) % int(width.total_seconds())):
             raise ValueError('expected aligned native trailing candle')
@@ -37,9 +38,9 @@ class TrailingCandle(FrozenModel):
 
     @classmethod
     def from_row(cls, row, interval):
-        if interval not in WIDTHS or len(row) < 7 or isinstance(row[0], bool) or isinstance(row[6], bool):
+        if interval not in cls.widths or len(row) < 7 or isinstance(row[0], bool) or isinstance(row[6], bool):
             raise ValueError('invalid native trailing candle row')
-        width_ms = int(WIDTHS[interval].total_seconds()*1000)
+        width_ms = int(cls.widths[interval].total_seconds()*1000)
         if row[0] != int(row[0]) or row[0] % width_ms or row[6] != row[0]+width_ms-1:
             raise ValueError('invalid native trailing interval')
         return cls(interval=interval, opened_at=datetime.fromtimestamp(row[0]/1000, timezone.utc),

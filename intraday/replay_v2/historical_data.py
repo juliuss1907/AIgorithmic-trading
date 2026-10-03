@@ -15,11 +15,12 @@ from intraday.replay_v2.funding import NoRedirect
 from intraday.replay_v2.metrics import fingerprint
 from intraday.replay_v2.portfolio_research import daily_points
 from intraday.replay_v2.trailing_candle import TrailingCandle, WIDTHS as TRAILING_WIDTHS
+from intraday.replay_v2.intraday_timeframes import IntradayCandle, WIDTHS as INTRADAY_WIDTHS
 
 
 BASE = 'https://fapi.binance.com'
 PATHS = {'trade': '/fapi/v1/klines', 'mark': '/fapi/v1/markPriceKlines'}
-WIDTHS = {'4h': timedelta(hours=4), '1d': timedelta(days=1), **TRAILING_WIDTHS}
+WIDTHS = {'4h': timedelta(hours=4), '1d': timedelta(days=1), **INTRADAY_WIDTHS}
 MAX_BYTES = 20_000_000
 
 
@@ -60,6 +61,8 @@ def validate_rows(rows, interval, start, end):
         return tuple(Candle.from_row(row) for row in rows)
     if interval in TRAILING_WIDTHS:
         return tuple(TrailingCandle.from_row(row, interval) for row in rows)
+    if interval in INTRADAY_WIDTHS:
+        return tuple(IntradayCandle.from_row(row, interval) for row in rows)
     daily_points(rows)
     return ()
 
