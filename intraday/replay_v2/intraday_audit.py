@@ -34,7 +34,8 @@ def audit_drawdown(report, spot, native):
     spot_times = sorted(spot_updates)
     if any(a > b for a,b in zip(parent_times, parent_times[1:])):
         raise ValueError('audit requires chronological frozen cash observations')
-    cash, perp_cash = initial, perp_initial
+    cash, perp_cash, flows = initial, perp_initial, ZERO
+    flow_adjusted = report['config'].get('allocation_basis') == 'perp-margin'
     parent_index = change_index = spot_index = 0
     positions, spot_marks, perp_marks, curve = {}, {}, {}, []
     peak, perp_peak, dd, perp_dd = initial, perp_initial, ZERO, ZERO
@@ -43,6 +44,8 @@ def audit_drawdown(report, spot, native):
         while parent_index < len(snapshots) and parent_times[parent_index] <= at:
             row = snapshots[parent_index]
             cash, perp_cash = Decimal(row['cash']), Decimal(row['perp_realized_capital'])
+            if flow_adjusted:
+                flows = Decimal(row['perp_capital_flows'])
             parent_index += 1
         while change_index < len(changes) and changes[change_index][0] <= at:
             _, entering, trade = changes[change_index]
@@ -69,14 +72,17 @@ def audit_drawdown(report, spot, native):
                 sign = 1 if trade['side'] == 'long' else -1
                 unrealized += sign*quantity*(perp_marks[s]-Decimal(trade['entry_price']))
         equity, perp_equity = cash+spot_value+unrealized, perp_cash+unrealized
-        peak, perp_peak = max(peak, equity), max(perp_peak, perp_equity)
-        current, perp_current = ONE-equity/peak, ONE-perp_equity/perp_peak
+        performance = perp_equity-flows
+        peak, perp_peak = max(peak, equity), max(perp_peak, performance)
+        current, perp_current = ONE-equity/peak, ONE-performance/perp_peak
         if current > dd:
             dd, worst_at = current, at.isoformat()
         if perp_current > perp_dd:
             perp_dd, perp_worst_at = perp_current, at.isoformat()
         curve.append(dict(at=at.isoformat(), equity_known=str(equity), perp_equity=str(perp_equity),
             cash=str(cash), drawdown=str(current), perp_drawdown=str(perp_current)))
+        if flow_adjusted:
+            curve[-1].update(perp_performance_equity=str(performance), perp_capital_flows=str(flows))
     if positions or abs(cash-Decimal(str(report['summary']['final_equity_known']))) > Decimal('1e-10'):
         raise ValueError('passive audit does not reconcile to flat final cash')
     audit = dict(samples=len(curve), sampling='native M15 mark open/close, end; post-event as-of cash/fills',
@@ -85,4 +91,6 @@ def audit_drawdown(report, spot, native):
         perp_max_drawdown_pct=float(perp_dd*100), perp_worst_at=perp_worst_at,
         final_equity=float(equity), final_perp_equity=float(perp_equity),
         limitation='common-grid audit is not exact intrabar DD; Spot remains H4 as-of')
+    if flow_adjusted:
+        audit.update(perp_performance_flow_adjusted=True, final_perp_performance_equity=float(performance))
     return audit, curve

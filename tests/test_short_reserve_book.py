@@ -102,3 +102,39 @@ def test_flat_daily_event_excludes_prior_reserve_flow():
     b.enforce_risk(at+timedelta(hours=1), marks)
     event = next(e for e in reversed(b.events) if e['kind'] == 'perp_daily_flat')
     assert D(event['return_after_close']) == b.daily.daily_return
+
+
+@pytest.mark.parametrize('policy', ['off', 'restore-and-repay'])
+def test_flat_batch_has_identical_entry_cooldown_for_both_policies(policy):
+    b, marks = book(policy)
+    b.enter_perp('BTCUSDT', START, marks, D(100), -1, D('.10'))
+    at = START+timedelta(hours=4)
+    b.close_perp('BTCUSDT', at, D(100), 'donchian_exit')
+    b.enforce_risk(at, marks)
+    b.rebalance_reserve(at, marks)
+    assert not b.enter_perp('ETHUSDT', at, marks, D(100), -1, D('.10'))
+    assert b.enter_perp('ETHUSDT', at+timedelta(hours=4), marks, D(100), -1, D('.10'))
+
+
+def test_margin_allocator_can_exceed_old_combined_notional_cap_without_spending_reserve():
+    b, marks = book('off')
+    b.enter_batch(START, marks, {s:D(1) for s in b.weights})
+    for s in b.perps:
+        assert b.enter_perp(s, START, marks, D(100), -1, D('.10'))
+    assert sum(b.exposures(marks)) > 1100
+    assert b.free_cash >= 100
+    assert b.locked_margin <= b.realized_capital['perp']
+
+
+def test_spot_cash_floor_uses_remaining_reserve_not_original_ten_percent():
+    b, marks = book()
+    loss(b, D(100))
+    b.rebalance_reserve(START, marks)
+    assert b.reserve_balance == 0
+    # Restrict cash to show that no obsolete 10% reserve is still withheld.
+    b.cash = D(50)
+    b.enter_batch(START, marks, {'BTCUSDT':D(1)})
+    assert b.positions['BTCUSDT'].quantity*100 > 49
+    # Canonical fractional division has Decimal precision28; use the same
+    # sub-attounit accounting tolerance as full journal reconciliation.
+    assert b.cash >= D('-1e-18')
