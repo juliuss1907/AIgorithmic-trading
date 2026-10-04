@@ -147,7 +147,8 @@ def daily_summary(book, valid=True, *, curve=None):
     d = book.daily
     trades = [t for t in book.trades if t['market'] == 'perp']
     net = sum((t['net_pnl'] for t in trades), ZERO)
-    if abs(d.cash-d.initial-net) > Decimal('1e-18'):
+    flows = getattr(d, 'capital_flows', ZERO)
+    if abs(d.cash-d.initial-flows-net) > Decimal('1e-18'):
         raise ValueError('Perp sleeve does not reconcile to trade journal')
     days = {}
     giveback = ZERO

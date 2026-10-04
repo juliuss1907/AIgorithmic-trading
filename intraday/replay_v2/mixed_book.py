@@ -140,6 +140,9 @@ class MixedBook(PortfolioBook):
     def combined_budget(self, marks):
         return self.allocation_base(marks)*(self.config.entry_cap+self.config.perp_cap)
 
+    def reserve_floor(self, marks):
+        return self.allocation_base(marks)*self.config.reserve
+
     def budget_exposures(self, marks):
         return self.exposures(marks)
 
@@ -162,7 +165,7 @@ class MixedBook(PortfolioBook):
             return
         room = max(ZERO, min(budget-spot,
             self.combined_budget(marks)-spot-perp,
-            (self.free_cash-base*self.config.reserve)/(ONE+FEE+SLIP)))
+            (self.free_cash-self.reserve_floor(marks))/(ONE+FEE+SLIP)))
         scale = min(ONE, room/total)
         for s, requested in requests.items():
             notional = requested*scale
