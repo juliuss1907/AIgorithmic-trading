@@ -103,6 +103,9 @@ So sánh short1x/bù quỹ, Spot buy-and-hold + long-short2x và buy-and-hold100
 [Cấu hình, kết quả 703 ngày và cách chạy lại](docs/hold-margin-research.md).
 Spot-only và Perp3x intraday trailing dùng100% vốn, BTC/ETH/SOL và realized reinvestment:
 [Hai cấu hình offline và kết quả](docs/single-sleeve-research.md).
+Spot60% + Short1x40%, BTC/ETH/SOL40/30/30:20 case Donchian20/30 x exit8/10,
+thêm EMA/ADX/volume/profile, ATR trailing H4 và riskM15; không thay rule đang chạy.
+[Setup và lệnh nghiên cứu offline](docs/donchian-filter-research.md).
 Gate operator riêng: `aigt assets rules replay RULE_ID --engine v2`, sau passing
 evaluation mới explicit start validation 14 ngày và promote. Spot fee/slippage
 10/5 bps, Perp 5/5 bps mỗi fill; không rewrite v1 và không tự bật execution.
