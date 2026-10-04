@@ -24,7 +24,7 @@ from intraday.replay_v2.portfolio_study import file_hash
 SPOT_SOURCE = 'https://api.binance.com/api/v3/klines'
 SOURCES = {'spot':SPOT_SOURCE, 'perp':'https://fapi.binance.com/fapi/v1/klines',
            'mark':'https://fapi.binance.com/fapi/v1/markPriceKlines'}
-WARMUP = {'4h':timedelta(hours=2400), '15m':timedelta(hours=480)}
+WARMUP = {'4h':timedelta(hours=2400), '15m':timedelta(hours=484)}
 
 
 class FilterSnapshot(FrozenModel):
@@ -119,7 +119,7 @@ def extend(parent, start, end, fetcher):
     return snapshot(**payload)
 
 
-def collect(frozen_root, sol_inputs, output_root, *, resume=False, progress=print,
+def collect(frozen_root, sol_inputs, output_root, *, resume=False, reuse_root=None, progress=print,
             spot_fetcher=fetch_spot_snapshot, perp_fetcher=fetch_candle_snapshot):
     old, sol, root = (Path(p).expanduser().resolve() for p in (frozen_root, sol_inputs, output_root))
     receipt = read_inputs(old/'comparison.json')
@@ -160,6 +160,19 @@ def collect(frozen_root, sol_inputs, output_root, *, resume=False, progress=prin
             interval = '4h' if tag.endswith('4h') else '15m'
             first = start if tag == 'mark15m' else start-WARMUP[interval]
             path = root/(symbol+'-'+tag+'.json')
+            if reuse_root is not None:
+                cache = Path(reuse_root).expanduser().resolve()/(symbol+'-'+tag+'.json')
+                if cache.exists():
+                    source_hashes[str(cache)] = file_hash(cache)
+                    cached = FilterSnapshot.model_validate(read_inputs(cache))
+                    if cached.market != ('spot' if tag.startswith('spot') else 'mark' if tag == 'mark15m' else 'perp') or cached.symbol != symbol or cached.interval != interval:
+                        raise ValueError('reused supplemental cache identity mismatch')
+                    if parent:
+                        retained = {r[0]:r[:7] for r in cached.raw_rows}
+                        if any(retained.get(r[0]) != r[:7] for r in parent.raw_rows
+                               if cached.coverage_start.timestamp()*1000 <= r[0] < end.timestamp()*1000):
+                            raise ValueError('supplemental cache changed original parent rows')
+                    parent = cached
             if resume and path.exists():
                 snap = FilterSnapshot.model_validate(read_inputs(path))
             elif tag.startswith('spot'):
@@ -230,8 +243,9 @@ def main(argv=None):
     for name in ('frozen-root','sol-inputs','output-root'):
         parser.add_argument('--'+name, required=True)
     parser.add_argument('--resume', action='store_true', help='Reuse validated immutable checkpoint files')
+    parser.add_argument('--reuse-root', help='Reuse a prior supplemental collection, fetching only missing prefix')
     args = parser.parse_args(argv)
-    collect(args.frozen_root, args.sol_inputs, args.output_root, resume=args.resume)
+    collect(args.frozen_root, args.sol_inputs, args.output_root, resume=args.resume, reuse_root=args.reuse_root)
 
 
 if __name__ == '__main__':
