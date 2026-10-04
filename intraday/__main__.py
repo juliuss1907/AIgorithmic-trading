@@ -1583,6 +1583,31 @@ def _start_portfolio_hyperliquid(
     return feeds
 
 
+def _latest_hyperliquid_frame(
+    feed: HyperliquidFeed,
+    *,
+    now: datetime,
+    shadow: bool,
+    symbol: str | None = None,
+):
+    """Contain malformed advisory data, not database or programming failures."""
+    try:
+        return feed.latest_frame(now=now)
+    except (ValueError, TypeError, KeyError, ArithmeticError) as error:
+        if not shadow:
+            raise
+        print(json.dumps({
+            "status": "degraded",
+            "component": "hyperliquid_capture",
+            "venue": "hyperliquid",
+            "symbol": symbol or getattr(feed, "symbol", None),
+            "at": now.isoformat(),
+            "error_code": "invalid_market_frame",
+            "error_type": type(error).__name__,
+        }), flush=True)
+        return None
+
+
 def _record_portfolio_hyperliquid(
     store: IntradayStore,
     feed: HyperliquidFeed | dict[str, HyperliquidFeed] | None,
@@ -1591,9 +1616,11 @@ def _record_portfolio_hyperliquid(
 ) -> None:
     if feed is None:
         return
-    feeds = feed.values() if isinstance(feed, dict) else (feed,)
-    for current in feeds:
-        frame = current.latest_frame(now=now)
+    feeds = feed.items() if isinstance(feed, dict) else ((None, feed),)
+    for symbol, current in feeds:
+        frame = _latest_hyperliquid_frame(
+            current, now=now, shadow=True, symbol=symbol,
+        )
         if frame is not None:
             store.record_venue_frame(frame)
 
@@ -2235,7 +2262,10 @@ def main() -> None:
                 if last_retention_date != now.date():
                     store.prune_venue_frames(before=now - timedelta(days=30))
                     last_retention_date = now.date()
-                frame = hyperliquid.latest_frame(now=now)
+                frame = _latest_hyperliquid_frame(
+                    hyperliquid, now=now,
+                    shadow=config.cross_venue_mode != "active", symbol=config.symbol,
+                )
                 if frame is not None:
                     store.record_venue_frame(frame)
                 history = store.list_venue_frames("hyperliquid", limit=1000)
