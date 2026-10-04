@@ -120,3 +120,19 @@ def test_new_utc_day_anchor_is_midnight_marked_equity_not_prior_close():
     trades = [t for t in report['trades'] if t['market']=='spot' and t['closed_at']==midnight.isoformat()]
     assert len(trades) == 3
     assert all(t['exit_reason']=='atr_stop_gap' for t in trades)
+
+
+def test_funding_loss_between_m15_opens_latches_parent_flatten_until_next_open():
+    cfg,data,funding = fixture()
+    settlement = START+timedelta(hours=8,milliseconds=1)
+    for s,history in funding.items():
+        points = list(history.settlements)
+        points[1] = FundingSettlement(at=settlement,rate=D('-.15'),mark=90)
+        funding[s] = history.model_copy(update={'settlements':tuple(points)})
+    report = simulate(cfg,prepare(cfg,data,funding))
+    halts = [e for e in report['events'] if e['kind']=='halt']
+    assert halts[0]['at'] == settlement.isoformat()
+    exits = [t for t in report['trades'] if t['exit_reason']=='daily_loss_limit']
+    assert len(exits) == 6
+    assert {t['closed_at'] for t in exits} == {(START+timedelta(hours=8,minutes=15)).isoformat()}
+    assert report['summary']['funding_paid_known'] > 30

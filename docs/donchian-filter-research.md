@@ -156,7 +156,7 @@ shorter than6months). They carry prior capital and positions, so are not indepen
 flat-start experiments. Full20-row table is in `comparison.md`; detailed cost,
 filter, trade and segment data are in `comparison.json` and individual reports.
 
-Verification:1,238 tests passed with29 existing dependency deprecation warnings;
+Verification:1,240 tests passed with29 existing dependency deprecation warnings;
 package build and CLI help checks passed. Independent correctness/data reviews
 had no unresolved Required/Critical findings. No push, merge, deployment or
 activation was performed.

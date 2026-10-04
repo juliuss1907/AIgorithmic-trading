@@ -77,3 +77,12 @@ def test_only_parent_daily_lock_then_next_utc_day_flat_resume():
     b.maybe_resume(START+timedelta(days=1), marks)
     assert not b.halted
     assert b.day_start == b.equity(marks)
+
+
+def test_peak_drawdown_above_ten_percent_is_observed_not_terminal_halt():
+    b,marks = book()
+    b.cash = b.day_start = D(850)
+    b.realized_capital['spot'] = D(450)
+    b.enforce_risk(START,marks)
+    assert b.max_drawdown == D('.15')
+    assert not b.halted
