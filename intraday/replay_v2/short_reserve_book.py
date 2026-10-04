@@ -97,8 +97,11 @@ class ShortReserveBook(PerpDailyBook):
             (self.free_cash-self.reserve_balance)/denominator))
         return self.allocation_base(marks), requested, target
 
+    def allows_side(self, side):
+        return side == -1
+
     def enter_perp(self, symbol, at, marks, price, side, stop_distance, *, approved_target=None):
-        if side != -1 or stop_distance != Decimal('.10'):
+        if not self.allows_side(side) or stop_distance != Decimal('.10'):
             raise ValueError('short-only requires a fixed 10% price stop')
         if self.flat_at == at:
             self.event(at, 'entry_blocked', 'perp_flat_batch_cooldown', symbol=symbol, market='perp')

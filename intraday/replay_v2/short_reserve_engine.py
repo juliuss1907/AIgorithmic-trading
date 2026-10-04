@@ -22,27 +22,42 @@ VERSION = 'historical-perp-short-reserve-v1.0'
 PARAMETERS = SpotRuleParameters(entry_window=30, exit_window=8, atr_period=14)
 
 
-def short_entries(book, at, marks, clock, bars, observations, trends, closed, spot_open):
+class DonchianSpotPolicy:
+    flatten_spot = True
+
+    def touched(self, book, at, spot_close, perp_close):
+        return close_touched_stops(book, at, spot_close, perp_close)
+
+    def exits(self, book, at, spot_open, observations, closed):
+        open_exits(book, at, spot_open, {}, observations, {}, closed)
+
+    def entries(self, book, at, marks, observations, trends, closed):
+        open_entries(book, at, marks, {}, observations, {}, trends, {}, closed)
+
+
+def short_entries(book, at, marks, clock, bars, observations, trends, closed, spot_open, policy):
     for s, obs in sorted(observations.items()):
-        if obs.entry_side != -1 or book.perps[s].quantity or ('perp', s) in closed:
+        side = obs.entry_side
+        if not book.allows_side(side) or book.perps[s].quantity or ('perp', s) in closed:
             continue
         times, sides = trends[s]
         index = bisect_right(times, at)-1
-        if book.config.trend_filter and (index < 0 or sides[index] != -1):
+        if book.config.trend_filter and (index < 0 or sides[index] != side):
             book.event(at, 'entry_blocked', 'daily_trend_filter', symbol=s, market='perp')
             continue
         multiplier = Decimal(str(evaluate_donchian(clock.history(s, at), PARAMETERS).size_multiplier))
         target = book.perp_budget(marks)*book.config.perp_weights[s]*book.config.leverage*multiplier
-        if book.enter_perp(s, at, marks, bars[s].open, -1, Decimal('.10'), approved_target=target):
+        if book.enter_perp(s, at, marks, bars[s].open, side, Decimal('.10'), approved_target=target):
             book.events[-1].update(reason='historical_donchian', signal_interval='4h',
                 stop_fraction='.10', stop_price=str(book.perps[s].stop),
                 margin_budget=str(book.perp_budget(marks)), atr_size_multiplier=str(multiplier),
                 signal_available_at=at.isoformat())
             cost_checkpoint(book, at, marks)
-            flatten_open_locks(book, at, marks, spot_open, bars, closed)
+            flatten_open_locks(book, at, marks, spot_open, bars, closed, close_spot=policy.flatten_spot)
 
 
-def simulate_short_reserve(config, candles, daily, perp, funding, native):
+def simulate_short_reserve(config, candles, daily, perp, funding, native, *,
+                           book_class=ShortReserveBook, spot_policy=None):
     validate_native(config, native, perp)
     _, spot, spot_trends = validate_spot(config, candles, daily)
     signals, _, trends = prepare_history(config, perp)
@@ -51,7 +66,8 @@ def simulate_short_reserve(config, candles, daily, perp, funding, native):
     contract = NativeClock({s:p['trade15m'] for s,p in native.items()}, config.start, config.end)
     mark_clock = NativeClock({s:p['mark15m'] for s,p in native.items()}, config.start, config.end)
     audit, settlements = funding_audit(config, funding), defaultdict(list)
-    book = ShortReserveBook(config)
+    book = book_class(config)
+    policy = spot_policy or DonchianSpotPolicy()
     for s, state in audit.items():
         if not state['complete']:
             book.limitations.add('funding_coverage_incomplete:'+s)
@@ -76,7 +92,7 @@ def simulate_short_reserve(config, candles, daily, perp, funding, native):
             book.settle_funding(s, at, row.rate, row.mark)
         before = len(book.trades)
         if perp_close or spot_close:
-            closed |= close_touched_stops(book, at, spot_close, perp_close)
+            closed |= policy.touched(book, at, spot_close, perp_close)
             recently_closed[at+MS] = closed
         if spot_open or spot_close or at in settlements or at == config.end or len(book.trades) != before:
             cost_checkpoint(book, at, marks)
@@ -97,21 +113,21 @@ def simulate_short_reserve(config, candles, daily, perp, funding, native):
         spot_obs = {s:evaluate_donchian(spot_clock.history(s, at), PARAMETERS) for s in spot_open}
         perp_obs = {s:perp_observation(signal.history(s, at)) for s in signal.opens.get(at, {})}
         before = len(book.trades)
-        open_exits(book, at, spot_open, {}, spot_obs, {}, closed)
+        policy.exits(book, at, spot_open, spot_obs, closed)
         perp_open_exits(book, at, perp_open, perp_obs, closed, False)
         if len(book.trades) != before:
             cost_checkpoint(book, at, marks)
-        flatten_open_locks(book, at, marks, spot_open, perp_open, closed)
+        flatten_open_locks(book, at, marks, spot_open, perp_open, closed, close_spot=policy.flatten_spot)
         if book.flat_at == at:
             book.rebalance_reserve(at, marks)
         if spot_open:
             book.maybe_resume(at, marks)
         book.maybe_resume_perp(at)
         if spot_open:
-            open_entries(book, at, marks, {}, spot_obs, {}, spot_trends, {}, closed)
-            flatten_open_locks(book, at, marks, spot_open, perp_open, closed)
+            policy.entries(book, at, marks, spot_obs, spot_trends, closed)
+            flatten_open_locks(book, at, marks, spot_open, perp_open, closed, close_spot=policy.flatten_spot)
         if perp_obs:
-            short_entries(book, at, marks, signal, perp_open, perp_obs, trends, closed, spot_open)
+            short_entries(book, at, marks, signal, perp_open, perp_obs, trends, closed, spot_open, policy)
         if book.flat_at == at:
             book.rebalance_reserve(at, marks)
     return short_result(config, spot, daily, perp, funding, audit, book, native)

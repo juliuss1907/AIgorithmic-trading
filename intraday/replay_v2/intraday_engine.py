@@ -60,11 +60,11 @@ def perp_open_exits(book, at, bars, observations, closed, trailing_open):
             closed.add(('perp', s))
 
 
-def flatten_open_locks(book, at, marks, spot_open, perp_open, closed):
+def flatten_open_locks(book, at, marks, spot_open, perp_open, closed, *, close_spot=True):
     """A fill-cost trigger at an open must flatten at that same open."""
     while book.halted or book.daily.locked:
         before = len(book.trades)
-        if book.halted:
+        if book.halted and close_spot:
             for s, bar in sorted(spot_open.items()):
                 if book.positions[s].quantity:
                     book.close(s, at, bar.open, book.halt_reason)

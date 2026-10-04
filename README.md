@@ -99,6 +99,8 @@ Nghiên cứu Perp H1/H4/H8 với trailing/risk M15 có preset offline riêng;
 không thay runtime hay gate. [Cách chạy và giả định](docs/perp-intraday-timeframes-research.md).
 Nghiên cứu short-only Perp2x, ngân sách margin300 và quỹ dự trữ bù/hoàn khi flat:
 [Bốn cấu hình offline và kết quả](docs/perp-short-reserve-research.md); không thay runtime.
+So sánh short1x/bù quỹ, Spot buy-and-hold + long-short2x và buy-and-hold100%:
+[Cấu hình, kết quả 703 ngày và cách chạy lại](docs/hold-margin-research.md).
 Gate operator riêng: `aigt assets rules replay RULE_ID --engine v2`, sau passing
 evaluation mới explicit start validation 14 ngày và promote. Spot fee/slippage
 10/5 bps, Perp 5/5 bps mỗi fill; không rewrite v1 và không tự bật execution.

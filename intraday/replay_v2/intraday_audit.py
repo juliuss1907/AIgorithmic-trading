@@ -74,7 +74,8 @@ def audit_drawdown(report, spot, native):
         equity, perp_equity = cash+spot_value+unrealized, perp_cash+unrealized
         performance = perp_equity-flows
         peak, perp_peak = max(peak, equity), max(perp_peak, performance)
-        current, perp_current = ONE-equity/peak, ONE-performance/perp_peak
+        current = ONE-equity/peak
+        perp_current = ONE-performance/perp_peak if perp_peak else ZERO
         if current > dd:
             dd, worst_at = current, at.isoformat()
         if perp_current > perp_dd:
