@@ -103,7 +103,7 @@ def perp_open_entries(book, at, marks, bars, observations, trends, closed, spot_
             flatten_open_locks(book, at, marks, spot_open, bars, closed)
 
 
-def simulate_intraday(config, candles, daily, perp, funding, native):
+def simulate_intraday(config, candles, daily, perp, funding, native, *, book_class=IntradayBook):
     validate_native(config, native, perp)
     _, spot, spot_trends = validate_spot(config, candles, daily)
     prepare_history(config, perp)  # The frozen base remains independently valid.
@@ -114,7 +114,7 @@ def simulate_intraday(config, candles, daily, perp, funding, native):
     trail = signal if config.perp_trailing_interval == '1h' else contract
     trends = {s:(trend_series(p['trade4h']), trend_series(p['trade8h'])) for s,p in native.items()}
     audit, settlements = funding_audit(config, funding), defaultdict(list)
-    book = IntradayBook(config)
+    book = book_class(config)
     for s, state in audit.items():
         if not state['complete']:
             book.limitations.add('funding_coverage_incomplete:'+s)
