@@ -49,6 +49,11 @@ def test_flat_price_zero_volume_and_invalid_profile():
         volume_profile([row])
 
 
+def test_uniform_profile_poc_tie_uses_lowest_bin_despite_float_roundoff():
+    row = SimpleNamespace(low=D(10), high=D(20), volume=D(100))
+    assert volume_profile([row], bins=50)['poc'] == pytest.approx(10.1)
+
+
 def test_strict_directional_filters_and_all_block_reasons():
     f = dict(close=D(110), ema200=D(100), ema50=D(105), prior_ema50=D(104),
              adx=D(26), prior_adx=D(25), plus_di=D(30), minus_di=D(10),

@@ -33,7 +33,7 @@ class FilterConfig(HistoricalConfig):
 
     @model_validator(mode='after')
     def fixed_study(self):
-        if (self.entry_cap != Decimal('.6') or self.perp_cap != Decimal('.4') or
+        if (self.capital != 1000 or self.entry_cap != Decimal('.6') or self.perp_cap != Decimal('.4') or
                 self.daily_loss != Decimal('.03') or self.weights != WEIGHTS or self.perp_weights != WEIGHTS or
                 self.perp_daily_policy != 'disabled' or self.perp_trade_exit != 'baseline'):
             raise ValueError('filter study requires 60/40, BTC/ETH/SOL40/30/30 and parent-only daily3%')
@@ -59,6 +59,19 @@ class FilterBook(HistoricalBook):
     def __init__(self, config):
         super().__init__(config)
         self.trails = {}
+
+    def advance_day(self, at, marks=None):
+        if at.date() < self.day:
+            raise ValueError('filter study clock cannot go backwards')
+        if at.date() != self.day:
+            self.day = at.date()
+            self.day_start = self.equity(marks) if marks is not None else self.last_equity
+
+    def observe(self, at, marks, *, stage='risk'):
+        equity = super().observe(at,marks,stage=stage)
+        self.curve[-1].update(day_start_equity=str(self.day_start),
+            daily_return=str(equity/self.day_start-ONE))
+        return equity
 
     def budget_exposures(self, marks):
         # Used principal cannot be reused when prices fall; gains do not consume cash.

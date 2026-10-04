@@ -141,7 +141,6 @@ def simulate(config, prepared):
         book.enforce_risk(at, marks)
 
     for at in prepared.timeline:
-        book.advance_day(at)
         closed = cooldown.pop(at, set())
         closing = {m:prepared.closes[m].get(at,{}) for m in ('spot','perp')}
         opening = {m:prepared.opens[m].get(at,{}) for m in ('spot','perp')}
@@ -154,6 +153,7 @@ def simulate(config, prepared):
         if opening['spot']:
             marks.update({s:b.open for s,b in opening['spot'].items()})
             book.perp_marks.update({s:b.open for s,b in prepared.opens['mark'][at].items()})
+        book.advance_day(at,marks)
         for s,row in prepared.settlements.get(at,()):
             book.perp_marks[s] = row.mark
             book.settle_funding(s,at,row.rate,row.mark)

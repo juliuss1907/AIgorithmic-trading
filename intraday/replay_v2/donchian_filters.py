@@ -93,13 +93,16 @@ def volume_profile(rows, bins=50):
     np.add.at(diff, z, -density*step)
     hist += np.cumsum(diff)[:bins]
     hist = np.maximum(hist, 0)
-    poc = int(np.argmax(hist))  # Equal POC volume: lowest price row.
+    # Bin-edge floating roundoff must not turn mathematically tied bins into
+    # different POCs. Relative tolerance1e-12 is also used for VA adjacency.
+    poc = int(np.flatnonzero(np.isclose(hist, hist.max(), rtol=1e-12, atol=0))[0])
     first = last = poc
     covered = hist[poc]
     while covered < .7*total and (first > 0 or last < bins-1):
         above = hist[last+1] if last < bins-1 else -1
         below = hist[first-1] if first else -1
-        if above >= below:  # Equal adjacent volumes: upper row wins.
+        tied = abs(above-below) <= 1e-12*max(abs(above),abs(below))
+        if above >= below or tied:  # Equal adjacent volumes: upper row wins.
             last += 1
             covered += hist[last]
         else:

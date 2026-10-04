@@ -102,3 +102,21 @@ def test_new_h4_trail_never_fills_retroactively_and_gap_is_checked_immediately()
     assert trade['exit_reason'] == 'atr_stop_gap'
     assert D(trade['exit_price']) == 110
     assert len([e for e in report['events'] if e['kind']=='entry' and e['market']=='spot' and e['symbol']=='BTCUSDT']) == 1
+
+
+def test_new_utc_day_anchor_is_midnight_marked_equity_not_prior_close():
+    cfg,data,funding = fixture(days=2)
+    midnight = START+timedelta(days=1)
+    for s in data:
+        large = list(data[s]['spot4h'])
+        large[606] = large[606].model_copy(update={'open':D(100),'low':D(99)})
+        data[s]['spot4h'] = tuple(large)
+        small = list(data[s]['spot15m'])
+        i = next(i for i,b in enumerate(small) if b.opened_at == midnight)
+        small[i] = small[i].model_copy(update={'open':D(100),'low':D(99)})
+        data[s]['spot15m'] = tuple(small)
+    report = simulate(cfg,prepare(cfg,data,funding))
+    assert not [e for e in report['events'] if e['kind']=='halt' and e['at']==midnight.isoformat()]
+    trades = [t for t in report['trades'] if t['market']=='spot' and t['closed_at']==midnight.isoformat()]
+    assert len(trades) == 3
+    assert all(t['exit_reason']=='atr_stop_gap' for t in trades)

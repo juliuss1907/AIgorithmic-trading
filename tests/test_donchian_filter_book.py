@@ -21,7 +21,7 @@ def test_matrix_config_fixed_allocations_and_weights():
     assert b.realized_capital == {'spot':D(600), 'perp':D(400), 'unallocated':D(0)}
     assert b.weights == {'BTCUSDT':D('.4'), 'ETHUSDT':D('.3'), 'SOLUSDT':D('.3')}
     for override in [dict(leverage=2), dict(reserve=D('.1')), dict(entry_cap=D('.5')),
-                     dict(entry_window=40), dict(filter_level=5), dict(daily_loss=D('.05'))]:
+                     dict(entry_window=40), dict(filter_level=5), dict(daily_loss=D('.05')), dict(capital=D(2000))]:
         with pytest.raises(ValueError):
             FilterConfig(start=START, end=START+timedelta(days=1), **override)
 

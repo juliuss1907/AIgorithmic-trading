@@ -119,6 +119,13 @@ def extend(parent, start, end, fetcher):
     return snapshot(**payload)
 
 
+def verify_retained(snap, parent, start, end):
+    retained = {r[0]:r for r in snap.raw_rows}
+    first, last = int(start.timestamp()*1000), int(end.timestamp()*1000)
+    if any(retained.get(r[0]) != r for r in parent.raw_rows if first <= r[0] < last):
+        raise ValueError('supplemental input changed frozen parent rows')
+
+
 def collect(frozen_root, sol_inputs, output_root, *, resume=False, reuse_root=None, progress=print,
             spot_fetcher=fetch_spot_snapshot, perp_fetcher=fetch_candle_snapshot):
     old, sol, root = (Path(p).expanduser().resolve() for p in (frozen_root, sol_inputs, output_root))
@@ -168,10 +175,7 @@ def collect(frozen_root, sol_inputs, output_root, *, resume=False, reuse_root=No
                     if cached.market != ('spot' if tag.startswith('spot') else 'mark' if tag == 'mark15m' else 'perp') or cached.symbol != symbol or cached.interval != interval:
                         raise ValueError('reused supplemental cache identity mismatch')
                     if parent:
-                        retained = {r[0]:r[:7] for r in cached.raw_rows}
-                        if any(retained.get(r[0]) != r[:7] for r in parent.raw_rows
-                               if cached.coverage_start.timestamp()*1000 <= r[0] < end.timestamp()*1000):
-                            raise ValueError('supplemental cache changed original parent rows')
+                        verify_retained(cached,parent,cached.coverage_start,end)
                     parent = cached
             if resume and path.exists():
                 snap = FilterSnapshot.model_validate(read_inputs(path))
@@ -185,10 +189,7 @@ def collect(frozen_root, sol_inputs, output_root, *, resume=False, reuse_root=No
                     symbol, expected_market, interval, first, end):
                 raise ValueError('supplemental snapshot identity mismatch')
             if parent:
-                retained = {r[0]:r[:7] for r in snap.raw_rows}
-                if any(retained.get(r[0]) != r[:7] for r in parent.raw_rows
-                       if int(first.timestamp()*1000) <= r[0] < int(end.timestamp()*1000)):
-                    raise ValueError('supplemental input changed frozen parent rows')
+                verify_retained(snap,parent,first,end)
             if not path.exists():
                 _write(path, encoded(snap.model_dump(mode='json')))
             raw['candles'][symbol][tag] = snap.model_dump(mode='json')
