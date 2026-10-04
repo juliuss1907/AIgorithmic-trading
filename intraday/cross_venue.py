@@ -125,8 +125,8 @@ def build_hyperliquid_frame(
     for bucket in DEPTH_BUCKETS_BPS:
         lower = mid * (1 - bucket / 10_000)
         upper = mid * (1 + bucket / 10_000)
-        bid_value = sum(price * size for price, size in bids if price >= lower)
-        ask_value = sum(price * size for price, size in asks if price <= upper)
+        bid_value = sum((price * size for price, size in bids if price >= lower), 0.0)
+        ask_value = sum((price * size for price, size in asks if price <= upper), 0.0)
         total = bid_value + ask_value
         key = str(bucket)
         bid_depth[key] = bid_value

@@ -433,10 +433,9 @@ class NewsIngestResult(StrictContract):
         return None if value is None else _aware(value)
 
 
-class VenueMarketFrame(StrictContract):
-    """Content-addressed, normalized market evidence from one external venue."""
+class _VenueMarketPayload(StrictContract):
+    """Validate and normalize market data before assigning content identity."""
 
-    frame_id: str = Field(min_length=16, max_length=64)
     venue: Literal["hyperliquid", "lighter"]
     symbol: str = "BTCUSDT"
     event_time: datetime
@@ -452,8 +451,6 @@ class VenueMarketFrame(StrictContract):
     bid_depth_usd: dict[str, float]
     ask_depth_usd: dict[str, float]
     book_imbalance: dict[str, float]
-    checksum: str = Field(pattern=r"^[a-f0-9]{64}$")
-
     _event_time_is_aware = field_validator("event_time")(_aware)
     _received_at_is_aware = field_validator("received_at")(_aware)
     _metadata_received_at_is_aware = field_validator("metadata_received_at")(_aware)
@@ -476,8 +473,25 @@ class VenueMarketFrame(StrictContract):
             raise ValueError("depth maps must contain 5, 10, and 25 bps buckets")
         if any(value < 0 for mapping in (self.bid_depth_usd, self.ask_depth_usd) for value in mapping.values()):
             raise ValueError("depth cannot be negative")
+        if any(
+            not math.isfinite(value)
+            for mapping in (self.bid_depth_usd, self.ask_depth_usd, self.book_imbalance)
+            for value in mapping.values()
+        ):
+            raise ValueError("depth and imbalance must be finite")
         if any(not -1 <= value <= 1 for value in self.book_imbalance.values()):
             raise ValueError("book imbalance must be between -1 and 1")
+        return self
+
+
+class VenueMarketFrame(_VenueMarketPayload):
+    """Content-addressed, normalized market evidence from one external venue."""
+
+    frame_id: str = Field(min_length=16, max_length=64)
+    checksum: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def valid_frame_identity(self):
         expected = self._checksum_for(self.model_dump(exclude={"frame_id", "checksum"}))
         if self.checksum != expected or self.frame_id != expected[:24]:
             raise ValueError("frame checksum does not match its payload")
@@ -490,18 +504,14 @@ class VenueMarketFrame(StrictContract):
 
     @classmethod
     def create(cls, **values) -> "VenueMarketFrame":
-        from intraday.assets import normalize_symbol
-
-        values["symbol"] = normalize_symbol(values.get("symbol", "BTCUSDT"))
-        payload = {"schema_version": "1", **values}
+        payload = _VenueMarketPayload(**values).model_dump()
         checksum = cls._checksum_for(payload)
-        return cls(frame_id=checksum[:24], checksum=checksum, **values)
+        return cls(frame_id=checksum[:24], checksum=checksum, **payload)
 
 
-class ExternalObservation(StrictContract):
-    """Content-addressed shadow evidence from a heterogeneous public source."""
+class _ExternalObservationPayload(StrictContract):
+    """Normalize external numeric context without bypassing validation."""
 
-    observation_id: str = Field(min_length=16, max_length=64)
     source: Literal["cryptorank", "aster", "variational", "lighter"]
     dataset: Literal["market_context", "perp_market"]
     symbol: str | None = None
@@ -509,8 +519,6 @@ class ExternalObservation(StrictContract):
     received_at: datetime
     metrics: dict[str, float | None]
     labels: dict[str, str]
-    checksum: str = Field(pattern=r"^[a-f0-9]{64}$")
-
     _source_timestamp_is_aware = field_validator("source_timestamp")(_aware)
     _observation_received_is_aware = field_validator("received_at")(_aware)
 
@@ -532,6 +540,17 @@ class ExternalObservation(StrictContract):
                 raise ValueError("metric names cannot be empty")
             if value is not None and not math.isfinite(value):
                 raise ValueError("metrics must be finite")
+        return self
+
+
+class ExternalObservation(_ExternalObservationPayload):
+    """Content-addressed shadow evidence from a heterogeneous public source."""
+
+    observation_id: str = Field(min_length=16, max_length=64)
+    checksum: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def valid_observation_identity(self):
         expected = self._checksum_for(
             self.model_dump(exclude={"observation_id", "checksum"})
         )
@@ -548,13 +567,9 @@ class ExternalObservation(StrictContract):
 
     @classmethod
     def create(cls, **values) -> "ExternalObservation":
-        if values.get("symbol") is not None:
-            from intraday.assets import normalize_symbol
-
-            values["symbol"] = normalize_symbol(values["symbol"])
-        payload = {"schema_version": "1", **values}
+        payload = _ExternalObservationPayload(**values).model_dump()
         checksum = cls._checksum_for(payload)
-        return cls(observation_id=checksum[:24], checksum=checksum, **values)
+        return cls(observation_id=checksum[:24], checksum=checksum, **payload)
 
 
 class ProviderProfile(StrictContract):
