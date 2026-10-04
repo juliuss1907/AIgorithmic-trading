@@ -3,6 +3,8 @@
 from decimal import Decimal
 from typing import Literal
 
+from pydantic import model_validator
+
 from intraday.replay_v2.historical_mixed import HistoricalConfig
 from intraday.replay_v2.historical_capital import HistoricalBook
 from intraday.replay_v2.mixed_book import PERP_FEE, PERP_SLIP
@@ -24,6 +26,14 @@ class ShortReserveConfig(HistoricalConfig):
     perp_direction: Literal['short-only'] = 'short-only'
     reserve_policy: Literal['off', 'restore-and-repay'] = 'off'
     perp_risk_interval: Literal['15m'] = '15m'
+
+    @model_validator(mode='after')
+    def fixed_allocation(self):
+        if (self.entry_cap != Decimal('.60') or self.perp_cap != Decimal('.30') or
+                self.reserve != Decimal('.10') or self.perp_weights !=
+                {'BTCUSDT':Decimal('.50'), 'ETHUSDT':Decimal('.50')}):
+            raise ValueError('short-reserve requires 60/30/10 allocation and BTC/ETH 50/50 Perp')
+        return self
 
 
 class FlowDailyState(PerpDailyState):

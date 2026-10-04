@@ -104,7 +104,8 @@ class PerpDailyBook(HistoricalBook):
             self.daily.flattened_at = utc(at)
             self.event(at, 'perp_daily_flat', self.daily.reason, market='perp',
                        perp_equity=str(self.perp_equity()), day_start_equity=str(self.daily.day_start),
-                       return_after_close=str((self.perp_equity()-self.daily.day_start)/self.daily.day_start))
+                       return_after_close=str((self.perp_equity()-self.daily.day_start-
+                           getattr(self.daily, 'day_flows', ZERO))/self.daily.day_start))
 
     def daily_curve_fields(self):
         d = self.daily

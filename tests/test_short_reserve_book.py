@@ -80,3 +80,25 @@ def test_short_only_and_fixed_contract_are_validated():
         b.enter_perp('BTCUSDT', START, marks, D(100), 1, D('.10'))
     with pytest.raises(ValueError):
         ShortReserveConfig(start=START, end=START+timedelta(days=1), leverage=3)
+
+
+@pytest.mark.parametrize('values', [{'entry_cap':'.50'}, {'reserve':'.05'},
+    {'perp_weights':{'BTCUSDT':D('.6'),'ETHUSDT':D('.4')}}])
+def test_incompatible_allocation_is_rejected(values):
+    with pytest.raises(ValueError):
+        ShortReserveConfig(start=START, end=START+timedelta(days=1), **values)
+
+
+def test_flat_daily_event_excludes_prior_reserve_flow():
+    b, marks = book()
+    b.enter_perp('BTCUSDT', START, marks, D(100), -1, D('.10'))
+    at = START+timedelta(hours=1)
+    b.close_perp('BTCUSDT', at, D(101), 'donchian_exit')
+    b.enforce_risk(at, marks)
+    b.rebalance_reserve(at, marks)
+    at += timedelta(hours=4)
+    b.enter_perp('BTCUSDT', at, marks, D(100), -1, D('.10'))
+    b.close_perp('BTCUSDT', at+timedelta(hours=1), D(105), 'contract_stop')
+    b.enforce_risk(at+timedelta(hours=1), marks)
+    event = next(e for e in reversed(b.events) if e['kind'] == 'perp_daily_flat')
+    assert D(event['return_after_close']) == b.daily.daily_return
