@@ -949,3 +949,10 @@ research control unchanged and compares two H1 signal / H4+H8 EMA50 / M15
 Perp risk cases, with H1 versus M15 trailing. Parent risk and Spot cadence
 remain H4. See [intraday timeframe research](perp-intraday-timeframes-research.md)
 for contracts, exact reuse lineage, offline CLI and passive common-M15 DD audit.
+
+### Short-only Perp margin and flat-only reserve comparison
+
+The separate `perp-short-reserve` preset compares Spot-only, unchanged original A,
+and short-only isolated2x with reserve off versus restore/repay. New Perp allocation
+is a margin budget, not the old notional cap. See [short/reserve research](perp-short-reserve-research.md)
+for flow-neutral ledger contracts, offline CLI, immutable evidence and full703-day results.
