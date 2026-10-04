@@ -213,3 +213,19 @@ def test_valid_float_observation_keeps_exact_pre_hotfix_hash_and_json_identity()
 
     assert ExternalObservation.create(**values) == legacy
     assert ExternalObservation.model_validate_json(legacy.model_dump_json()) == legacy
+
+
+@pytest.mark.parametrize("symbol", SYMBOLS)
+@pytest.mark.parametrize("mid", (0.01, 1.0, 100.0, 100000.0))
+def test_wide_books_keep_valid_identity_at_different_price_scales(symbol, mid):
+    book = {
+        "coin": ASSET_REGISTRY[symbol].hyperliquid_coin, "time": int(NOW.timestamp() * 1000),
+        "levels": [
+            [{"px": str(mid * 0.9994), "sz": "1"}],
+            [{"px": str(mid * 1.0006), "sz": "1"}],
+        ],
+    }
+    context = {"markPx": str(mid), "oraclePx": str(mid), "funding": "0", "openInterest": "1"}
+    frame = build_hyperliquid_frame(book, context, symbol=symbol, received_at=NOW)
+    assert frame.bid_depth_usd["5"] == frame.ask_depth_usd["5"] == 0.0
+    assert VenueMarketFrame.model_validate_json(frame.model_dump_json()) == frame

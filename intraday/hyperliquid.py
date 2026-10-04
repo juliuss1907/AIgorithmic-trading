@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 
 from intraday.assets import asset_spec
 from intraday.contracts import VenueMarketFrame
-from intraday.cross_venue import build_hyperliquid_frame
+from intraday.cross_venue import build_hyperliquid_frame, hyperliquid_event_time
 
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
@@ -130,13 +130,7 @@ class HyperliquidFeed:
         context_age = (now - context_time).total_seconds()
         if not (-1 <= book_age <= self.max_book_age_seconds):
             return None
-        try:
-            event_time = datetime.fromtimestamp(
-                float(book["time"]) / 1000,
-                tz=timezone.utc,
-            )
-        except (KeyError, TypeError, ValueError, OverflowError):
-            return None
+        event_time = hyperliquid_event_time(book)
         event_age = (now - event_time).total_seconds()
         if not (-1 <= event_age <= self.max_book_age_seconds):
             return None

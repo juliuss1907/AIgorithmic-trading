@@ -18,6 +18,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from pydantic import ValidationError
+
 from intraday.assets import ASSET_REGISTRY, asset_spec
 from intraday.asset_readiness import build_asset_readiness, format_asset_readiness
 from intraday.replay_v2.cli import add_replay_parser, dispatch_replay, docker_replay_command, dispatch_gate_command
@@ -63,6 +65,7 @@ from intraday.contracts import (
 )
 from intraday.cross_venue import (
     CrossVenuePolicy,
+    HyperliquidFrameDataError,
     derive_cross_venue_thresholds,
     enrich_with_cross_venue,
 )
@@ -956,7 +959,10 @@ def _portfolio_cli(arguments) -> None:
                         return
                     time.sleep(max(1, interval))
                     continue
-                _record_portfolio_hyperliquid(store, hyperliquid, now=now)
+                _record_portfolio_hyperliquid(
+                    store, hyperliquid, now=now,
+                    shadow=config.cross_venue_mode != "active",
+                )
                 if store.load_parent_portfolio_state() is None:
                     initial = ParentPortfolioState(
                         mark_price=float(snapshot.features["mark_price"]),
@@ -1201,7 +1207,10 @@ def _portfolio_cli(arguments) -> None:
                     return
                 time.sleep(max(1, interval))
                 continue
-            _record_portfolio_hyperliquid(store, hyperliquid, now=now)
+            _record_portfolio_hyperliquid(
+                store, hyperliquid, now=now,
+                shadow=config.cross_venue_mode != "active",
+            )
             asset_results = _run_registered_asset_cycles(
                 store,
                 provider,
@@ -1593,7 +1602,7 @@ def _latest_hyperliquid_frame(
     """Contain malformed advisory data, not database or programming failures."""
     try:
         return feed.latest_frame(now=now)
-    except (ValueError, TypeError, KeyError, ArithmeticError) as error:
+    except (HyperliquidFrameDataError, ValidationError) as error:
         if not shadow:
             raise
         print(json.dumps({
@@ -1613,13 +1622,14 @@ def _record_portfolio_hyperliquid(
     feed: HyperliquidFeed | dict[str, HyperliquidFeed] | None,
     *,
     now: datetime,
+    shadow: bool = True,
 ) -> None:
     if feed is None:
         return
     feeds = feed.items() if isinstance(feed, dict) else ((None, feed),)
     for symbol, current in feeds:
         frame = _latest_hyperliquid_frame(
-            current, now=now, shadow=True, symbol=symbol,
+            current, now=now, shadow=shadow, symbol=symbol,
         )
         if frame is not None:
             store.record_venue_frame(frame)

@@ -5,9 +5,11 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from pydantic import ValidationError
 
 from intraday import __main__ as cli
 from intraday.assets import ASSET_REGISTRY
+from intraday.cross_venue import HyperliquidFrameDataError
 from intraday.contracts import (
     DecisionScope, Direction, FeatureSnapshot, JevDecision, Regime,
     RiskLevel, ScopedJevDecision, VenueMarketFrame,
@@ -43,11 +45,21 @@ class Feed:
         return self.frame
 
 
+def invalid_contract_error():
+    payload = frame_for("BTCUSDT").model_dump()
+    payload["checksum"] = "invalid"
+    try:
+        VenueMarketFrame.model_validate(payload)
+    except ValidationError as error:
+        return error
+    raise AssertionError("invalid checksum must fail validation")
+
+
 @pytest.mark.parametrize("failed_symbol", tuple(ASSET_REGISTRY))
 def test_bad_coin_does_not_block_other_feeds_and_recovers(tmp_path, capsys, failed_symbol):
     store = IntradayStore(tmp_path / "source.sqlite3")
     feeds = {s: Feed(s) for s in ASSET_REGISTRY}
-    feeds[failed_symbol].error = ValueError("private payload must not be logged")
+    feeds[failed_symbol].error = HyperliquidFrameDataError("private payload must not be logged")
 
     cli._record_portfolio_hyperliquid(store, feeds, now=NOW)
 
@@ -71,7 +83,7 @@ def test_bad_coin_does_not_block_other_feeds_and_recovers(tmp_path, capsys, fail
     assert capsys.readouterr().out == ""
 
 
-@pytest.mark.parametrize("error", [ValueError("bad"), TypeError("bad"), KeyError("bad"), OverflowError("bad")])
+@pytest.mark.parametrize("error", [HyperliquidFrameDataError("bad"), invalid_contract_error()])
 def test_single_shadow_feed_data_errors_are_contained(tmp_path, capsys, error):
     store = IntradayStore(tmp_path / "source.sqlite3")
     cli._record_portfolio_hyperliquid(store, Feed("BTCUSDT", error=error), now=NOW)
@@ -88,16 +100,99 @@ def test_database_failure_is_not_hidden():
         cli._record_portfolio_hyperliquid(BrokenStore(), Feed("ETHUSDT"), now=NOW)
 
 
-def test_unexpected_programming_error_is_not_hidden(tmp_path):
+@pytest.mark.parametrize("error", [
+    RuntimeError("unexpected"), KeyError("unexpected"), TypeError("unexpected"),
+    ValueError("unexpected"), ZeroDivisionError("unexpected"), OverflowError("unexpected"),
+])
+def test_unexpected_programming_error_is_not_hidden(tmp_path, error):
     store = IntradayStore(tmp_path / "source.sqlite3")
-    with pytest.raises(RuntimeError, match="unexpected"):
-        cli._record_portfolio_hyperliquid(store, Feed("ETHUSDT", error=RuntimeError("unexpected")), now=NOW)
+    with pytest.raises(type(error), match="unexpected"):
+        cli._record_portfolio_hyperliquid(store, Feed("ETHUSDT", error=error), now=NOW)
 
 
-def test_active_capture_still_propagates_validation_error(capsys):
-    with pytest.raises(ValueError, match="bad frame"):
-        cli._latest_hyperliquid_frame(Feed("BTCUSDT", error=ValueError("bad frame")), now=NOW, shadow=False)
+@pytest.mark.parametrize("error", [HyperliquidFrameDataError("bad frame"), invalid_contract_error()])
+def test_active_capture_still_propagates_validation_error(capsys, error):
+    with pytest.raises(type(error)):
+        cli._latest_hyperliquid_frame(Feed("BTCUSDT", error=error), now=NOW, shadow=False)
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("error", [HyperliquidFrameDataError("bad frame"), invalid_contract_error()])
+def test_active_portfolio_capture_still_propagates_validation_error(tmp_path, error):
+    store = IntradayStore(tmp_path / "source.sqlite3")
+    with pytest.raises(type(error)):
+        cli._record_portfolio_hyperliquid(
+            store, Feed("BTCUSDT", error=error),
+            now=NOW, shadow=False,
+        )
+
+
+def test_real_wrong_coin_feed_is_rejected_without_blocking_healthy_coin(tmp_path, capsys):
+    from intraday.hyperliquid import HyperliquidFeed
+
+    wrong = HyperliquidFeed(symbol="BTCUSDT")
+    wrong.update_book({
+        "coin": "ETH", "time": int(NOW.timestamp() * 1000),
+        "levels": [[{"px": "99.99", "sz": "1"}], [{"px": "100.01", "sz": "1"}]],
+    }, received_at=NOW)
+    wrong.update_context({
+        "markPx": "100", "oraclePx": "100", "funding": "0", "openInterest": "10",
+    }, received_at=NOW)
+    store = IntradayStore(tmp_path / "source.sqlite3")
+
+    cli._record_portfolio_hyperliquid(store, {"BTCUSDT": wrong, "ETHUSDT": Feed("ETHUSDT")}, now=NOW)
+
+    assert store.list_venue_frames("hyperliquid", symbol="BTCUSDT") == []
+    assert len(store.list_venue_frames("hyperliquid", symbol="ETHUSDT")) == 1
+    assert json.loads(capsys.readouterr().out)["symbol"] == "BTCUSDT"
+
+
+@pytest.mark.parametrize("symbol", tuple(ASSET_REGISTRY))
+@pytest.mark.parametrize("malformation", (
+    "missing_price", "bad_quantity", "wrong_levels_shape", "crossed",
+    "bad_mark", "missing_funding", "bad_time", "huge_time", "nan_funding", "negative_oi",
+))
+def test_real_malformed_feed_is_isolated_for_every_coin(tmp_path, capsys, symbol, malformation):
+    from intraday.hyperliquid import HyperliquidFeed
+
+    book = {
+        "coin": ASSET_REGISTRY[symbol].hyperliquid_coin, "time": int(NOW.timestamp() * 1000),
+        "levels": [[{"px": "99.99", "sz": "1"}], [{"px": "100.01", "sz": "1"}]],
+    }
+    context = {"markPx": "100", "oraclePx": "100", "funding": "0", "openInterest": "10"}
+    if malformation == "missing_price":
+        book["levels"][0][0].pop("px")
+    elif malformation == "bad_quantity":
+        book["levels"][0][0]["sz"] = "bad"
+    elif malformation == "wrong_levels_shape":
+        book["levels"] = {"bids": []}
+    elif malformation == "crossed":
+        book["levels"][0][0]["px"] = "101"
+    elif malformation == "bad_mark":
+        context["markPx"] = None
+    elif malformation == "missing_funding":
+        context.pop("funding")
+    elif malformation == "bad_time":
+        book["time"] = "bad"
+    elif malformation == "huge_time":
+        book["time"] = 1e30
+    elif malformation == "nan_funding":
+        context["funding"] = "NaN"
+    elif malformation == "negative_oi":
+        context["openInterest"] = "-1"
+    bad = HyperliquidFeed(symbol=symbol)
+    bad.update_book(book, received_at=NOW)
+    bad.update_context(context, received_at=NOW)
+    neighbor = next(s for s in ASSET_REGISTRY if s != symbol)
+    store = IntradayStore(tmp_path / "source.sqlite3")
+
+    cli._record_portfolio_hyperliquid(store, {symbol: bad, neighbor: Feed(neighbor)}, now=NOW)
+
+    assert store.list_venue_frames("hyperliquid", symbol=symbol) == []
+    assert len(store.list_venue_frames("hyperliquid", symbol=neighbor)) == 1
+    diagnostic = json.loads(capsys.readouterr().out)
+    assert diagnostic["symbol"] == symbol
+    assert diagnostic["error_type"] in {"HyperliquidFrameDataError", "ValidationError"}
 
 
 def test_shadow_failure_does_not_prevent_real_binance_soak_tick(tmp_path):
@@ -121,7 +216,7 @@ def test_shadow_failure_does_not_prevent_real_binance_soak_tick(tmp_path):
                 ),
             )
 
-    cli._record_portfolio_hyperliquid(store, Feed("ETHUSDT", error=ValueError("bad frame")), now=NOW)
+    cli._record_portfolio_hyperliquid(store, Feed("ETHUSDT", error=HyperliquidFrameDataError("bad frame")), now=NOW)
     result = run_soak_cycle(store, Provider(), snapshot, now=NOW, scopes=(DecisionScope.PERP_INTRADAY,))
     assert result == {"perp_intraday": "success"}
     assert store.list_portfolio_soak_ticks()[0]["status"] == "success"

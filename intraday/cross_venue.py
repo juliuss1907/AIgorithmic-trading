@@ -93,8 +93,36 @@ def derive_cross_venue_thresholds(
     )
 
 
+class HyperliquidFrameDataError(ValueError):
+    """Malformed external data, distinct from an unexpected worker failure."""
+
+
+def _number_field(payload: dict, name: str) -> float:
+    if not isinstance(payload, dict):
+        raise HyperliquidFrameDataError("expected a market-data object")
+    try:
+        value = float(payload[name])
+    except (KeyError, TypeError, ValueError, OverflowError) as error:
+        raise HyperliquidFrameDataError(f"invalid numeric field: {name}") from error
+    if not math.isfinite(value):
+        raise HyperliquidFrameDataError(f"nonfinite numeric field: {name}")
+    return value
+
+
+def hyperliquid_event_time(book: dict) -> datetime:
+    try:
+        return datetime.fromtimestamp(_number_field(book, "time") / 1000, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError) as error:
+        raise HyperliquidFrameDataError("invalid exchange event time") from error
+
+
 def _book_side(levels: list[dict]) -> list[tuple[float, float]]:
-    return [(float(level["px"]), float(level["sz"])) for level in levels]
+    if not isinstance(levels, list) or not levels:
+        raise HyperliquidFrameDataError("order book must contain both sides")
+    parsed = [(_number_field(level, "px"), _number_field(level, "sz")) for level in levels]
+    if any(price <= 0 or size < 0 for price, size in parsed):
+        raise HyperliquidFrameDataError("invalid order book price or quantity")
+    return parsed
 
 
 def build_hyperliquid_frame(
@@ -107,17 +135,19 @@ def build_hyperliquid_frame(
 ) -> VenueMarketFrame:
     """Normalize one registered Hyperliquid book plus perpetual context."""
     spec = asset_spec(symbol)
+    if not isinstance(book, dict):
+        raise HyperliquidFrameDataError("expected an order book object")
     if book.get("coin") != spec.hyperliquid_coin:
-        raise ValueError("Hyperliquid book does not match requested asset")
+        raise HyperliquidFrameDataError("Hyperliquid book does not match requested asset")
     if received_at.tzinfo is None or received_at.utcoffset() is None:
         raise ValueError("received_at must be timezone-aware")
     levels = book.get("levels") or []
-    if len(levels) != 2 or not levels[0] or not levels[1]:
-        raise ValueError("order book must contain both sides")
+    if not isinstance(levels, list) or len(levels) != 2 or not levels[0] or not levels[1]:
+        raise HyperliquidFrameDataError("order book must contain both sides")
     bids, asks = _book_side(levels[0]), _book_side(levels[1])
     bid, ask = bids[0][0], asks[0][0]
     if bid > ask:
-        raise ValueError("order book is crossed")
+        raise HyperliquidFrameDataError("order book is crossed")
     mid = (bid + ask) / 2
     bid_depth: dict[str, float] = {}
     ask_depth: dict[str, float] = {}
@@ -132,8 +162,8 @@ def build_hyperliquid_frame(
         bid_depth[key] = bid_value
         ask_depth[key] = ask_value
         imbalance[key] = (bid_value - ask_value) / total if total else 0.0
-    mark = float(asset_context["markPx"])
-    event_time = datetime.fromtimestamp(float(book["time"]) / 1000, tz=timezone.utc)
+    mark = _number_field(asset_context, "markPx")
+    event_time = hyperliquid_event_time(book)
     return VenueMarketFrame.create(
         venue="hyperliquid",
         symbol=spec.symbol,
@@ -143,9 +173,9 @@ def build_hyperliquid_frame(
         bid=bid,
         ask=ask,
         mark_price=mark,
-        index_price=float(asset_context["oraclePx"]),
-        funding_bps_hour=float(asset_context["funding"]) * 10_000,
-        open_interest_usd=float(asset_context["openInterest"]) * mark,
+        index_price=_number_field(asset_context, "oraclePx"),
+        funding_bps_hour=_number_field(asset_context, "funding") * 10_000,
+        open_interest_usd=_number_field(asset_context, "openInterest") * mark,
         spread_bps=(ask - bid) / mid * 10_000,
         bid_depth_usd=bid_depth,
         ask_depth_usd=ask_depth,
