@@ -57,15 +57,31 @@ ETH/SOL decrease30%→20%; differences cannot be attributed entirely to new coin
 - [x] Add locked profile, serialization/resume and manifest references with SHA256.
 - [x] Scope sparse-series handling to each symbol/series; new coins reject old whitelists.
 - [x] Retain all native NEAR/ZEC Perp H4/M15 and original funding-rate evidence.
-- [ ] Complete strict native QA for new Spot H4/M15 and mark M15.
+- [x] Complete strict native QA for new Spot H4/M15 and mark M15 under separately approved exact policy.
 - [ ] Replay five cases twice and publish all journals, costs, daily stops and DD recovery.
 - [ ] Publish annual/half-year and ten coin/market contributions, blocked-off-trade
       attribution and three-coin comparison with the allocation caveat.
-- [ ] Reverify original three-coin IDs/configs/summary/methodology and full journals.
-- [ ] Complete regression/build and report the existing Hermes template failure separately.
+- [x] Reverify original three-coin IDs/configs/summary/methodology and full journals.
+- [x] Complete regression/build and report the existing Hermes template failure separately.
 
 New source anomalies block strategy replay. Acquisition and rejected original rows
 are retained under private `reports/donchian-adx-five-20261005/`; no source repair,
 new gap policy or native price tolerance is admitted without separate approval.
 Full raw auditing continues independently to make that approval concrete.
 Research results remain pending; ADX20 is a preferred candidate, not a selected winner.
+
+Implementation commit `1e387e3`. All five original cases reproduced their IDs,
+config checksums, summary, methodology and all three full journals. Receipt:
+`reports/donchian-adx-five-20261005/legacy-verification/verification.json`.
+Regression:1332 passed, one existing Hermes failure from absent ignored
+`integrations/hermes/trading-ops/.env.template`; wheel/sdist build passed.
+Full raw source audits retain all requested bars except the explicitly enumerated
+native gaps. Review `data-approval.md` and `data-audit.json` in that private root
+for the exact proposed NEAR/ZEC policy. No five-coin historical replay has run.
+
+The user explicitly approved the exact listed source exceptions in-session.
+`source-approval.json` binds that reply to `data-approval.md`, `data-audit.json`
+and the separately scoped `approved-near-zec-native-source-20261005-v1` policy.
+`approved-data/inputs.json` is a validated manifest; original raw rows remain
+unchanged, including the two H4 closeTime values whose derived interval views
+are normalized. Rates/times, prices and missing-bar evidence remain original.

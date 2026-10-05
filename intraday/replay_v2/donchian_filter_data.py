@@ -208,7 +208,21 @@ def verify_files(hashes):
         raise ValueError('immutable source checksum changed')
 
 
+def decode_snapshot(payload):
+    if 'data_policy' not in payload:
+        return FilterSnapshot.model_validate(payload)
+    from intraday.replay_v2.donchian_five_policy import POLICY as FIVE_POLICY, ApprovedFiveSnapshot
+    if payload['data_policy']==FIVE_POLICY:
+        return ApprovedFiveSnapshot.model_validate(payload)
+    if payload.get('market')=='spot':
+        from intraday.replay_v2.donchian_spot_gap import SparseSpotSnapshot
+        return SparseSpotSnapshot.model_validate(payload)
+    from intraday.replay_v2.donchian_mark_gap import SparseMarkSnapshot
+    return SparseMarkSnapshot.model_validate(payload)
+
+
 def decode_bundle(config, raw):
+    from intraday.replay_v2.donchian_five_policy import POLICY as FIVE_POLICY
     if raw.get('bundle_checksum') != fingerprint({k:v for k,v in raw.items() if k != 'bundle_checksum'}):
         raise ValueError('filter input bundle checksum mismatch')
     if raw.get('schema_version') != 'donchian-filters-1' or raw['window'] != {
@@ -219,22 +233,14 @@ def decode_bundle(config, raw):
     if 'native_boundary_policy' in raw:
         from intraday.replay_v2.donchian_native_boundaries import POLICY
         from intraday.replay_v2.donchian_adx_boundaries import POLICY as JOIN_POLICY
-        if raw['native_boundary_policy'] not in (POLICY,JOIN_POLICY):
+        if raw['native_boundary_policy'] not in (POLICY,JOIN_POLICY,FIVE_POLICY):
             raise ValueError('unknown native boundary exception policy')
     for s, payloads in raw['candles'].items():
         if set(payloads) != {'spot4h','spot15m','perp4h','perp15m','mark15m'}:
             raise ValueError('missing native filter series')
         data[s] = {}
         for tag, payload in payloads.items():
-            if 'data_policy' in payload:
-                if payload.get('market') == 'spot':
-                    from intraday.replay_v2.donchian_spot_gap import SparseSpotSnapshot
-                    snap = SparseSpotSnapshot.model_validate(payload)
-                else:
-                    from intraday.replay_v2.donchian_mark_gap import SparseMarkSnapshot
-                    snap = SparseMarkSnapshot.model_validate(payload)
-            else:
-                snap = FilterSnapshot.model_validate(payload)
+            snap = decode_snapshot(payload)
             interval = '4h' if tag.endswith('4h') else '15m'
             first = config.start if tag == 'mark15m' else config.start-WARMUP[interval]
             market = 'spot' if tag.startswith('spot') else 'mark' if tag == 'mark15m' else 'perp'
@@ -253,16 +259,15 @@ def decode_bundle(config, raw):
                 if raw['native_boundary_policy']==JOIN_POLICY:
                     from intraday.replay_v2.donchian_adx_boundaries import verify_join_boundaries
                     checker=verify_join_boundaries
+            if raw.get('native_boundary_policy')==FIVE_POLICY and (market=='perp' or s in ('NEARUSDT','ZECUSDT')):
+                from intraday.replay_v2.donchian_five_policy import verify_five_boundaries
+                checker=verify_five_boundaries
             checker(s, data[s][market+'4h'], data[s][market+'15m'], config.start, config.end, market+' H4/M15')
         payload=raw['funding'][s]
         if 'data_policy' in payload:
             from intraday.replay_v2.donchian_funding_reference import decode
             mark_payload=payloads['mark15m']
-            if 'data_policy' in mark_payload:
-                from intraday.replay_v2.donchian_mark_gap import SparseMarkSnapshot
-                mark_snap=SparseMarkSnapshot.model_validate(mark_payload)
-            else:
-                mark_snap=FilterSnapshot.model_validate(mark_payload)
+            mark_snap=decode_snapshot(mark_payload)
             history=decode(payload,mark_snap).history
         else:
             history=FundingSnapshot.model_validate(payload).history

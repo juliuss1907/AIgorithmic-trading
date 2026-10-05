@@ -21,9 +21,10 @@ avoid a combined five-coin JSON export. Candle warmup remains600H4 and1936M15;
 mark coverage starts at the active window as in the original pipeline.
 
 Sparse Spot/mark validation and profile coverage adjustments apply per series.
-NEAR/ZEC reject the original sparse-bar and native-boundary whitelists. All new
-bars must pass dense calendar/duplicate, timestamp, finite/OHLCV and exact active
-H4/M15 boundary checks. Zero volume is reported; zero-volume profiles block entry.
+NEAR/ZEC reject the original sparse-bar and native-boundary whitelists. New bars
+pass calendar/duplicate, timestamp, finite/OHLCV and exact active H4/M15 checks,
+except the individually approved, separately checksum-bound source tuples.
+Zero volume is reported; zero-volume profiles block entry.
 Funding rates/times and raw rows are preserved. A missing funding price can use
 an actual native mark M15 open0–31ms before settlement, with bound row provenance;
 missing mark evidence never authorizes an estimated price.
@@ -47,6 +48,11 @@ these exports have `accepted_snapshot=false` and cannot be replay inputs.
 Once source QA is approved and complete:
 
 ```bash
+uv run python -m intraday.replay_v2.donchian_five_data \
+  --approved-sources /path/to/source-approval.json \
+  --base-inputs /path/to/three-coin/inputs.json \
+  --output-root /path/to/new-private-approved-data
+
 uv run python scripts/replay_donchian_adx.py \
   --universe five --inputs /path/to/data/inputs.json \
   --report-root /path/to/new-private-study
@@ -82,3 +88,26 @@ verification are recorded in the private root:
 No completed five-coin comparison exists yet. ADX20 remains a preferred research
 candidate. This study uses already-seen historical data and grants no OOS,
 trading, activation or deployment approval. Only local commits are permitted.
+
+## Verified implementation
+
+At commit `1e387e3`, all five original three-coin cases matched config/result IDs,
+summary, methodology and every equity/trade/event journal against their existing
+publications. The new profile has config roundtrip, locked weights, case resume,
+manifest tamper rejection, mixed sparse/dense-series and new-coin whitelist tests.
+
+Full regression:1332 passed, one existing Hermes bundle test failed because the
+ignored `.env.template` is absent in this worktree. Wheel/sdist build succeeded.
+Private logs and the verification receipt are in the new report root.
+
+The completed raw audit identifies2H4 closeTime anomalies,3partial Spot M15
+closes,5missing Spot M15 bars per added coin,1missing mark M15 bar per coin and
+5exact H4/M15 price differences. All observed OHLCV are finite and valid; no
+duplicate or unexpected opens occur. Funding has5205settlements per coin and
+2005missing-price references per coin, all backed by actual native opens0–31ms
+before settlement, with no funding gap. `data-approval.md` gives the exact
+symbol/time/price tuples and proposed treatment; `data-audit.json` binds all raw
+files and reference rows. The user subsequently approved the exact listed
+exceptions; `source-approval.json` binds the reply, full source audit and proposal.
+The separately scoped policy has passed strict coverage, OHLCV, exact price-tuple
+and funding validation. New historical runs use `approved-data/inputs.json`.

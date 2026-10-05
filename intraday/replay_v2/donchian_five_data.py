@@ -9,7 +9,7 @@ from intraday.replay_v2.donchian_adx_config import START, END, FiveCoinADXConfig
 from intraday.replay_v2.donchian_adx_data import read_join_inputs
 from intraday.replay_v2.donchian_filter_data import (
     FilterSnapshot, WARMUP, SOURCES, decode_bundle, verify_files,
-    fetch_spot_snapshot, public_spot_json, from_futures,
+    fetch_spot_snapshot, public_spot_json, from_futures, decode_snapshot,
 )
 from intraday.replay_v2.donchian_funding_reference import derive
 from intraday.replay_v2.donchian_oos_data import quality
@@ -46,12 +46,26 @@ def read_manifest(path):
         raise ValueError('five-coin manifest checksum/schema mismatch')
     if set(manifest['additions']) != set(NEW_SYMBOLS):
         raise ValueError('five-coin manifest requires NEAR and ZEC')
+    approval=load_reference(manifest['approved_sources']) if 'approved_sources' in manifest else None
+    audit=None
+    if approval is not None:
+        from intraday.replay_v2.donchian_five_policy import POLICY,disclosure
+        if approval.get('approved') is not True or approval.get('policy')!=POLICY or approval['policy_checksum']!=fingerprint(disclosure()):
+            raise ValueError('new coin source approval policy changed')
+        audit=load_reference(approval['audit'])
+        verify_files(audit['source_files_sha256'])
     raw = load_reference(manifest['base'], joined=True)
     if raw['bundle_checksum'] != fingerprint({k:v for k,v in raw.items() if k != 'bundle_checksum'}):
         raise ValueError('base bundle checksum mismatch')
     if set(raw['candles']) != {'BTCUSDT','ETHUSDT','SOLUSDT'} or raw['window'] != manifest['window']:
         raise ValueError('base universe/window mismatch')
     raw['source_files_sha256'][manifest['base']['path']] = manifest['base']['sha256']
+    if approval is not None:
+        raw['native_boundary_policy']=approval['policy']
+        raw['source_files_sha256'].update(audit['source_files_sha256'])
+        for ref in (manifest['approved_sources'],approval['audit'],approval['proposal']):
+            verify_files({ref['path']:ref['sha256']})
+            raw['source_files_sha256'][ref['path']]=ref['sha256']
     for symbol, refs in manifest['additions'].items():
         if set(refs) != {*TAGS, 'funding'}:
             raise ValueError('manifest missing native series or funding')
@@ -63,15 +77,75 @@ def read_manifest(path):
                 raw['funding'][symbol] = payload
             else:
                 # New coins must remain dense even when old coins carry policies.
-                if 'data_policy' in payload:
+                if 'data_policy' in payload and (approval is None or payload['data_policy']!=approval['policy']):
                     raise ValueError('new coin source exception requires separate approval')
                 raw['candles'][symbol][tag] = payload
                 raw['reuse_lineage'][symbol][tag] = dict(snapshot_id=ref['snapshot_id'], source=payload['source'])
+            if approval is not None:
+                original=(audit['coins'][symbol]['series'][tag]['path'] if tag!='funding' else
+                          str(Path(audit['coins'][symbol]['series']['mark15m']['path']).parent/f'{symbol}-funding-raw.json'))
+                original_digest=audit['source_files_sha256'][original]
+                source_raw=load_reference(dict(path=original,sha256=original_digest,snapshot_id=None))
+                if payload['raw_rows']!=source_raw['raw_rows']:
+                    raise ValueError('approved snapshot changed original source rows')
+                if 'original_source_sha256' in payload and payload['original_source_sha256']!=original_digest:
+                    raise ValueError('approved snapshot original-source binding mismatch')
+                if tag!='funding':
+                    raw['reuse_lineage'][symbol][tag].update(original_raw_path=original,original_raw_sha256=original_digest)
     verify_files(manifest['source_files_sha256'])
     raw['source_files_sha256'].update(manifest['source_files_sha256'])
     raw['source_files_sha256'][str(Path(path).resolve())] = file_hash(path)
     raw['bundle_checksum'] = fingerprint({k:v for k,v in raw.items() if k != 'bundle_checksum'})
     return raw
+
+
+def collect_approved(approval_path, base_path, output_root, *, resume=False, progress=print):
+    """Freeze the separately approved complete raw sources; no network or strategy."""
+    from intraday.replay_v2.donchian_five_policy import POLICY,ApprovedFiveSnapshot,disclosure
+    approval=read_inputs(approval_path)
+    if approval.get('approved') is not True or approval['policy']!=POLICY or approval['policy_checksum']!=fingerprint(disclosure()):
+        raise ValueError('explicit exact added-coin source approval required')
+    audit=load_reference(approval['audit']);verify_files(audit['source_files_sha256'])
+    root=Path(output_root).expanduser().resolve();root.mkdir(parents=True,mode=0o700,exist_ok=resume)
+    binding=dict(approved_sources=reference(approval_path),base=reference(base_path))
+    publish_once(root/'binding.json',encoded(binding))
+    additions={}
+    for symbol in NEW_SYMBOLS:
+        additions[symbol]={};mark=None
+        for tag in TAGS:
+            original=audit['coins'][symbol]['series'][tag]
+            source=load_reference(dict(path=original['path'],sha256=original['sha256'],snapshot_id=None))
+            if tag.startswith('perp'):
+                snap=FilterSnapshot.model_validate(source)
+            else:
+                interval='4h' if tag.endswith('4h') else '15m'
+                market='spot' if tag.startswith('spot') else 'mark'
+                payload=dict(market=market,symbol=symbol,interval=interval,source=source['source'],
+                    coverage_start=source['start'].replace('+00:00','Z'),coverage_end=source['end'].replace('+00:00','Z'),
+                    fetched_at=source['fetched_at'].replace('+00:00','Z'),pages=source['pages'],raw_rows=source['raw_rows'],
+                    data_policy=POLICY,original_source_sha256=original['sha256'])
+                snap=ApprovedFiveSnapshot(snapshot_id=fingerprint(payload),**payload)
+            path=root/f'{symbol}-{tag}.json';publish_once(path,encoded(snap.model_dump(mode='json')))
+            additions[symbol][tag]=reference(path,snap.snapshot_id)
+            if tag=='mark15m':mark=snap
+            progress(f'{symbol} {tag}: {len(snap.raw_rows)} original rows validated under approved policy')
+        funding_path=Path(audit['coins'][symbol]['series']['mark15m']['path']).parent/f'{symbol}-funding-raw.json'
+        source=load_reference(dict(path=str(funding_path),sha256=audit['source_files_sha256'][str(funding_path)],snapshot_id=None))
+        funding=derive(symbol,source['raw_rows'],START,END,datetime.fromisoformat(source['fetched_at']),source['pages'],mark)
+        path=root/f'{symbol}-funding.json';publish_once(path,encoded(funding.model_dump(mode='json')))
+        additions[symbol]['funding']=reference(path,funding.funding_id)
+    manifest=dict(schema_version=SCHEMA,window=dict(start=START.isoformat(),end=END.isoformat()),
+                  **binding,additions=additions,source_files_sha256={str(root/'binding.json'):file_hash(root/'binding.json')})
+    manifest['manifest_checksum']=fingerprint(manifest)
+    candidate=root/'candidate-manifest.json';publish_once(candidate,encoded(manifest))
+    config=FiveCoinADXConfig(start=START,end=END)
+    data,funding=decode_bundle(config,read_manifest(candidate))
+    qa=quality(config,data,funding);qa['new_coin_data_policy']=disclosure()
+    qa['strict_checks']='passed: only individually approved native exceptions; all source rows retained; derived H4 interval metadata disclosed'
+    publish_once(root/'qa.json',encoded(qa))
+    publish_once(root/'inputs.json',encoded(manifest))
+    progress('Approved source coverage, OHLCV, exact boundaries and funding verified; no strategy run')
+    return root/'inputs.json'
 
 
 def page_issues(rows, interval):
@@ -245,8 +319,12 @@ def main():
     parser.add_argument('--base-inputs',required=True)
     parser.add_argument('--output-root',required=True)
     parser.add_argument('--resume',action='store_true')
+    parser.add_argument('--approved-sources',help='Explicit checksum-bound source approval receipt; offline acquisition from full audited rows')
     args=parser.parse_args()
-    collect(args.base_inputs,args.output_root,resume=args.resume)
+    if args.approved_sources:
+        collect_approved(args.approved_sources,args.base_inputs,args.output_root,resume=args.resume)
+    else:
+        collect(args.base_inputs,args.output_root,resume=args.resume)
 
 
 if __name__=='__main__': main()

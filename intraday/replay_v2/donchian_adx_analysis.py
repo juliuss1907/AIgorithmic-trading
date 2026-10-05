@@ -69,7 +69,8 @@ def describe(comparison_path, output_root, *, baseline_path=None):
             grouped[t['market']+'/'+t['symbol']].append(t)
         results.append(dict(variant=item['variant'], summary=item['summary'],
                             trades=trade_stats(trades),
-                            coin_market={k: trade_stats(v) for k,v in sorted(grouped.items())},
+                            coin_market={k: {**trade_stats(v), **item['summary']['contributions'][k.replace('/',':')]}
+                                         for k,v in sorted(grouped.items())},
                             rejected_off_trades=rejected_trades(off_trades, off_events, cfg.adx_threshold)))
     result = dict(research_only=True, research_on_seen_data=True, activation_allowed=False,
                   comparison_sha256=file_hash(source), dataset_checksum=next(iter(dataset)),
@@ -126,10 +127,11 @@ def describe(comparison_path, output_root, *, baseline_path=None):
     for r in results:
         s=r['summary']
         lines += ['', '## '+r['variant'], '', '### Coin / market', '',
-                  '| Sleeve | Trades | Net USDT | Win % |', '|---|---:|---:|---:|']
+                  '| Sleeve | Trades | Gross | Fees | Slippage | Funding paid | Net USDT | Win % |',
+                  '|---|---:|---:|---:|---:|---:|---:|---:|']
         for k,v in r['coin_market'].items():
             win = f"{v['win_rate_pct']:.2f}" if v['win_rate_pct'] is not None else 'N/A'
-            lines.append(f"| {k} | {v['closed_trades']} | {v['net_pnl']:.2f} | {win} |")
+            lines.append(f"| {k} | {v['closed_trades']} | {v['gross_pnl']:.2f} | {v['exchange_fee']:.2f} | {v['slippage_cost']:.2f} | {v['funding_paid']:.2f} | {v['net_pnl']:.2f} | {win} |")
         lines += ['', '### Annual marked equity', '',
                   '| Year | Opening USDT | Ending USDT | Change USDT | Return % |',
                   '|---|---:|---:|---:|---:|']
@@ -149,13 +151,14 @@ def describe(comparison_path, output_root, *, baseline_path=None):
               'Enabled ADX: Wilder14, strictly above threshold and rising, directional DMI. Off disables both ADX/DMI.',
               'Per-fill Spot fee/slippage10/5bps; Perp5/5bps plus historical funding. No account fee verification.',
               'Continuous account/positions across October2024 join. 2026 and final half-year are partial.',
-              'Original source prices unchanged: eight explicit H4/M15 price-view exceptions. No generic tolerance.',
-              'Five missing Spot M15 bars, one stale mark interval and funding-reference substitutions retain approved source policies; no synthetic bars.',
+              ('Original source prices unchanged: eight old H4/M15 tuples plus five separately approved NEAR/ZEC tuples. Two added-coin H4 warmup interval views correct only closeTime; original raw rows remain intact. No generic tolerance.' if universe=='five' else
+               'Original source prices unchanged: eight explicit H4/M15 price-view exceptions. No generic tolerance.'),
+              'Per-coin Spot M15 availability, stale mark intervals and funding references retain their individually approved policies; no synthetic bars.',
               'DD uses observed known prices; OHLC cannot establish exact tick fills, book depth or liquidation. Daily3% is a trigger, not a guaranteed loss ceiling.',
               'No new thresholds chosen after results; no activation, official gate/champion change or VPS deployment.', '']
     lines += [f"Frozen input: `{receipt['inputs_path']}`; SHA256 `{receipt['inputs_sha256']}`.", '']
     if universe=='five':
-        lines += ['The old source exceptions apply only to their original BTC/ETH/SOL series. New coin gaps, price differences and metadata repairs require separate approval.', '']
+        lines += ['The old source exceptions apply only to their original BTC/ETH/SOL series. The exact added-coin policy was separately approved and checksum-bound; further exceptions require separate approval.', '']
     root=Path(output_root).resolve();root.mkdir(parents=True,mode=0o700,exist_ok=False)
     files={name:_write(root/name,body) for name,body in (
         ('analysis.json',encoded(result)),('report.md','\n'.join(lines)))}

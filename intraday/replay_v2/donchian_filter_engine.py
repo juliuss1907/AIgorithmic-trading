@@ -24,6 +24,7 @@ from intraday.replay_v2.donchian_native_boundaries import POLICY as BOUNDARY_POL
 from intraday.replay_v2.donchian_adx_boundaries import (
     POLICY as JOIN_POLICY, verify_join_boundaries, disclosure as join_disclosure,
 )
+from intraday.replay_v2 import donchian_five_policy as five_policy
 
 
 VERSION = 'historical-donchian-filter-study-v1.0'
@@ -48,10 +49,11 @@ class Prepared:
     mark_gap_policy: frozenset = frozenset()
     funding_reference_times: dict | None = None
     native_boundary_policy: str | None = None
+    five_source_symbols: frozenset = frozenset()
 
 
 def prepare(config, data, funding, *, native_boundary_policy=None):
-    if native_boundary_policy not in (None,BOUNDARY_POLICY,JOIN_POLICY):
+    if native_boundary_policy not in (None,BOUNDARY_POLICY,JOIN_POLICY,five_policy.POLICY):
         raise ValueError('unknown native boundary exception policy')
     if set(data) != set(config.weights) or set(funding) != set(config.weights):
         raise ValueError('filter research requires configured coins in both markets and funding')
@@ -66,12 +68,16 @@ def prepare(config, data, funding, *, native_boundary_policy=None):
         if set(series) != {'spot4h','spot15m','perp4h','perp15m','mark15m'}:
             raise ValueError('missing native filter study series')
         for tag, rows in series.items():
+            if not rows:
+                raise ValueError('missing native filter study series rows')
             interval = '4h' if tag.endswith('4h') else '15m'
             first = config.start if tag == 'mark15m' else config.start-WARMUP[interval]
             if tag == 'spot15m' and s in gap_policy:
-                spot_candles([b.row() for b in rows], s, first, config.end)
+                checker=five_policy.spot_candles if isinstance(rows[0],five_policy.FiveSpotCandle) else spot_candles
+                checker([b.row() for b in rows], s, first, config.end)
             elif tag == 'mark15m' and s in mark_policy:
-                mark_candles([b.row() for b in rows], s, first, config.end)
+                checker=five_policy.mark_candles if isinstance(rows[0],five_policy.FiveMarkCandle) else mark_candles
+                checker([b.row() for b in rows], s, first, config.end)
             else:
                 validate_rows([b.row() for b in rows], interval, first, config.end)
             identities[s][tag] = fingerprint([b.row() for b in rows])
@@ -80,6 +86,8 @@ def prepare(config, data, funding, *, native_boundary_policy=None):
             checker=verify_spot_boundaries if market=='spot' and s in gap_policy else verify_boundaries
             if market=='perp' and native_boundary_policy:
                 checker=verify_join_boundaries if native_boundary_policy==JOIN_POLICY else verify_perp_boundaries
+            if native_boundary_policy==five_policy.POLICY and (market=='perp' or s in five_policy.SYMBOLS):
+                checker=five_policy.verify_five_boundaries
             checker(s, large, small, config.start, config.end, market+' H4/M15')
             indicators = indicator_series(large)
             small_times = [b.available_at for b in small]
@@ -131,7 +139,8 @@ def prepare(config, data, funding, *, native_boundary_policy=None):
     if native_boundary_policy: identity['native_boundary_policy']=native_boundary_policy
     checksum=fingerprint(identity)
     return Prepared(config.start, config.end, features, observations, h4, opens, closes,
-                    settlements, timeline, checksum, audit, gap_policy, mark_policy, reference_times,native_boundary_policy)
+                    settlements, timeline, checksum, audit, gap_policy, mark_policy, reference_times,native_boundary_policy,
+                    frozenset(s for s,tags in data.items() if isinstance(tags['spot15m'][0],five_policy.FiveSpotCandle)))
 
 
 def position(book, market, symbol):
@@ -179,7 +188,9 @@ def simulate(config, prepared):
         book.check_isolated_collateral(at)
         book.enforce_risk(at, marks)
         if prepared.spot_gap_policy:
-            book.curve[-1].update(stale_spot_symbols=stale_symbols(at, prepared.spot_gap_policy),
+            old_symbols=prepared.spot_gap_policy-prepared.five_source_symbols
+            book.curve[-1].update(stale_spot_symbols=sorted(stale_symbols(at, old_symbols)+
+                five_policy.stale_symbols(at,prepared.five_source_symbols)),
                 spot_observed_at={s:t.isoformat() for s,t in observed_spot.items()})
         if prepared.mark_gap_policy:
             book.curve[-1].update(stale_mark_symbols=stale_marks(at, {s: observed_mark[s] for s in prepared.mark_gap_policy}),
@@ -355,7 +366,10 @@ def result(config, prepared, book):
     if prepared.funding_reference_times:
         summary['funding_price_reference']={s:prepared.funding_audit[s]['price_reference'] for s in prepared.funding_reference_times}
     if prepared.native_boundary_policy:
-        summary['native_boundary_disclosure']=(join_disclosure() if prepared.native_boundary_policy==JOIN_POLICY else disclosure())
+        summary['native_boundary_disclosure']=(five_policy.disclosure() if prepared.native_boundary_policy==five_policy.POLICY else
+            join_disclosure() if prepared.native_boundary_policy==JOIN_POLICY else disclosure())
+    if prepared.five_source_symbols:
+        summary['new_coin_data_policy']=five_policy.disclosure()
     return dict(schema_version='2',evaluator_version=VERSION,
         result_id=fingerprint(dict(version=VERSION,config=payload,data=prepared.checksum)),
         research_only=True,activation_allowed=False,official_gate_eligible=False,
