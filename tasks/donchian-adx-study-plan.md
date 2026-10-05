@@ -102,3 +102,39 @@ NEAR and ZEC are net-positive in every case. ADX20 has the highest return and
 highest measured DD; new net contributions109.57/45.02USDT. Its final capital
 is0.29USDT below3coin, while DD falls13.20%→11.46%. ETH/SOL reweighting remains
 a confounder; no standalone-coin, extra-threshold, OOS or activation claim.
+
+## Additional allocation/ADX samples — 2026-10-05
+
+Five exact user-requested setups are opt-in through `--universe setups`;
+see [the locked setup specification](../docs/donchian-adx-setups.md).
+Same continuous 1,000USDT window/data/costs/risk rules. Setup1's650/350 groups
+retain shared realized reinvestment within Spot/Short, explicitly confirmed by
+the user. Setup3 is Spot100%, SOL/ZEC/NEAR4:3:3 as in setup2.
+
+- [x] Lock the five allocations and per-market/per-coin ADX maps; no additional thresholds.
+- [x] Test disjoint Spot/Short universes, Spot-only zero margin/funding, serialization/resume,
+      threshold routing and trade/capital reconciliation.
+- [x] Freeze clean source commit `0ca9bc9` before replay; reference unchanged approved5coin manifest.
+- [x] Run each setup twice and match summary/methodology/result ID/all journals.
+- [x] Publish wins/losses, costs, daily stops, DD recovery, yearly/half-year and coin×market tables,
+      plus a CSV of every executed sample trade.
+- [x] Verify all five prior3coin and all five prior5coin cases against their full publications.
+- [x] Regression1352pass;1known Hermes template failure; wheel/sdist build pass.
+- [x] Verify final source/manifest/accounting and commit delivery locally.
+
+Evidence root: private `reports/donchian-adx-setups-20261005/`. Existing research
+artifacts and operating backlog are preserved. This remains already-seen
+historical research; no OOS/champion/activation claim, push, merge, deploy or LLM calls.
+
+All10previous cases reproduced their full immutable reports at source commit0ca9bc9.
+Receipts: `legacy-three-final/verification.json` and `legacy-five-final/verification.json`.
+New setup finalUSDT/return/DD:1 1564.75/56.48%/9.48%;2 1663.98/66.40%/10.85%;
+3 1669.19/66.92%/19.45%;4 1497.05/49.71%/12.45%;5 1468.59/46.86%/21.37%.
+All1918executed entries passed their exact mapped thresholds and retained filters;
+`entry-verification.json` records this check. Setup3 has14daily stops versus0in setup2,
+with only5.21USDT additional profit. No new setup exceeds prior5coinADX20return70.88%.
+
+Final accounting checks reconcile every trade group, fee/slippage/funding total,
+yearly/half-year change and full marked-curve DD. All source checksums remain
+unchanged. Completed artifacts: `final-report.md`, `equity-drawdown.png`,
+`final-verification.json` and `final-manifest.json` in the new private root.

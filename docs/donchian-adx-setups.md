@@ -55,3 +55,41 @@ counterfactual is claimed for these different allocations.
 
 Private delivery root:
 `/home/julius/.local/state/aigorithmic-trading/reports/donchian-adx-setups-20261005`.
+
+## Historical results
+
+Frozen source commit: `0ca9bc9d8e24b7d82454d08df3ec049127980e07`.
+Original approved manifest SHA256:
+`fe09301c47264605e6fb2a0a2848f15ef5063ff9157f685d29a247358743b8a9`.
+Each new setup completed its serialized mechanical repeat with identical full
+journals, summary, methodology and result ID.
+
+| Setup | Final USDT | Net return | Max DD | Trades | Wins | Losses | Daily stops |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1564.75 | 56.48% | 9.48% | 651 | 253 | 398 | 0 |
+| 2 | 1663.98 | 66.40% | 10.85% | 419 | 177 | 242 | 0 |
+| 3 | 1669.19 | 66.92% | 19.45% | 218 | 84 | 134 | 14 |
+| 4 | 1497.05 | 49.71% | 12.45% | 315 | 130 | 185 | 0 |
+| 5 | 1468.59 | 46.86% | 21.37% | 315 | 111 | 204 | 1 |
+
+Setup3 earns only5.21USDT more than setup2 with materially higher DD and more
+daily stops. Setup1 has the lowest DD among the five new setups. Setup4 had not
+recovered the peak of its worst DD episode by the end of the study; setup5 took
+1327.91observed days from that episode's peak to recovery. These are distinct
+allocation/universe/ADX combinations, not isolated tests of an ADX threshold.
+All five new returns are below the prior five-coin ADX20 return70.88%.
+
+Private artifacts: `study-01/runs/comparison.json`, `analysis-01/report.md`,
+`analysis-01/analysis.json` and `analysis-01/trade-samples.csv`. The CSV contains
+all1918executed trades, including precise prices, costs and net PnL. Every real
+entry was separately checked against its mapped ADX threshold, rising ADX,
+directional DMI and retained EMA/volume/profile filters in `entry-verification.json`.
+Year/half-year analysis uses marked equity; trade outcomes use closed net PnL.
+
+Regression1352pass, one existing Hermes test failure due to the absent ignored
+`.env.template`; wheel/sdist build passes. The final delivery includes the full
+legacy verification receipts, source/accounting checks and figure in private
+`final-report.md`, `final-verification.json` and `final-manifest.json`.
+To resume an existing run, restore its frozen source commit; a changed HEAD or
+source/config/input binding is rejected. A docs-only delivery commit does not
+replace the engine commit recorded in the original binding.
