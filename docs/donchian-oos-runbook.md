@@ -73,6 +73,14 @@ observed Spot prices with stale labels, so DD is known-sample only.
 The prior20-day profile uses observed rows without expanding its time window.
 Create a new freeze/batch and reverify legacy full journals for this policy.
 
+The separately approved one-bar native mark gap uses
+`--approved-mark-gap-audit /absolute/diagnostics/native-mark-audit.json`.
+It retains the last actual mark for the audited15-minute interval with stale
+labels; native trade/funding remain strict, no mark bars are synthesized.
+`--reuse-root /absolute/previous-failed-data-batch` reuses only immutable native
+checkpoint snapshots of the exact identity/coverage, with source-file hashes
+and resume binding. It does not reuse or overwrite an earlier freeze or verdict.
+
 Progress shows case names only. Evaluator verdict is announced before PnL.
 Each of seven runs has a mechanical full-journal deterministic verification.
 For a technical interruption only, repeat the same collection/run command with

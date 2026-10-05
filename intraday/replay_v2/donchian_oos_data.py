@@ -9,6 +9,7 @@ from intraday.replay_v2.donchian_oos_config import START, END, OOSConfig
 from intraday.replay_v2.donchian_oos_pipeline import verify_seal, publish_once
 from intraday.replay_v2.donchian_oos_warmup_repair import load_approved
 from intraday.replay_v2.donchian_spot_gap import SparseSpotSnapshot, SourceSpotCandle, load_approved as load_spot_gap
+from intraday.replay_v2.donchian_mark_gap import SparseMarkSnapshot, load_approved as load_mark_gap
 from intraday.replay_v2.funding import FundingSnapshot, fetch_funding_snapshot
 from intraday.replay_v2.historical_data import fetch_candle_snapshot
 from intraday.replay_v2.historical_mixed import funding_audit
@@ -42,7 +43,7 @@ def quality(config,data,funding):
 
 def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_spot_snapshot,
             perp_fetcher=fetch_candle_snapshot,funding_fetcher=fetch_funding_snapshot,approved_warmup_audit=None,
-            approved_spot_gap_audit=None):
+            approved_spot_gap_audit=None,approved_mark_gap_audit=None,reuse_root=None):
     frozen=verify_seal(seal_path)
     if 'reference_path' not in frozen:
         raise ValueError('old golden reference must be sealed before new data collection')
@@ -57,6 +58,13 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
         sparse,gap_log,hashes=load_spot_gap(approved_spot_gap_audit,START,END)
         original_hashes.update(hashes)
         binding['approved_spot_gap_audit_sha256']=file_hash(approved_spot_gap_audit)
+    sparse_marks={}; mark_log=None
+    if approved_mark_gap_audit is not None:
+        sparse_marks,mark_log,hashes=load_mark_gap(approved_mark_gap_audit,START,END)
+        original_hashes.update(hashes)
+        binding['approved_mark_gap_audit_sha256']=file_hash(approved_mark_gap_audit)
+    reuse=Path(reuse_root).expanduser().resolve() if reuse_root is not None else None
+    binding['reuse_root']=str(reuse) if reuse else None
     root=Path(root).expanduser().resolve()
     root.mkdir(parents=True,exist_ok=resume,mode=0o700)
     if (root/'binding.json').exists():
@@ -64,12 +72,27 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
             raise ValueError('collection resume seal/window mismatch')
     else:
         _write(root/'binding.json',encoded(binding))
+    if reuse is not None:
+        manifest=root/'reuse-files.json'
+        if manifest.exists():
+            reuse_hashes=read_inputs(manifest)
+        else:
+            reuse_hashes={str(p):file_hash(p) for symbol in sorted(config.weights)
+                for tag in ('spot4h','spot15m','perp4h','perp15m','mark15m')
+                if (p:=reuse/(symbol+'-'+tag+'.json')).exists()}
+            _write(manifest,encoded(reuse_hashes))
+        verify_files(reuse_hashes)
+        original_hashes.update(reuse_hashes)
+        original_hashes[str(manifest)]=file_hash(manifest)
     if approved:
         publish_once(root/'repairs.json',encoded(repairs))
         original_hashes[str(root/'repairs.json')]=file_hash(root/'repairs.json')
     if sparse:
         publish_once(root/'spot-availability.json',encoded(gap_log))
         original_hashes[str(root/'spot-availability.json')]=file_hash(root/'spot-availability.json')
+    if sparse_marks:
+        publish_once(root/'mark-availability.json',encoded(mark_log))
+        original_hashes[str(root/'mark-availability.json')]=file_hash(root/'mark-availability.json')
     if (root/'inputs.json').exists():
         raw=read_inputs(root/'inputs.json'); verify_files(raw['source_files_sha256'])
         decode_bundle(config,raw)
@@ -82,13 +105,21 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
             interval='4h' if tag.endswith('4h') else '15m'
             start=START if tag=='mark15m' else START-WARMUP[interval]
             path=root/(symbol+'-'+tag+'.json')
+            model=(SparseSpotSnapshot if tag=='spot15m' and sparse else
+                   SparseMarkSnapshot if tag=='mark15m' and sparse_marks else FilterSnapshot)
+            cache=reuse/path.name if reuse is not None else None
+            cached=(model.model_validate(read_inputs(cache)) if cache is not None and str(cache) in reuse_hashes else None)
             if path.exists():
-                model=SparseSpotSnapshot if tag=='spot15m' and sparse else FilterSnapshot
                 snap=model.model_validate(read_inputs(path))
+                if cached is not None and snap.snapshot_id!=cached.snapshot_id:
+                    raise ValueError('reused checkpoint changed original cache')
+            elif cached is not None:
+                snap=cached
             else:
                 progress('Collect '+symbol+' '+tag+' (raw history only; no strategy)')
                 snap=(approved[symbol] if tag=='spot4h' and approved else
                       sparse[symbol] if tag=='spot15m' and sparse else
+                      sparse_marks[symbol] if tag=='mark15m' and sparse_marks else
                       spot_fetcher(symbol,interval,start,END) if tag.startswith('spot') else
                       from_futures(perp_fetcher(symbol,interval,start,END,
                                    price_kind='mark' if tag=='mark15m' else 'trade')))
@@ -100,8 +131,13 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
                 raise ValueError('normalized checkpoint changed approved source evidence')
             if tag=='spot15m' and sparse and snap.snapshot_id!=sparse[symbol].snapshot_id:
                 raise ValueError('gap-aware checkpoint changed approved source evidence')
+            if tag=='mark15m' and sparse_marks and snap.snapshot_id!=sparse_marks[symbol].snapshot_id:
+                raise ValueError('mark checkpoint changed approved source evidence')
+            if not path.exists():
+                _write(path,encoded(snap.model_dump(mode='json')))
             raw['candles'][symbol][tag]=snap.model_dump(mode='json')
-            raw['reuse_lineage'][symbol][tag]=dict(parent_snapshot_id=None,active_rows_reused=False,
+            raw['reuse_lineage'][symbol][tag]=dict(parent_snapshot_id=cached.snapshot_id if cached is not None else None,
+                                                 active_rows_reused=cached is not None,
                                                  supplemental_snapshot_id=snap.snapshot_id)
             raw['source_files_sha256'][str(path)]=file_hash(path)
             progress(symbol+' '+tag+': '+str(len(snap.raw_rows))+' native bars verified')
@@ -118,6 +154,9 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
     qa['data_repairs']=repairs
     if sparse:
         qa['spot_availability']=gap_log
+    if sparse_marks:
+        qa['mark_availability']=mark_log
+        qa['strict_checks']+='; explicitly approved one-bar mark gap only; trade/funding unchanged'
     verify_seal(seal_path); verify_files(raw['source_files_sha256'])
     publish_once(root/'qa.json',encoded(qa))
     raw['source_files_sha256'][str(root/'qa.json')]=file_hash(root/'qa.json')
@@ -133,9 +172,12 @@ def main(argv=None):
     p.add_argument('--seal',required=True); p.add_argument('--output-root',required=True)
     p.add_argument('--approved-warmup-audit',help='Explicit opt-in to the three checksum-bound closeTime repairs')
     p.add_argument('--approved-spot-gap-audit',help='Explicit opt-in to audited Spot M15 source gaps; no synthetic bars')
+    p.add_argument('--approved-mark-gap-audit',help='Explicit opt-in to audited one-bar mark gap; stale observed mark only')
+    p.add_argument('--reuse-root',help='Read-only checkpoint cache; same native identity/coverage/checksum required')
     p.add_argument('--resume',action='store_true'); args=p.parse_args(argv)
     collect(args.seal,args.output_root,resume=args.resume,approved_warmup_audit=args.approved_warmup_audit,
-            approved_spot_gap_audit=args.approved_spot_gap_audit)
+            approved_spot_gap_audit=args.approved_spot_gap_audit,approved_mark_gap_audit=args.approved_mark_gap_audit,
+            reuse_root=args.reuse_root)
 
 
 if __name__=='__main__':

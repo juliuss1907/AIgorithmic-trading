@@ -55,3 +55,24 @@ Reproduce six old golden full journals, commit and create freeze03 before new
 collection. Engine event scheduling/data handling change, not strategy parameters,
 costs, sizing, risk rules or scoring criteria. No fresh OOS strategy PnL was
 inspected before this approved technical correction.
+
+## Approved single native mark-price gap
+
+Operator subsequently approved last-observed mark valuation for the single
+missing native M15 mark bucket at2023-11-10T03:45UTC (10:45UTC+7),BTC/ETH/SOL.
+Same-endpoint full audits each have99055 rows,no duplicates/irregular closes;
+exact-window retries return[]. Policy:`binance-mark-m15-audited-20231110-v1`.
+No inferred mark OHLC or synthetic candles. Last actual observed mark remains
+in equity/collateral/risk valuation; every sample labels stale symbols and
+actual last observation times. At04:00UTC the next actual mark replaces it.
+Actual trade-price bars still drive ATR fills; actual funding remains strict
+and independent. DD/daily risk are known-price observations, not claims about
+unobserved mark moves. Another mark gap/duplicate or source anomaly still fails.
+
+Explicit opt-in:`--approved-mark-gap-audit /absolute/diagnostics/native-mark-audit.json`.
+The raw diagnostic files and SHA256 bind new mark snapshots. Existing completed
+native checkpoints may be reused read-only via`--reuse-root`; an immutable
+reuse-file manifest verifies source hashes/identity/coverage and binds resumes.
+No failed batch or previous freeze is overwritten. Reference04 must reproduce
+legacy ledgers before freeze04/new collection. Strategy and criteria remain
+unchanged; no fresh strategy PnL has been viewed.

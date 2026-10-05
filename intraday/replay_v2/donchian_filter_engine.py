@@ -17,6 +17,9 @@ from intraday.replay_v2.portfolio_book import ZERO, ONE
 from intraday.replay_v2.donchian_spot_gap import (
     SourceSpotCandle, spot_candles, missing_profile_count, stale_symbols, availability,
 )
+from intraday.replay_v2.donchian_mark_gap import (
+    SourceMarkCandle, mark_candles, stale_symbols as stale_marks, availability as mark_availability,
+)
 
 
 VERSION = 'historical-donchian-filter-study-v1.0'
@@ -38,6 +41,7 @@ class Prepared:
     checksum: str
     funding_audit: dict
     spot_gap_policy: bool = False
+    mark_gap_policy: bool = False
 
 
 def prepare(config, data, funding):
@@ -48,6 +52,7 @@ def prepare(config, data, funding):
     closes = {m:defaultdict(dict) for m in opens}
     identities = {}
     gap_policy = any(isinstance(b, SourceSpotCandle) for tags in data.values() for b in tags['spot15m'])
+    mark_policy = any(isinstance(b, SourceMarkCandle) for tags in data.values() for b in tags['mark15m'])
     for s, series in data.items():
         identities[s] = {}
         if set(series) != {'spot4h','spot15m','perp4h','perp15m','mark15m'}:
@@ -57,6 +62,8 @@ def prepare(config, data, funding):
             first = config.start if tag == 'mark15m' else config.start-WARMUP[interval]
             if tag == 'spot15m' and gap_policy:
                 spot_candles([b.row() for b in rows], s, first, config.end)
+            elif tag == 'mark15m' and mark_policy:
+                mark_candles([b.row() for b in rows], s, first, config.end)
             else:
                 validate_rows([b.row() for b in rows], interval, first, config.end)
             identities[s][tag] = fingerprint([b.row() for b in rows])
@@ -105,7 +112,7 @@ def prepare(config, data, funding):
     checksum = fingerprint(dict(series=identities,
         funding={s:h.model_dump(mode='json') for s,h in sorted(funding.items())}))
     return Prepared(config.start, config.end, features, observations, h4, opens, closes,
-                    settlements, timeline, checksum, audit, gap_policy)
+                    settlements, timeline, checksum, audit, gap_policy, mark_policy)
 
 
 def position(book, market, symbol):
@@ -147,6 +154,7 @@ def simulate(config, prepared):
     cooldown = defaultdict(set)
     pending_exits = set()
     observed_spot = {s:config.start for s in marks}
+    observed_mark = {s:config.start for s in book.perp_marks}
 
     def risk(at):
         book.check_isolated_collateral(at)
@@ -154,6 +162,9 @@ def simulate(config, prepared):
         if prepared.spot_gap_policy:
             book.curve[-1].update(stale_spot_symbols=stale_symbols(at, marks),
                 spot_observed_at={s:t.isoformat() for s,t in observed_spot.items()})
+        if prepared.mark_gap_policy:
+            book.curve[-1].update(stale_mark_symbols=stale_marks(at, observed_mark),
+                mark_observed_at={s:t.isoformat() for s,t in observed_mark.items()})
 
     for at in prepared.timeline:
         closed = cooldown.pop(at, set())
@@ -163,6 +174,7 @@ def simulate(config, prepared):
             marks.update({s:b.close for s,b in closing['spot'].items()})
             observed_spot.update({s:at for s in closing['spot']})
             book.perp_marks.update({s:b.close for s,b in prepared.closes['mark'].get(at,{}).items()})
+            observed_mark.update({s:at for s in prepared.closes['mark'].get(at,{})})
             check_stops(book,at,closing,closed,opening=False)
             cooldown[at+MS].update(closed)
             risk(at)
@@ -170,9 +182,11 @@ def simulate(config, prepared):
             marks.update({s:b.open for s,b in opening['spot'].items()})
             observed_spot.update({s:at for s in opening['spot']})
             book.perp_marks.update({s:b.open for s,b in prepared.opens['mark'].get(at,{}).items()})
+            observed_mark.update({s:at for s in prepared.opens['mark'].get(at,{})})
         book.advance_day(at,marks)
         for s,row in prepared.settlements.get(at,()):
             book.perp_marks[s] = row.mark
+            observed_mark[s] = at
             book.settle_funding(s,at,row.rate,row.mark)
         if prepared.settlements.get(at):
             risk(at)
@@ -312,6 +326,8 @@ def result(config, prepared, book):
     summary['holding_hours'] = dict(mean=sum(hours)/len(hours) if hours else None, maximum=max(hours,default=None))
     if prepared.spot_gap_policy:
         summary['spot_availability'] = availability(book.curve)
+    if prepared.mark_gap_policy:
+        summary['mark_availability'] = mark_availability(book.curve)
     return dict(schema_version='2',evaluator_version=VERSION,
         result_id=fingerprint(dict(version=VERSION,config=payload,data=prepared.checksum)),
         research_only=True,activation_allowed=False,official_gate_eligible=False,
@@ -334,5 +350,6 @@ def result(config, prepared, book):
             'm15_ohlc_touch_execution_order_unknown', 'daily_gaps_and_exit_costs_can_overshoot',
             'ideal_fractional_fills_without_order_book_or_partial_fills','no_exact_liquidation_or_historical_demo_simulation',
             'window_already_seen_not_untouched_out_of_sample'} | (
-                {'spot_source_gap_stale_valuation_and_delayed_execution'} if prepared.spot_gap_policy else set())),
+                {'spot_source_gap_stale_valuation_and_delayed_execution'} if prepared.spot_gap_policy else set()) | (
+                {'mark_source_gap_stale_valuation'} if prepared.mark_gap_policy else set())),
         v1_reference=None,equity_curve=book.curve,trades=book.trades,events=book.events)

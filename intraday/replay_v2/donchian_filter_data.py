@@ -222,8 +222,12 @@ def decode_bundle(config, raw):
         data[s] = {}
         for tag, payload in payloads.items():
             if 'data_policy' in payload:
-                from intraday.replay_v2.donchian_spot_gap import SparseSpotSnapshot
-                snap = SparseSpotSnapshot.model_validate(payload)
+                if payload.get('market') == 'spot':
+                    from intraday.replay_v2.donchian_spot_gap import SparseSpotSnapshot
+                    snap = SparseSpotSnapshot.model_validate(payload)
+                else:
+                    from intraday.replay_v2.donchian_mark_gap import SparseMarkSnapshot
+                    snap = SparseMarkSnapshot.model_validate(payload)
             else:
                 snap = FilterSnapshot.model_validate(payload)
             interval = '4h' if tag.endswith('4h') else '15m'
