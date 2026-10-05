@@ -58,8 +58,8 @@ ETH/SOL decrease30%→20%; differences cannot be attributed entirely to new coin
 - [x] Scope sparse-series handling to each symbol/series; new coins reject old whitelists.
 - [x] Retain all native NEAR/ZEC Perp H4/M15 and original funding-rate evidence.
 - [x] Complete strict native QA for new Spot H4/M15 and mark M15 under separately approved exact policy.
-- [ ] Replay five cases twice and publish all journals, costs, daily stops and DD recovery.
-- [ ] Publish annual/half-year and ten coin/market contributions, blocked-off-trade
+- [x] Replay five cases twice and publish all journals, costs, daily stops and DD recovery.
+- [x] Publish annual/half-year and ten coin/market contributions, blocked-off-trade
       attribution and three-coin comparison with the allocation caveat.
 - [x] Reverify original three-coin IDs/configs/summary/methodology and full journals.
 - [x] Complete regression/build and report the existing Hermes template failure separately.
@@ -67,8 +67,8 @@ ETH/SOL decrease30%→20%; differences cannot be attributed entirely to new coin
 New source anomalies block strategy replay. Acquisition and rejected original rows
 are retained under private `reports/donchian-adx-five-20261005/`; no source repair,
 new gap policy or native price tolerance is admitted without separate approval.
-Full raw auditing continues independently to make that approval concrete.
-Research results remain pending; ADX20 is a preferred candidate, not a selected winner.
+Full raw auditing made that approval concrete before any fresh replay.
+ADX20 is a preferred candidate, not a selected or activated winner.
 
 Implementation commit `1e387e3`. All five original cases reproduced their IDs,
 config checksums, summary, methodology and all three full journals. Receipt:
@@ -77,7 +77,8 @@ Regression:1332 passed, one existing Hermes failure from absent ignored
 `integrations/hermes/trading-ops/.env.template`; wheel/sdist build passed.
 Full raw source audits retain all requested bars except the explicitly enumerated
 native gaps. Review `data-approval.md` and `data-audit.json` in that private root
-for the exact proposed NEAR/ZEC policy. No five-coin historical replay has run.
+for the exact NEAR/ZEC policy. This initial implementation verification preceded
+the approval and five-coin historical replays described below.
 
 The user explicitly approved the exact listed source exceptions in-session.
 `source-approval.json` binds that reply to `data-approval.md`, `data-audit.json`
@@ -85,3 +86,19 @@ and the separately scoped `approved-near-zec-native-source-20261005-v1` policy.
 `approved-data/inputs.json` is a validated manifest; original raw rows remain
 unchanged, including the two H4 closeTime values whose derived interval views
 are normalized. Rates/times, prices and missing-bar evidence remain original.
+
+Completed at frozen engine commit `1c6bcab`:5cases/10successful simulations,
+each matching summary, methodology and all full journals on its mechanical repeat.
+Same dataset checksum and unchanged sources; marked curve DD and trade/cost/net
+accounting independently reconcile. All5old3coin cases matched again after the
+new policy. Final regression:1343pass, the same one known Hermes failure; build pass.
+
+Private completed evidence: `study-01/runs/comparison.json`, `analysis-01/report.md`,
+`final-report.md`, `equity-drawdown.png`, `final-verification.json` and
+`legacy-verification-final/verification.json` in the new report root.
+FinalUSDT/return/DD: off1665.51/66.55%/10.01%; ADX20 1708.80/70.88%/11.46%;
+ADX18 1680.12/68.01%/10.20%; ADX15 1611.74/61.17%/10.31%; ADX25 1506.05/50.61%/9.35%.
+NEAR and ZEC are net-positive in every case. ADX20 has the highest return and
+highest measured DD; new net contributions109.57/45.02USDT. Its final capital
+is0.29USDT below3coin, while DD falls13.20%→11.46%. ETH/SOL reweighting remains
+a confounder; no standalone-coin, extra-threshold, OOS or activation claim.
