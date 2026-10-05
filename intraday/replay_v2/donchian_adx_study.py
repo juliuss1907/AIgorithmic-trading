@@ -6,6 +6,7 @@ from pathlib import Path
 
 from intraday.replay_v2.artifacts import _write, publish_report, SERIES
 from intraday.replay_v2.donchian_adx_config import ADXStudyConfig, cases
+from intraday.replay_v2.donchian_adx_data import read_join_inputs
 from intraday.replay_v2.donchian_filter_data import decode_bundle, verify_files
 from intraday.replay_v2.donchian_filter_engine import prepare, simulate
 from intraday.replay_v2.donchian_oos_analysis import annual_equity
@@ -72,7 +73,7 @@ def runtime_hashes():
 
 
 def run_study(inputs_path, report_root, *, resume=False, progress=print):
-    source=Path(inputs_path).expanduser().resolve();before=file_hash(source);raw=read_inputs(source)
+    source=Path(inputs_path).expanduser().resolve();before=file_hash(source);raw=read_join_inputs(source)
     start,end=(datetime.fromisoformat(raw['window'][k]) for k in ('start','end'))
     variants=cases(start,end);lineage=raw['source_files_sha256'];verify_files(lineage)
     binding=dict(version='donchian-adx-exploration-1',engine_commit=git('rev-parse','HEAD'),

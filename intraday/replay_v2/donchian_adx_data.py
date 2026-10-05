@@ -1,6 +1,8 @@
 """Immutable joins of approved historical inputs; no strategy or runtime writes."""
 
 from datetime import datetime, timedelta
+import json
+import os
 from pathlib import Path
 
 from intraday.replay_v2.donchian_funding_reference import derive
@@ -16,6 +18,18 @@ from intraday.replay_v2.historical_data import fetch_candle_snapshot
 from intraday.replay_v2.historical_study import read_inputs
 from intraday.replay_v2.metrics import encoded, fingerprint
 from intraday.replay_v2.portfolio_study import file_hash
+
+
+JOIN_MAX_BYTES = 300_000_000  # Four-year native bundle is 229MB; legacy limit stays 200MB.
+
+
+def read_join_inputs(path):
+    fd = os.open(Path(path).expanduser().resolve(), os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as stream:
+        body = stream.read(JOIN_MAX_BYTES+1)
+    if len(body) > JOIN_MAX_BYTES:
+        raise ValueError('joined ADX input bundle exceeds size limit')
+    return json.loads(body)
 
 
 def merge_rows(*segments):

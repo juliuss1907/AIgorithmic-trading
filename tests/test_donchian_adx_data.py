@@ -103,3 +103,13 @@ def test_collector_joins_without_reset_or_synthetic_mark_rows(tmp_path,monkeypat
     assert joined['join_lineage']['synthetic_bars']==0
     with pytest.raises(FileExistsError):
         collector.collect_join(early,late,tmp_path/'joined',progress=lambda _:None)
+def test_large_bundle_reader_is_scoped_and_bounded(tmp_path, monkeypatch):
+    import pytest
+    from intraday.replay_v2 import donchian_adx_data as data
+    from intraday.replay_v2.artifacts import _write
+    path=tmp_path/'large.json';_write(path,'{"a":1}')
+    monkeypatch.setattr(data,'JOIN_MAX_BYTES',7)
+    assert data.read_join_inputs(path)=={'a':1}
+    monkeypatch.setattr(data,'JOIN_MAX_BYTES',6)
+    with pytest.raises(ValueError,match='size limit'):
+        data.read_join_inputs(path)
