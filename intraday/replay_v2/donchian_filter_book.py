@@ -58,6 +58,9 @@ class ATRTrail:
 class FilterBook(HistoricalBook):
     def __init__(self, config):
         super().__init__(config)
+        multiplier = getattr(config, 'cost_multiplier', 1)
+        self.spot_fee, self.spot_slip = FEE*multiplier, SLIP*multiplier
+        self.perp_fee, self.perp_slip = PERP_FEE*multiplier, PERP_SLIP*multiplier
         self.trails = {}
 
     def advance_day(self, at, marks=None):
@@ -86,14 +89,14 @@ class FilterBook(HistoricalBook):
         used = self.budget_exposures(marks)[0]
         requests = sum((budget*self.weights[s]*m for s,m in multipliers.items()
                         if not self.positions[s].quantity), ZERO)
-        scale = min(ONE, max(ZERO, budget-used)/(ONE+FEE+SLIP)/requests) if requests else ZERO
+        scale = min(ONE, max(ZERO, budget-used)/(ONE+self.spot_fee+self.spot_slip)/requests) if requests else ZERO
         super().enter_batch(at, marks, {s:m*scale for s,m in multipliers.items()})
 
     def perp_target(self, symbol, marks):
         budget = self.perp_budget(marks)
         requested = budget*self.config.perp_weights[symbol]
-        target = max(ZERO, min(requested, (budget-self.locked_margin)/(ONE+PERP_FEE+PERP_SLIP),
-                               self.free_cash/(ONE+PERP_FEE+PERP_SLIP)))
+        target = max(ZERO, min(requested, (budget-self.locked_margin)/(ONE+self.perp_fee+self.perp_slip),
+                               self.free_cash/(ONE+self.perp_fee+self.perp_slip)))
         return self.allocation_base(marks), requested, target
 
     def enter_perp(self, symbol, at, marks, price, side, stop_distance, *, approved_target=None):

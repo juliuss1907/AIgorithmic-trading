@@ -297,7 +297,9 @@ def result(config, prepared, book):
             trailing='closed H4 high/low since entry; new stop effective next M15; old stop evaluated first',
             daily='combined marked start-of-UTC-day equity3%; pending flatten next M15 open; next UTC day AND flat resume',
             fills='H4 signal next H4 open; old stops gap at open or touch priced at stop/logged at M15 close; no same-bar reentry',
-            costs='Spot10/5bps, Perp5/5bps fee/cash-charged slippage each fill; actual funding separate',
+            costs=('Spot10/5bps, Perp5/5bps fee/cash-charged slippage each fill; actual funding separate'
+                   if getattr(config, 'cost_multiplier', 1) == 1 else
+                   'Spot20/10bps, Perp10/10bps fee/cash-charged slippage each fill; actual funding unchanged'),
             drawdown='native M15 marks open/close plus funding/cost; observe-only; not exact tick/intrabar DD'),
         limitations=sorted(book.limitations | {'approximate_m15_volume_profile_not_tick_volume_at_price',
             'm15_ohlc_touch_execution_order_unknown', 'daily_gaps_and_exit_costs_can_overshoot',

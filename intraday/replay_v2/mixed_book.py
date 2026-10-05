@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from pydantic import Field, field_validator, model_validator
 
-from intraday.replay_v2.portfolio_book import FEE, SLIP, ONE, ZERO, PortfolioBook, PortfolioConfig, Position
+from intraday.replay_v2.portfolio_book import ONE, ZERO, PortfolioBook, PortfolioConfig, Position
 
 
 PERP_FEE, PERP_SLIP = Decimal(".0005"), Decimal(".0005")
@@ -42,6 +42,7 @@ class PerpPosition(Position):
 class MixedBook(PortfolioBook):
     def __init__(self, config):
         super().__init__(config)
+        self.perp_fee, self.perp_slip = PERP_FEE, PERP_SLIP
         self.perps = {s: PerpPosition() for s in sorted(config.perp_weights)}
         self.perp_marks = {}
         self.funding_paid = self.max_margin = self.max_perp_exposure = ZERO
@@ -165,7 +166,7 @@ class MixedBook(PortfolioBook):
             return
         room = max(ZERO, min(budget-spot,
             self.combined_budget(marks)-spot-perp,
-            (self.free_cash-self.reserve_floor(marks))/(ONE+FEE+SLIP)))
+            (self.free_cash-self.reserve_floor(marks))/(ONE+self.spot_fee+self.spot_slip)))
         scale = min(ONE, room/total)
         for s, requested in requests.items():
             notional = requested*scale
@@ -176,7 +177,7 @@ class MixedBook(PortfolioBook):
             if quantity*marks[s] > notional:
                 quantity = quantity.next_minus()
             notional = quantity*marks[s]
-            fee, slip = notional*FEE, notional*SLIP
+            fee, slip = notional*self.spot_fee, notional*self.spot_slip
             self.cash -= notional+fee+slip
             self.fees += fee
             self.slippage += slip
@@ -206,7 +207,7 @@ class MixedBook(PortfolioBook):
         if quantity*price > target:
             quantity = quantity.next_minus()
         target = quantity*price
-        fee, slip = target*PERP_FEE, target*PERP_SLIP
+        fee, slip = target*self.perp_fee, target*self.perp_slip
         self.cash -= fee+slip
         self.fees += fee
         self.slippage += slip
@@ -225,7 +226,7 @@ class MixedBook(PortfolioBook):
         target = max(ZERO, min(requested, budget-perp,
             budget-self.locked_margin*self.config.leverage,
             self.combined_budget(marks)-spot-perp,
-            (self.free_cash-base*self.config.reserve)/(ONE/self.config.leverage+PERP_FEE+PERP_SLIP)))
+            (self.free_cash-base*self.config.reserve)/(ONE/self.config.leverage+self.perp_fee+self.perp_slip)))
         return base, requested, target
 
     def settle_funding(self, symbol, at, rate, mark):
@@ -242,7 +243,7 @@ class MixedBook(PortfolioBook):
         if not p.quantity:
             return
         notional = abs(p.quantity)*price
-        fee, slip = notional*PERP_FEE, notional*PERP_SLIP
+        fee, slip = notional*self.perp_fee, notional*self.perp_slip
         gross = p.quantity*(price-p.entry_price)
         self.cash += gross-fee-slip
         self.fees += fee
