@@ -27,3 +27,31 @@ the original freeze/reference/failed batch. Engine signals, risk, costs,
 strategy checksum and machine criteria must remain identical to freeze01.
 Only data-handler source and this approved policy are new; no OOS results
 have been viewed. Completed QA is still required before seven-case replay.
+
+## Approved source-preserving Spot M15 availability policy
+
+Operator additionally approved handling the audited source gap on2023-03-24:
+five missing native Spot opens12:45,13:00,13:15,13:30,13:45UTC for BTC/ETH/SOL.
+Policy:`binance-spot-m15-audited-20230324-v1`. No missing candles, prices or
+volume are created. The preceding12:30 partial row retains its actual source
+closeTime; BTC/ETH also retain audited partial warmup rows at2021-12-24 04:45.
+Other missing/duplicate/irregular bars remain errors. Generic native validators
+remain strict; only an explicit, checksum-bound Spot M15 snapshot opts in.
+
+Spot stops/Donchian/daily exits cannot fill during unavailability. A pending
+exit waits for the next actual Spot open, priced there; ATR gap checks retain
+their ordinary priority. New entries are not queued from stale signals.
+Independent validated Perp/mark/funding events continue. Each valuation sample
+records last Spot observation times and stale symbols; report summaries disclose
+the missing opens and stale sample count. DD remains known-sample DD, not a
+claim about unobserved prices; daily3% cannot guarantee a capped realized loss.
+Volume profile uses only actual observed rows in the same prior20-day window,
+with no expansion, interpolation or invented volume. Buy-and-hold valuation
+merges actual close events and carries the last observed price per coin.
+
+Explicit collection option:`--approved-spot-gap-audit /absolute/diagnostics/native-m15-audit.json`.
+Original raw files, failed batches, previous freezes and reference are retained.
+Reproduce six old golden full journals, commit and create freeze03 before new
+collection. Engine event scheduling/data handling change, not strategy parameters,
+costs, sizing, risk rules or scoring criteria. No fresh OOS strategy PnL was
+inspected before this approved technical correction.

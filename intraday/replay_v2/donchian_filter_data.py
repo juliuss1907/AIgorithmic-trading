@@ -221,7 +221,11 @@ def decode_bundle(config, raw):
             raise ValueError('missing native filter series')
         data[s] = {}
         for tag, payload in payloads.items():
-            snap = FilterSnapshot.model_validate(payload)
+            if 'data_policy' in payload:
+                from intraday.replay_v2.donchian_spot_gap import SparseSpotSnapshot
+                snap = SparseSpotSnapshot.model_validate(payload)
+            else:
+                snap = FilterSnapshot.model_validate(payload)
             interval = '4h' if tag.endswith('4h') else '15m'
             first = config.start if tag == 'mark15m' else config.start-WARMUP[interval]
             market = 'spot' if tag.startswith('spot') else 'mark' if tag == 'mark15m' else 'perp'

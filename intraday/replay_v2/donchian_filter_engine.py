@@ -14,6 +14,9 @@ from intraday.replay_v2.historical_mixed import funding_audit, continuous_period
 from intraday.replay_v2.intraday_data import verify_boundaries
 from intraday.replay_v2.metrics import fingerprint
 from intraday.replay_v2.portfolio_book import ZERO, ONE
+from intraday.replay_v2.donchian_spot_gap import (
+    SourceSpotCandle, spot_candles, missing_profile_count, stale_symbols, availability,
+)
 
 
 VERSION = 'historical-donchian-filter-study-v1.0'
@@ -34,6 +37,7 @@ class Prepared:
     timeline: list
     checksum: str
     funding_audit: dict
+    spot_gap_policy: bool = False
 
 
 def prepare(config, data, funding):
@@ -43,6 +47,7 @@ def prepare(config, data, funding):
     opens = {m:defaultdict(dict) for m in ('spot','perp','mark')}
     closes = {m:defaultdict(dict) for m in opens}
     identities = {}
+    gap_policy = any(isinstance(b, SourceSpotCandle) for tags in data.values() for b in tags['spot15m'])
     for s, series in data.items():
         identities[s] = {}
         if set(series) != {'spot4h','spot15m','perp4h','perp15m','mark15m'}:
@@ -50,7 +55,10 @@ def prepare(config, data, funding):
         for tag, rows in series.items():
             interval = '4h' if tag.endswith('4h') else '15m'
             first = config.start if tag == 'mark15m' else config.start-WARMUP[interval]
-            validate_rows([b.row() for b in rows], interval, first, config.end)
+            if tag == 'spot15m' and gap_policy:
+                spot_candles([b.row() for b in rows], s, first, config.end)
+            else:
+                validate_rows([b.row() for b in rows], interval, first, config.end)
             identities[s][tag] = fingerprint([b.row() for b in rows])
         for market in ('spot','perp'):
             large, small = series[market+'4h'], series[market+'15m']
@@ -68,7 +76,8 @@ def prepare(config, data, funding):
                 end = bisect_right(small_times, bar.opened_at)
                 begin = bisect_right(small_times, bar.opened_at-timedelta(hours=480))
                 window = small[begin:end]
-                if len(window) != 1920:
+                missing = missing_profile_count(bar.opened_at-timedelta(hours=480), bar.opened_at) if gap_policy and market == 'spot' else 0
+                if len(window) != 1920-missing:
                     raise ValueError('profile requires full prior 20-day M15 coverage')
                 profile = volume_profile(window)
                 f['profile'] = {k:v for k,v in profile.items() if k != 'volumes'} if profile else None
@@ -91,11 +100,12 @@ def prepare(config, data, funding):
         for row in history.settlements:
             if config.start <= row.at < config.end:
                 settlements[row.at].append((s,row))
-    timeline = sorted(set(opens['spot']) | set(closes['spot']) | set(settlements) | {config.end})
+    timeline = sorted(set().union(*(set(v) for v in (*opens.values(), *closes.values())),
+                                 settlements, {config.end}))
     checksum = fingerprint(dict(series=identities,
         funding={s:h.model_dump(mode='json') for s,h in sorted(funding.items())}))
     return Prepared(config.start, config.end, features, observations, h4, opens, closes,
-                    settlements, timeline, checksum, audit)
+                    settlements, timeline, checksum, audit, gap_policy)
 
 
 def position(book, market, symbol):
@@ -135,24 +145,31 @@ def simulate(config, prepared):
     marks = {s:b.open for s,b in prepared.opens['spot'][config.start].items()}
     book.perp_marks = {s:b.open for s,b in prepared.opens['mark'][config.start].items()}
     cooldown = defaultdict(set)
+    pending_exits = set()
+    observed_spot = {s:config.start for s in marks}
 
     def risk(at):
         book.check_isolated_collateral(at)
         book.enforce_risk(at, marks)
+        if prepared.spot_gap_policy:
+            book.curve[-1].update(stale_spot_symbols=stale_symbols(at, marks),
+                spot_observed_at={s:t.isoformat() for s,t in observed_spot.items()})
 
     for at in prepared.timeline:
         closed = cooldown.pop(at, set())
         closing = {m:prepared.closes[m].get(at,{}) for m in ('spot','perp')}
         opening = {m:prepared.opens[m].get(at,{}) for m in ('spot','perp')}
-        if closing['spot']:
+        if any(closing.values()) or prepared.closes['mark'].get(at):
             marks.update({s:b.close for s,b in closing['spot'].items()})
-            book.perp_marks.update({s:b.close for s,b in prepared.closes['mark'][at].items()})
+            observed_spot.update({s:at for s in closing['spot']})
+            book.perp_marks.update({s:b.close for s,b in prepared.closes['mark'].get(at,{}).items()})
             check_stops(book,at,closing,closed,opening=False)
             cooldown[at+MS].update(closed)
             risk(at)
-        if opening['spot']:
+        if any(opening.values()) or prepared.opens['mark'].get(at):
             marks.update({s:b.open for s,b in opening['spot'].items()})
-            book.perp_marks.update({s:b.open for s,b in prepared.opens['mark'][at].items()})
+            observed_spot.update({s:at for s in opening['spot']})
+            book.perp_marks.update({s:b.open for s,b in prepared.opens['mark'].get(at,{}).items()})
         book.advance_day(at,marks)
         for s,row in prepared.settlements.get(at,()):
             book.perp_marks[s] = row.mark
@@ -166,7 +183,7 @@ def simulate(config, prepared):
                     close_position(book,market,s,at,bar.close,'window_end')
             risk(at)
             break
-        if not opening['spot']:
+        if not any(opening.values()):
             continue
         risk(at)
         if book.halted:
@@ -180,6 +197,13 @@ def simulate(config, prepared):
                     flatten(book,at,opening,closed)
                     risk(at)
         book.maybe_resume(at,marks)
+        for market,s in sorted(pending_exits.copy()):
+            if s in opening[market]:
+                if position(book,market,s).quantity:
+                    close_position(book,market,s,at,opening[market][s].open,'donchian_exit')
+                    closed.add((market,s))
+                    risk(at)
+                pending_exits.discard((market,s))
         is_signal_time = at in prepared.features['spot']['BTCUSDT']
         if not is_signal_time:
             continue
@@ -191,8 +215,11 @@ def simulate(config, prepared):
                 f, bar = prepared.features[market][s][at], prepared.h4[market][s][at]
                 obs = prepared.observations[market][s][at][(config.entry_window,config.exit_window)]
                 if obs['long_exit' if side > 0 else 'short_exit']:
-                    close_position(book,market,s,at,opening[market][s].open,'donchian_exit')
-                    closed.add((market,s))
+                    if s in opening[market]:
+                        close_position(book,market,s,at,opening[market][s].open,'donchian_exit')
+                        closed.add((market,s))
+                    else:
+                        pending_exits.add((market,s))
                 elif bar.opened_at >= p.entered_at:
                     trail = book.trails[(market,s)]
                     before = trail.stop
@@ -213,7 +240,7 @@ def simulate(config, prepared):
         for market,side in (('spot',1),('perp',-1)):
             candidates = {}
             for s in sorted(config.weights):
-                if position(book,market,s).quantity or (market,s) in closed:
+                if s not in opening[market] or position(book,market,s).quantity or (market,s) in closed:
                     continue
                 obs = prepared.observations[market][s][at][(config.entry_window,config.exit_window)]
                 if not obs['long_entry' if side > 0 else 'short_entry']:
@@ -283,6 +310,8 @@ def result(config, prepared, book):
         six_month_periods=continuous_periods(config,book.curve))
     hours = [(datetime.fromisoformat(t['closed_at'])-datetime.fromisoformat(t['opened_at'])).total_seconds()/3600 for t in book.trades]
     summary['holding_hours'] = dict(mean=sum(hours)/len(hours) if hours else None, maximum=max(hours,default=None))
+    if prepared.spot_gap_policy:
+        summary['spot_availability'] = availability(book.curve)
     return dict(schema_version='2',evaluator_version=VERSION,
         result_id=fingerprint(dict(version=VERSION,config=payload,data=prepared.checksum)),
         research_only=True,activation_allowed=False,official_gate_eligible=False,
@@ -304,5 +333,6 @@ def result(config, prepared, book):
         limitations=sorted(book.limitations | {'approximate_m15_volume_profile_not_tick_volume_at_price',
             'm15_ohlc_touch_execution_order_unknown', 'daily_gaps_and_exit_costs_can_overshoot',
             'ideal_fractional_fills_without_order_book_or_partial_fills','no_exact_liquidation_or_historical_demo_simulation',
-            'window_already_seen_not_untouched_out_of_sample'}),
+            'window_already_seen_not_untouched_out_of_sample'} | (
+                {'spot_source_gap_stale_valuation_and_delayed_execution'} if prepared.spot_gap_policy else set())),
         v1_reference=None,equity_curve=book.curve,trades=book.trades,events=book.events)

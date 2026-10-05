@@ -62,6 +62,17 @@ native trade M15 warmup1936 bars; mark/funding active window. No interpolation.
 Raw snapshots, source checksums, QA flags and funding gaps are inspectable.
 Volume profile remains an approximation, not tick-volume-at-price.
 
+For the operator-approved audited source anomalies only, add both
+`--approved-warmup-audit /absolute/diagnostics/native-timestamp-audit.json`
+and `--approved-spot-gap-audit /absolute/diagnostics/native-m15-audit.json`
+to collection. See [recorded data policy](donchian-oos-data-repair-2026-10-05.md).
+Spot M15 retains five missing opens and actual partial close timestamps;
+no fabricated bars/fills. Pending Spot exits wait for real reopening prices;
+Perp/mark/funding remain strict and independent. Valuation carries last
+observed Spot prices with stale labels, so DD is known-sample only.
+The prior20-day profile uses observed rows without expanding its time window.
+Create a new freeze/batch and reverify legacy full journals for this policy.
+
 Progress shows case names only. Evaluator verdict is announced before PnL.
 Each of seven runs has a mechanical full-journal deterministic verification.
 For a technical interruption only, repeat the same collection/run command with

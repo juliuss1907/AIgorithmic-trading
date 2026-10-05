@@ -8,6 +8,7 @@ from intraday.replay_v2.donchian_filter_data import (WARMUP, FilterSnapshot, fet
 from intraday.replay_v2.donchian_oos_config import START, END, OOSConfig
 from intraday.replay_v2.donchian_oos_pipeline import verify_seal, publish_once
 from intraday.replay_v2.donchian_oos_warmup_repair import load_approved
+from intraday.replay_v2.donchian_spot_gap import SparseSpotSnapshot, SourceSpotCandle, load_approved as load_spot_gap
 from intraday.replay_v2.funding import FundingSnapshot, fetch_funding_snapshot
 from intraday.replay_v2.historical_data import fetch_candle_snapshot
 from intraday.replay_v2.historical_mixed import funding_audit
@@ -31,14 +32,17 @@ def quality(config,data,funding):
         ratios=[(at,abs(perp[at]/value-1)) for at,value in spot.items()]
         basis[symbol]=dict(maximum_absolute_basis_pct=float(max(v for _,v in ratios)*100),
                           over_5pct=[dict(at=at.isoformat(),absolute_basis_pct=float(v*100)) for at,v in ratios if v>.05])
-    return dict(strict_checks='passed: no missing/duplicate/nonfinite bars, OHLC bounds, native H4/M15 boundaries',
+    sparse=any(isinstance(b,SourceSpotCandle) for tags in data.values() for b in tags['spot15m'])
+    return dict(strict_checks=('passed: explicit audited Spot M15 gaps only; all other bars dense; finite/OHLC/native boundaries' if sparse else
+        'passed: no missing/duplicate/nonfinite bars, OHLC bounds, native H4/M15 boundaries'),
         funding=audit,series=series,basis=basis,
         anomalies_are_flags_not_deleted=True,data_repairs=[],
         descriptive_event_months={'2022-05':'LUNA','2022-11':'FTX','2023-03':'USDC depeg'})
 
 
 def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_spot_snapshot,
-            perp_fetcher=fetch_candle_snapshot,funding_fetcher=fetch_funding_snapshot,approved_warmup_audit=None):
+            perp_fetcher=fetch_candle_snapshot,funding_fetcher=fetch_funding_snapshot,approved_warmup_audit=None,
+            approved_spot_gap_audit=None):
     frozen=verify_seal(seal_path)
     if 'reference_path' not in frozen:
         raise ValueError('old golden reference must be sealed before new data collection')
@@ -48,6 +52,11 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
     if approved_warmup_audit is not None:
         approved,repairs,original_hashes=load_approved(approved_warmup_audit,START,END)
         binding['approved_warmup_audit_sha256']=file_hash(approved_warmup_audit)
+    sparse={}; gap_log=None
+    if approved_spot_gap_audit is not None:
+        sparse,gap_log,hashes=load_spot_gap(approved_spot_gap_audit,START,END)
+        original_hashes.update(hashes)
+        binding['approved_spot_gap_audit_sha256']=file_hash(approved_spot_gap_audit)
     root=Path(root).expanduser().resolve()
     root.mkdir(parents=True,exist_ok=resume,mode=0o700)
     if (root/'binding.json').exists():
@@ -58,6 +67,9 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
     if approved:
         publish_once(root/'repairs.json',encoded(repairs))
         original_hashes[str(root/'repairs.json')]=file_hash(root/'repairs.json')
+    if sparse:
+        publish_once(root/'spot-availability.json',encoded(gap_log))
+        original_hashes[str(root/'spot-availability.json')]=file_hash(root/'spot-availability.json')
     if (root/'inputs.json').exists():
         raw=read_inputs(root/'inputs.json'); verify_files(raw['source_files_sha256'])
         decode_bundle(config,raw)
@@ -71,10 +83,12 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
             start=START if tag=='mark15m' else START-WARMUP[interval]
             path=root/(symbol+'-'+tag+'.json')
             if path.exists():
-                snap=FilterSnapshot.model_validate(read_inputs(path))
+                model=SparseSpotSnapshot if tag=='spot15m' and sparse else FilterSnapshot
+                snap=model.model_validate(read_inputs(path))
             else:
                 progress('Collect '+symbol+' '+tag+' (raw history only; no strategy)')
                 snap=(approved[symbol] if tag=='spot4h' and approved else
+                      sparse[symbol] if tag=='spot15m' and sparse else
                       spot_fetcher(symbol,interval,start,END) if tag.startswith('spot') else
                       from_futures(perp_fetcher(symbol,interval,start,END,
                                    price_kind='mark' if tag=='mark15m' else 'trade')))
@@ -84,6 +98,8 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
                 raise ValueError('checkpoint native snapshot identity mismatch')
             if tag=='spot4h' and approved and snap.snapshot_id!=approved[symbol].snapshot_id:
                 raise ValueError('normalized checkpoint changed approved source evidence')
+            if tag=='spot15m' and sparse and snap.snapshot_id!=sparse[symbol].snapshot_id:
+                raise ValueError('gap-aware checkpoint changed approved source evidence')
             raw['candles'][symbol][tag]=snap.model_dump(mode='json')
             raw['reuse_lineage'][symbol][tag]=dict(parent_snapshot_id=None,active_rows_reused=False,
                                                  supplemental_snapshot_id=snap.snapshot_id)
@@ -100,6 +116,8 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
     data,funding=decode_bundle(config,raw)
     qa=quality(config,data,funding)
     qa['data_repairs']=repairs
+    if sparse:
+        qa['spot_availability']=gap_log
     verify_seal(seal_path); verify_files(raw['source_files_sha256'])
     publish_once(root/'qa.json',encoded(qa))
     raw['source_files_sha256'][str(root/'qa.json')]=file_hash(root/'qa.json')
@@ -114,8 +132,10 @@ def main(argv=None):
     p=argparse.ArgumentParser(description='Collect sealed native Binance OOS history; public read-only')
     p.add_argument('--seal',required=True); p.add_argument('--output-root',required=True)
     p.add_argument('--approved-warmup-audit',help='Explicit opt-in to the three checksum-bound closeTime repairs')
+    p.add_argument('--approved-spot-gap-audit',help='Explicit opt-in to audited Spot M15 source gaps; no synthetic bars')
     p.add_argument('--resume',action='store_true'); args=p.parse_args(argv)
-    collect(args.seal,args.output_root,resume=args.resume,approved_warmup_audit=args.approved_warmup_audit)
+    collect(args.seal,args.output_root,resume=args.resume,approved_warmup_audit=args.approved_warmup_audit,
+            approved_spot_gap_audit=args.approved_spot_gap_audit)
 
 
 if __name__=='__main__':

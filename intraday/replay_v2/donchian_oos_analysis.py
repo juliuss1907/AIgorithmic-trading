@@ -92,18 +92,21 @@ def buy_hold(config,data):
         positions[symbol]=notional/first.open; costs+=notional*(fee+slip)
     histories={s:{row.available_at-timedelta(milliseconds=1):row.close for row in tags['spot15m'] if row.opened_at>=config.start}
                for s,tags in data.items()}
-    times=sorted(next(iter(histories.values())))
+    times=sorted(set().union(*(set(rows) for rows in histories.values())))
+    marks={s:next(row.open for row in tags['spot15m'] if row.opened_at==config.start) for s,tags in data.items()}
     peak=config.capital; dd=Decimal(0)
     for at in times:
-        value=sum((quantity*histories[symbol][at] for symbol,quantity in positions.items()),Decimal(0))
+        marks.update({s:rows[at] for s,rows in histories.items() if at in rows})
+        value=sum((quantity*marks[symbol] for symbol,quantity in positions.items()),Decimal(0))
         peak=max(peak,value); dd=max(dd,1-value/peak)
-    gross=sum((quantity*histories[symbol][times[-1]] for symbol,quantity in positions.items()),Decimal(0))
+    gross=sum((quantity*marks[symbol] for symbol,quantity in positions.items()),Decimal(0))
     costs+=gross*(fee+slip); final=gross*(1-fee-slip)
     dd=max(dd,1-final/peak)
     return dict(initial_usdt=float(config.capital),final_usdt=float(final),net_pnl=float(final-config.capital),
         return_pct=float((final/config.capital-1)*100),max_close_sampled_drawdown_pct=float(dd*100),
         fees_and_slippage_usdt=float(costs),
-        methodology='100% Spot BTC40/ETH30/SOL30 first M15 open; no rebalance; last M15 close sale; fee10/slip5bps both fills')
+        methodology='100% Spot BTC40/ETH30/SOL30 first M15 open; no rebalance; last M15 close sale; fee10/slip5bps both fills',
+        valuation='Observed source closes only; last actual price retained where another coin has no observation')
 
 
 def describe(comparison,output_root, *, reference=None):
