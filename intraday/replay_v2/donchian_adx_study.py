@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from intraday.replay_v2.artifacts import _write, publish_report, SERIES
-from intraday.replay_v2.donchian_adx_config import ADXStudyConfig, cases
+from intraday.replay_v2.donchian_adx_config import config_type, cases
 from intraday.replay_v2.donchian_adx_data import read_join_inputs
 from intraday.replay_v2.donchian_filter_data import decode_bundle, verify_files
 from intraday.replay_v2.donchian_filter_engine import prepare, simulate
@@ -73,10 +73,62 @@ def runtime_hashes():
     return {**source_hashes(REPO),'scripts/replay_donchian_adx.py':file_hash(REPO/'scripts/replay_donchian_adx.py')}
 
 
-def run_study(inputs_path, report_root, *, resume=False, progress=print):
-    source=Path(inputs_path).expanduser().resolve();before=file_hash(source);raw=read_join_inputs(source)
+def verify_three_coin(comparison_path, output_root, *, progress=print):
+    """Replay the five previous cases against their exact immutable publications."""
+    from intraday.replay_v2.artifacts import read_report
+    from intraday.replay_v2.intraday_study import verify_reference
+    old=read_inputs(comparison_path)
+    raw=read_join_inputs(old['inputs_path'])
+    if file_hash(old['inputs_path'])!=old['inputs_sha256']:
+        raise ValueError('legacy input changed')
+    verify_files(raw['source_files_sha256'])
     start,end=(datetime.fromisoformat(raw['window'][k]) for k in ('start','end'))
-    variants=cases(start,end);lineage=raw['source_files_sha256'];verify_files(lineage)
+    variants=cases(start,end)
+    if len(old['results'])!=len(variants): raise ValueError('requires five legacy ADX cases')
+    binding=dict(engine_commit=git('rev-parse','HEAD'),sources=runtime_hashes(),
+                 reference_sha256=file_hash(comparison_path),inputs_sha256=old['inputs_sha256'],
+                 configs={n:c.model_dump(mode='json') for n,c in variants})
+    root=Path(output_root); root.mkdir(parents=True,mode=0o700,exist_ok=False)
+    _write(root/'binding.json',encoded(binding))
+    progress('Preparing unchanged three-coin data for full legacy verification')
+    data,funding=decode_bundle(variants[0][1],raw)
+    prepared=prepare(variants[0][1],data,funding,native_boundary_policy=raw.get('native_boundary_policy'))
+    lineage=raw['source_files_sha256']; del raw,data,funding
+    results=[]
+    for (name,cfg),item in zip(variants,old['results']):
+        if item['variant']!=name or item['config_checksum']!=fingerprint(cfg.model_dump(mode='json')):
+            raise ValueError('legacy config identity changed')
+        verify_item(item)
+        report=enriched(cfg,prepared)
+        # Canonical JSON metadata may contain millisecond dictionary keys.
+        report['summary']=json.loads(encoded(report['summary']))
+        verify_reference(Path(item['report_directory']),report)
+        original=read_report(Path(item['report_directory']).parent,item['run_id'])
+        if original['methodology']!=report['methodology'] or original['config']!=report['config']:
+            raise ValueError('legacy methodology/config changed')
+        result=dict(variant=name,result_id=report['result_id'],config_checksum=item['config_checksum'],
+                    dataset_checksum=prepared.checksum,matched=True,
+                    journals={s:journal_hash(report[s]) for s in SERIES})
+        _write(root/f'case-{len(results)}.json',encoded(result))
+        results.append(result); progress('Matched summary, IDs, methodology and every journal: '+name)
+        del report
+    verify_files(lineage)
+    if runtime_hashes()!=binding['sources'] or file_hash(comparison_path)!=binding['reference_sha256'] or file_hash(old['inputs_path'])!=old['inputs_sha256']:
+        raise ValueError('legacy evidence or engine changed')
+    _write(root/'verification.json',encoded(dict(binding_checksum=fingerprint(binding),results=results,matched=True)))
+    return results
+
+
+def run_study(inputs_path, report_root, *, resume=False, progress=print, universe='three'):
+    model=config_type(universe)
+    source=Path(inputs_path).expanduser().resolve();before=file_hash(source)
+    if universe=='five':
+        from intraday.replay_v2.donchian_five_data import read_manifest
+        raw=read_manifest(source)
+    else:
+        raw=read_join_inputs(source)
+    start,end=(datetime.fromisoformat(raw['window'][k]) for k in ('start','end'))
+    variants=cases(start,end,universe=universe);lineage=raw['source_files_sha256'];verify_files(lineage)
     binding=dict(version='donchian-adx-exploration-1',engine_commit=git('rev-parse','HEAD'),
                  sources=runtime_hashes(),inputs_path=str(source),inputs_sha256=before,
                  configs={name:cfg.model_dump(mode='json') for name,cfg in variants})
@@ -104,7 +156,7 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print):
         else:
             progress('Replay '+name)
             report=enriched(config,prepared)
-            restored=ADXStudyConfig.model_validate({k:v for k,v in report['config'].items() if k in ADXStudyConfig.model_fields})
+            restored=model.model_validate({k:v for k,v in report['config'].items() if k in model.model_fields})
             repeated=enriched(restored,prepared)
             if (report['result_id']!=repeated['result_id'] or report['summary']!=repeated['summary'] or
                     report['methodology']!=repeated['methodology'] or
@@ -148,7 +200,9 @@ def markdown(receipt):
         s=item['summary'];net=s['net_pnl'];ret=s['net_return_pct']
         lines.append(f"| {item['variant']} | {s['final_equity_known']:.2f} | {net if net is not None else 'UNKNOWN'} | "
                      f"{ret if ret is not None else 'UNKNOWN'} | {s['max_drawdown_known_pct']:.2f} | {s['closed_trades']} |")
-    lines+=['','Initial1000USDT, Spot60/Short40, Short1x, BTC40/ETH30/SOL30 each; realized-only reinvestment.',
+    weights=receipt['results'][0]['config']['weights']
+    allocation='/'.join(s.removesuffix('USDT')+str(int(Decimal(w)*100)) for s,w in weights.items())
+    lines+=['',f'Initial1000USDT, Spot60/Short40, Short1x, {allocation} each; realized-only reinvestment.',
             'Donchian30/10 H4, EMA200/50, preceding VolumeMA20x1.2 and approximate volume profile retained.',
             'ATR14x3 and ATR sizing unchanged; combined UTC daily3%, DD observe-only.',
             'Enabled ADX is strictly above threshold and rising; DMI correct direction. Off disables both.',
@@ -163,17 +217,20 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description='Local five-case A4 ADX exploration; no models or trading')
     parser.add_argument('--report-root',required=True)
     parser.add_argument('--inputs')
+    parser.add_argument('--universe',choices=('three','five'),default='three')
     parser.add_argument('--early-inputs');parser.add_argument('--late-inputs')
     parser.add_argument('--resume',action='store_true')
     args=parser.parse_args(argv)
     root=Path(args.report_root).expanduser().resolve()
     source=args.inputs
+    if args.universe=='five' and source is None:
+        parser.error('--universe five requires a validated --inputs manifest')
     if source is None:
         if not args.early_inputs or not args.late_inputs:parser.error('supply --inputs or both parent inputs')
         source=root/'data'/'inputs.json'
         if not source.exists():source=collect_join(args.early_inputs,args.late_inputs,root/'data')
         elif not args.resume:raise FileExistsError(source)
-    run_study(source,root/'runs',resume=args.resume)
+    run_study(source,root/'runs',resume=args.resume,universe=args.universe)
 
 
 if __name__=='__main__':

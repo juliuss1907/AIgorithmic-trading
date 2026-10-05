@@ -5,7 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from intraday.replay_v2.artifacts import _write
-from intraday.replay_v2.donchian_adx_config import ADXStudyConfig, cases
+from intraday.replay_v2.donchian_adx_config import config_type, cases
 from intraday.replay_v2.donchian_filter_data import verify_files
 from intraday.replay_v2.donchian_filters import entry_filters
 from intraday.replay_v2.donchian_oos_analysis import journal, trade_stats
@@ -32,7 +32,7 @@ def rejected_trades(trades, events, threshold):
             'losing_net_abs': float(-sum((v for v in values if v < 0), Decimal(0)))}
 
 
-def describe(comparison_path, output_root):
+def describe(comparison_path, output_root, *, baseline_path=None):
     source = Path(comparison_path).resolve()
     receipt = read_inputs(source)
     if (receipt['preset'] != 'donchian-adx-exploration' or not receipt['research_on_seen_data'] or
@@ -44,9 +44,11 @@ def describe(comparison_path, output_root):
     binding = read_inputs(source.parent/'binding.json')
     if fingerprint(binding) != receipt['binding_checksum']:
         raise ValueError('binding checksum changed')
-    restored = [ADXStudyConfig.model_validate({k: v for k, v in r['config'].items()
-                if k in ADXStudyConfig.model_fields}) for r in receipt['results']]
-    expected = cases(restored[0].start, restored[0].end)
+    universe=receipt['results'][0]['config'].get('universe','three')
+    model=config_type(universe)
+    restored = [model.model_validate({k: v for k, v in r['config'].items()
+                if k in model.model_fields}) for r in receipt['results']]
+    expected = cases(restored[0].start, restored[0].end,universe=universe)
     if [(r['variant'], c.model_dump(mode='json')) for r,c in zip(receipt['results'], restored)] != [
             (name, cfg.model_dump(mode='json')) for name,cfg in expected]:
         raise ValueError('five-case configuration changed')
@@ -60,6 +62,9 @@ def describe(comparison_path, output_root):
         verify_item(item)
         trades = journal(item, 'trades')
         grouped = defaultdict(list)
+        for market in ('spot','perp'):
+            for symbol in cfg.weights:
+                grouped[market+'/'+symbol]=[]
         for t in trades:
             grouped[t['market']+'/'+t['symbol']].append(t)
         results.append(dict(variant=item['variant'], summary=item['summary'],
@@ -68,6 +73,8 @@ def describe(comparison_path, output_root):
                             rejected_off_trades=rejected_trades(off_trades, off_events, cfg.adx_threshold)))
     result = dict(research_only=True, research_on_seen_data=True, activation_allowed=False,
                   comparison_sha256=file_hash(source), dataset_checksum=next(iter(dataset)),
+                  universe=universe, weights=restored[0].model_dump(mode='json')['weights'],
+                  inputs_path=receipt['inputs_path'],inputs_sha256=receipt['inputs_sha256'],
                   results=results,
                   attribution_caveat='Conditional on ADX-off executed entries and sizing. Not exact counterfactual PnL: filters change entry timing, capital and subsequent positions.')
     lines = ['# A4 Donchian30/10 — ADX sensitivity 2022–2026', '',
@@ -77,6 +84,38 @@ def describe(comparison_path, output_root):
     for r,c in zip(results, restored):
         s=r['summary']
         lines.append(f"| {c.adx_threshold if c.adx_threshold is not None else 'Off (DMI off)'} | {s['final_equity_known']:.2f} | {s['net_pnl']:.2f} | {s['net_return_pct']:.2f} | {s['max_drawdown_known_pct']:.2f} | {s['closed_trades']} |")
+    lines += ['', '| Case | Fees | Slippage | Funding paid | Daily stops | DD days underwater | Recovered UTC |',
+              '|---|---:|---:|---:|---:|---:|---|']
+    for r in results:
+        s=r['summary']; dd=s['drawdown_episode']
+        lines.append(f"| {r['variant']} | {s['exchange_fee_known']:.2f} | {s['slippage_cost_known']:.2f} | {s['funding_paid_known']:.2f} | {s['daily_stops']} | {dd['days_underwater_observed']:.2f} | {dd['recovered_at'] or 'Not recovered by end'} |")
+    if universe=='five':
+        result['new_coin_contributions']={r['variant']:{s:sum(
+            r['coin_market'][m+'/'+s]['net_pnl'] for m in ('spot','perp'))
+            for s in ('NEARUSDT','ZECUSDT')} for r in results}
+        lines += ['', '## NEAR and ZEC net contributions', '',
+                  '| Case | NEAR USDT | ZEC USDT |', '|---|---:|---:|']
+        for name,coins in result['new_coin_contributions'].items():
+            lines.append(f"| {name} | {coins['NEARUSDT']:.2f} | {coins['ZECUSDT']:.2f} |")
+        lines += ['', 'Positive contributions add profit; negative contributions reduce portfolio results.']
+    if baseline_path is not None:
+        baseline=read_inputs(baseline_path)
+        if universe!='five' or baseline['window']!=receipt['window'] or len(baseline['results'])!=5:
+            raise ValueError('comparison requires the same-window three-coin five-case baseline')
+        comparisons=[]
+        for item,new,(name,expected_cfg) in zip(baseline['results'],results,cases(restored[0].start,restored[0].end)):
+            verify_item(item)
+            if item['variant']!=name or item['config_checksum']!=fingerprint(expected_cfg.model_dump(mode='json')):
+                raise ValueError('baseline is not the locked three-coin study')
+            comparisons.append(dict(variant=name,three_final=item['summary']['final_equity_known'],
+                five_final=new['summary']['final_equity_known'],
+                delta_final=new['summary']['final_equity_known']-item['summary']['final_equity_known']))
+        result['three_coin_comparison']=dict(path=str(Path(baseline_path).resolve()),sha256=file_hash(baseline_path),results=comparisons)
+        lines += ['', '## Previous three-coin portfolio', '',
+                  'ETH/SOL weights decrease from30% to20% within each sleeve. Differences cannot be attributed entirely to adding NEAR/ZEC.', '',
+                  '| Case | Three final USDT | Five final USDT | Difference USDT |', '|---|---:|---:|---:|']
+        for row in comparisons:
+            lines.append(f"| {row['variant']} | {row['three_final']:.2f} | {row['five_final']:.2f} | {row['delta_final']:.2f} |")
     lines += ['', '## ADX-off entries rejected by each filter', '',
               result['attribution_caveat'], '',
               '| ADX | Rejected trades | Winners | Losers | Winners net USDT | Losses avoided USDT | Rejected net USDT |',
@@ -104,7 +143,7 @@ def describe(comparison_path, output_root):
         lines += ['', 'Worst drawdown episode (UTC): '+encoded(s['drawdown_episode']), '',
                   'Full cost/risk summary: '+encoded(s)]
     lines += ['', '## Frozen rules and caveats', '',
-              '1000USDT; Spot60/Short40; BTC40/ETH30/SOL30 each. Short-only1x, realized-only sleeve reinvestment; no transfers.',
+              '1000USDT; Spot60/Short40; '+ '/'.join(s.removesuffix('USDT')+str(int(w*100)) for s,w in restored[0].weights.items())+' each. Short-only1x, realized-only sleeve reinvestment; no transfers.',
               'Donchian30/10 H4; EMA200/50; preceding VolumeMA20x1.2; approximate prior20day M15 volume profile retained.',
               'ATR14x3 H4 trailing, native M15 execution/risk; UTC daily loss3%, DD observe-only. No terminal DD halt.',
               'Enabled ADX: Wilder14, strictly above threshold and rising, directional DMI. Off disables both ADX/DMI.',
@@ -114,6 +153,9 @@ def describe(comparison_path, output_root):
               'Five missing Spot M15 bars, one stale mark interval and funding-reference substitutions retain approved source policies; no synthetic bars.',
               'DD uses observed known prices; OHLC cannot establish exact tick fills, book depth or liquidation. Daily3% is a trigger, not a guaranteed loss ceiling.',
               'No new thresholds chosen after results; no activation, official gate/champion change or VPS deployment.', '']
+    lines += [f"Frozen input: `{receipt['inputs_path']}`; SHA256 `{receipt['inputs_sha256']}`.", '']
+    if universe=='five':
+        lines += ['The old source exceptions apply only to their original BTC/ETH/SOL series. New coin gaps, price differences and metadata repairs require separate approval.', '']
     root=Path(output_root).resolve();root.mkdir(parents=True,mode=0o700,exist_ok=False)
     files={name:_write(root/name,body) for name,body in (
         ('analysis.json',encoded(result)),('report.md','\n'.join(lines)))}

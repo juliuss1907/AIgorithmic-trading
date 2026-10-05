@@ -44,8 +44,8 @@ class Prepared:
     timeline: list
     checksum: str
     funding_audit: dict
-    spot_gap_policy: bool = False
-    mark_gap_policy: bool = False
+    spot_gap_policy: frozenset = frozenset()
+    mark_gap_policy: frozenset = frozenset()
     funding_reference_times: dict | None = None
     native_boundary_policy: str | None = None
 
@@ -54,13 +54,13 @@ def prepare(config, data, funding, *, native_boundary_policy=None):
     if native_boundary_policy not in (None,BOUNDARY_POLICY,JOIN_POLICY):
         raise ValueError('unknown native boundary exception policy')
     if set(data) != set(config.weights) or set(funding) != set(config.weights):
-        raise ValueError('filter research requires BTC ETH SOL in both markets and funding')
+        raise ValueError('filter research requires configured coins in both markets and funding')
     features, observations, h4 = {}, {}, {}
     opens = {m:defaultdict(dict) for m in ('spot','perp','mark')}
     closes = {m:defaultdict(dict) for m in opens}
     identities = {}
-    gap_policy = any(isinstance(b, SourceSpotCandle) for tags in data.values() for b in tags['spot15m'])
-    mark_policy = any(isinstance(b, SourceMarkCandle) for tags in data.values() for b in tags['mark15m'])
+    gap_policy = frozenset(s for s, tags in data.items() if any(isinstance(b, SourceSpotCandle) for b in tags['spot15m']))
+    mark_policy = frozenset(s for s, tags in data.items() if any(isinstance(b, SourceMarkCandle) for b in tags['mark15m']))
     for s, series in data.items():
         identities[s] = {}
         if set(series) != {'spot4h','spot15m','perp4h','perp15m','mark15m'}:
@@ -68,16 +68,16 @@ def prepare(config, data, funding, *, native_boundary_policy=None):
         for tag, rows in series.items():
             interval = '4h' if tag.endswith('4h') else '15m'
             first = config.start if tag == 'mark15m' else config.start-WARMUP[interval]
-            if tag == 'spot15m' and gap_policy:
+            if tag == 'spot15m' and s in gap_policy:
                 spot_candles([b.row() for b in rows], s, first, config.end)
-            elif tag == 'mark15m' and mark_policy:
+            elif tag == 'mark15m' and s in mark_policy:
                 mark_candles([b.row() for b in rows], s, first, config.end)
             else:
                 validate_rows([b.row() for b in rows], interval, first, config.end)
             identities[s][tag] = fingerprint([b.row() for b in rows])
         for market in ('spot','perp'):
             large, small = series[market+'4h'], series[market+'15m']
-            checker=verify_spot_boundaries if market=='spot' and gap_policy else verify_boundaries
+            checker=verify_spot_boundaries if market=='spot' and s in gap_policy else verify_boundaries
             if market=='perp' and native_boundary_policy:
                 checker=verify_join_boundaries if native_boundary_policy==JOIN_POLICY else verify_perp_boundaries
             checker(s, large, small, config.start, config.end, market+' H4/M15')
@@ -94,7 +94,7 @@ def prepare(config, data, funding, *, native_boundary_policy=None):
                 end = bisect_right(small_times, bar.opened_at)
                 begin = bisect_right(small_times, bar.opened_at-timedelta(hours=480))
                 window = small[begin:end]
-                missing = missing_profile_count(bar.opened_at-timedelta(hours=480), bar.opened_at) if gap_policy and market == 'spot' else 0
+                missing = missing_profile_count(bar.opened_at-timedelta(hours=480), bar.opened_at) if s in gap_policy and market == 'spot' else 0
                 if len(window) != 1920-missing:
                     raise ValueError('profile requires full prior 20-day M15 coverage')
                 profile = volume_profile(window)
@@ -179,10 +179,10 @@ def simulate(config, prepared):
         book.check_isolated_collateral(at)
         book.enforce_risk(at, marks)
         if prepared.spot_gap_policy:
-            book.curve[-1].update(stale_spot_symbols=stale_symbols(at, marks),
+            book.curve[-1].update(stale_spot_symbols=stale_symbols(at, prepared.spot_gap_policy),
                 spot_observed_at={s:t.isoformat() for s,t in observed_spot.items()})
         if prepared.mark_gap_policy:
-            book.curve[-1].update(stale_mark_symbols=stale_marks(at, observed_mark),
+            book.curve[-1].update(stale_mark_symbols=stale_marks(at, {s: observed_mark[s] for s in prepared.mark_gap_policy}),
                 mark_observed_at={s:t.isoformat() for s,t in observed_mark.items()})
 
     for at in prepared.timeline:
@@ -334,7 +334,7 @@ def result(config, prepared, book):
                 ('gross_pnl','exchange_fee','slippage_cost','funding_paid','net_pnl')})
     blockers = Counter(f for e in book.events if e['reason']=='indicator_filters' for f in e['failed_filters'])
     valid = not book.limitations
-    payload = {**config.model_dump(mode='json'), 'symbol':'BTC+ETH+SOL','market':'spot+short1x'}
+    payload = {**config.model_dump(mode='json'), 'symbol':'+'.join(s.removesuffix('USDT') for s in config.weights),'market':'spot+short1x'}
     summary = dict(initial_capital=float(config.capital),final_equity_known=float(book.cash),
         net_pnl=float(net) if valid else None,pnl_after_known_costs=float(net),
         net_return_pct=float(net/config.capital*100) if valid else None,
@@ -362,7 +362,7 @@ def result(config, prepared, book):
         status='complete' if valid else 'limited',config=payload,
         inputs=dict(dataset_checksum=prepared.checksum,config_checksum=fingerprint(payload),funding_audit=prepared.funding_audit),
         summary=summary,methodology=dict(
-            allocation='60/40 Spot/isolated Short1x; both BTC40 ETH30 SOL30; independent realized sizing, no reserve/transfers',
+            allocation='60/40 Spot/isolated Short1x; both '+ ' '.join(s.removesuffix('USDT')+str(int(w*100)) for s,w in config.weights.items())+'; independent realized sizing, no reserve/transfers',
             signals='closed native H4 Donchian; preceding channel excludes trigger; no D1/Jev/LLM',
             atr='simple TR14 preserves old sizing min(1,.02/ATR%); initial and ratcheting price stop ATRx3',
             indicators='EMA SMA seeds; DMI14/ADX14 Wilder; prior20 volume SMA and strict >1.2x',

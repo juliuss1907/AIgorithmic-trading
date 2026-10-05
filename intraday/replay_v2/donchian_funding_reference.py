@@ -18,13 +18,14 @@ from intraday.replay_v2.donchian_filter_data import verify_files
 POLICY='approved-funding-native-mark-open-31ms-v1'
 
 
-def priced_rows(rows,quotes):
+def priced_rows(rows,quotes, *, symbol=None):
     derived=[]; used=0
     for raw in rows:
         row=dict(raw)
         if row.get('markPrice') in (None,''):
             at=row.get('fundingTime')
-            if isinstance(at,bool) or not isinstance(at,int) or not 1640995200000<=at<=1698710400031:
+            last = 1790899199999 if symbol in ('NEARUSDT','ZECUSDT') else 1698710400031
+            if isinstance(at,bool) or not isinstance(at,int) or not 1640995200000<=at<=last:
                 raise ValueError('unapproved missing funding quote period')
             if used>=len(quotes): raise ValueError('missing funding quote lineage')
             q=quotes[used]; used+=1
@@ -58,7 +59,7 @@ class ReferenceFundingSnapshot(FundingSnapshot):
             raise ValueError('invalid derived funding source/coverage')
         if self.funding_id!=fingerprint(self.model_dump(mode='json',exclude={'funding_id'})):
             raise ValueError('derived funding checksum mismatch')
-        rows=priced_rows(self.raw_rows,self.quote_lineage)
+        rows=priced_rows(self.raw_rows,self.quote_lineage,symbol=self.history.symbol)
         settlements=_parse_rows(rows,self.history.symbol,self.history.coverage_start,self.history.coverage_end)
         if not settlements or settlements!=self.history.settlements:
             raise ValueError('derived funding evidence mismatch')
@@ -78,7 +79,7 @@ def derive(symbol,rows,start,end,fetched_at,pages,mark):
             if source is None: raise ValueError('missing actual native mark open for funding')
             quotes.append(dict(funding_time_ms=at,age_ms=at-source[0],mark_row=list(source),
                                mark_row_sha256=fingerprint(source)))
-    settlements=_parse_rows(priced_rows(rows,quotes),symbol,start,end)
+    settlements=_parse_rows(priced_rows(rows,quotes,symbol=symbol),symbol,start,end)
     history=ReferenceFundingHistory(symbol=symbol,source=SOURCE,coverage_start=start,coverage_end=end,
         settlements=settlements,mark_snapshot_id=mark.snapshot_id,reference_times_ms=tuple(q['funding_time_ms'] for q in quotes))
     payload=dict(schema_version='1',history=history.model_dump(mode='json'),

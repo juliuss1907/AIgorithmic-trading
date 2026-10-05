@@ -1,7 +1,7 @@
 """Opt-in 60/40 realized-only cash books and symmetric H4 ATR trailing."""
 
 from decimal import Decimal
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import Field, model_validator
 
@@ -15,6 +15,7 @@ WEIGHTS = {'BTCUSDT':Decimal('.4'), 'ETHUSDT':Decimal('.3'), 'SOLUSDT':Decimal('
 
 
 class FilterConfig(HistoricalConfig):
+    study_weights: ClassVar[dict[str, Decimal]] = WEIGHTS
     entry_window: Literal[20, 30] = 20
     exit_window: Literal[8, 10] = 8
     filter_level: Literal[0, 1, 2, 3, 4] = 0
@@ -34,7 +35,7 @@ class FilterConfig(HistoricalConfig):
     @model_validator(mode='after')
     def fixed_study(self):
         if (self.capital != 1000 or self.entry_cap != Decimal('.6') or self.perp_cap != Decimal('.4') or
-                self.daily_loss != Decimal('.03') or self.weights != WEIGHTS or self.perp_weights != WEIGHTS or
+                self.daily_loss != Decimal('.03') or self.weights != self.study_weights or self.perp_weights != self.study_weights or
                 self.perp_daily_policy != 'disabled' or self.perp_trade_exit != 'baseline'):
             raise ValueError('filter study requires 60/40, BTC/ETH/SOL40/30/30 and parent-only daily3%')
         return self
