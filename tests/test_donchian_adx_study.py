@@ -5,9 +5,17 @@ from intraday.replay_v2.artifacts import _write
 from intraday.replay_v2.metrics import encoded, fingerprint
 
 
-def test_five_cases_restore_adx_config_and_verify_full_journals(tmp_path):
+def test_five_cases_restore_adx_config_and_verify_full_journals(tmp_path, monkeypatch):
     from test_donchian_filter_study import bundle
     from intraday.replay_v2.donchian_adx_study import run_study
+    from intraday.replay_v2 import donchian_adx_study as study
+    from intraday.replay_v2.donchian_spot_gap import availability
+    original=study.simulate
+    def with_source_metadata(*args, **kwargs):
+        report=original(*args, **kwargs)
+        report['summary']['spot_availability']=availability([])
+        return report
+    monkeypatch.setattr(study,'simulate',with_source_metadata)
     cfg,raw=bundle()
     for tags in raw['candles'].values():
         for tag in ('spot4h','perp4h'):

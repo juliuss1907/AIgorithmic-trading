@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal
+import json
 from pathlib import Path
 
 from intraday.replay_v2.artifacts import _write, publish_report, SERIES
@@ -114,6 +115,9 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print):
                       run_id=saved['run_id'],report_directory=saved['report_directory'],result_id=report['result_id'],
                       dataset_checksum=prepared.checksum,status=report['status'],summary=report['summary'],
                       deterministic_rerun_verified=True)
+            # Native source disclosures have millisecond integer dictionary keys;
+            # published JSON has string keys. Canonicalize metadata, never journals.
+            item=json.loads(encoded(item))
             verify_item(item)
             _write(checkpoint,encoded(item))
             progress(encoded(dict(variant=name,net_usdt=item['summary']['net_pnl'],
