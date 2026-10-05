@@ -33,3 +33,29 @@ to start prospective paper; neither proves edge. New variants need new data.
 See docs/donchian-oos-criteria.json for locked machine criteria and
 docs/donchian-oos-criteria.md for interpretation. Outputs are exclusive new
 batch folders beneath ~/.local/state/aigorithmic-trading/reports/donchian-oos-2022-2024/.
+
+## Execution status — 2026-10-05
+
+- Approved H4 warmup timestamp correction and source-preserving Spot M15 gap
+  policy implemented; see docs/donchian-oos-data-repair-2026-10-05.md.
+- Engine cf77696, freeze03 checksum d71b3136899f2f25c4c0691c5b4f9804c5b5941474669cc823215201b51b888f.
+  Strategy and criteria fingerprints unchanged. Independent scoped review found
+  no Critical/Required defects.67 focused tests passed; build and diff checks pass.
+  Full suite1280 passed,1 unrelated baseline failure: missing ignored Hermes
+  `.env.template` in this worktree. No credentials copied or test skipped.
+- Reference03 reproduced all six legacy result IDs/summaries/full journals.
+  All seven reference cases mechanically deterministic; reference verdict Pass.
+  This is OLD-window validation, not a fresh OOS verdict.
+- Data03 retains approved Spot evidence and validated BTC Perp trade H4/M15.
+  Collection stopped at BTC mark M15 strict coverage validation. A separate
+  same-endpoint audit checked all three mark histories: each has99055 rows,
+  no duplicates/irregular closes, and exactly one missing open at
+  2023-11-10T03:45UTC (10:45UTC+7). Exact-window retries return empty for all3.
+- Raw evidence:`diagnostics-mark-20261005-03/native-mark-audit.json` with per-coin
+  original file SHA256. No mark correction/substitution accepted. Data03 has no
+  completed QA/inputs bundle and no fresh strategy results. Previous failed
+  batches/freezes/raw/reference remain intact. Operator policy decision requested:
+  seek original Binance mark bar elsewhere first, or explicitly permit stale
+  last-observed mark valuation for this15-minute source gap. Never auto-extend
+  Spot execution availability policy to mark/Perp/funding.
+- No push, merge, deployment, model calls or trading activation performed.
