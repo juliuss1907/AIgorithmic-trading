@@ -32,12 +32,18 @@ class FiveCoinADXConfig(ADXStudyConfig):
 
 
 def config_type(universe='three'):
+    if universe == 'setups':
+        from intraday.replay_v2.donchian_adx_setups import ADXSetupConfig
+        return ADXSetupConfig
     if universe not in ('three', 'five'):
         raise ValueError('unknown ADX universe')
     return FiveCoinADXConfig if universe == 'five' else ADXStudyConfig
 
 
 def cases(start=START, end=END, *, universe='three'):
+    if universe == 'setups':
+        from intraday.replay_v2.donchian_adx_setups import setup_cases
+        return setup_cases(start, end)
     model = config_type(universe)
     return [(f'A4-Donchian30-10-ADX{threshold if threshold is not None else "off"}',
              model(start=start, end=end, adx_threshold=threshold))

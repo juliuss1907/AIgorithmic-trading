@@ -25,6 +25,7 @@ from intraday.replay_v2.donchian_adx_boundaries import (
     POLICY as JOIN_POLICY, verify_join_boundaries, disclosure as join_disclosure,
 )
 from intraday.replay_v2 import donchian_five_policy as five_policy
+from intraday.replay_v2.donchian_adx_setups import market_weights, adx_threshold, allocation_text
 
 
 VERSION = 'historical-donchian-filter-study-v1.0'
@@ -55,7 +56,8 @@ class Prepared:
 def prepare(config, data, funding, *, native_boundary_policy=None):
     if native_boundary_policy not in (None,BOUNDARY_POLICY,JOIN_POLICY,five_policy.POLICY):
         raise ValueError('unknown native boundary exception policy')
-    if set(data) != set(config.weights) or set(funding) != set(config.weights):
+    symbols = set(config.weights) | set(market_weights(config, 'perp'))
+    if set(data) != symbols or set(funding) != symbols:
         raise ValueError('filter research requires configured coins in both markets and funding')
     features, observations, h4 = {}, {}, {}
     opens = {m:defaultdict(dict) for m in ('spot','perp','mark')}
@@ -116,7 +118,7 @@ def prepare(config, data, funding, *, native_boundary_policy=None):
                 if config.start <= bar.opened_at < config.end:
                     opens[market][bar.opened_at][s] = bar
                     closes[market][bar.available_at-MS][s] = bar
-    audit = funding_audit(config, funding)
+    audit = funding_audit(config.model_copy(update={'perp_weights': dict.fromkeys(symbols, ONE)}), funding)
     if not all(v['complete'] for v in audit.values()):
         raise ValueError('incomplete funding history cannot support this comparison')
     reference_times={}
@@ -177,8 +179,16 @@ def simulate(config, prepared):
     if (config.start, config.end) != (prepared.start,prepared.end):
         raise ValueError('prepared features belong to another window')
     book = FilterBook(config)
-    marks = {s:b.open for s,b in prepared.opens['spot'][config.start].items()}
-    book.perp_marks = {s:b.open for s,b in prepared.opens['mark'][config.start].items()}
+    active = {m: market_weights(config, m) for m in ('spot', 'perp')}
+    if any(not set(active[m]) <= set(prepared.features[m]) for m in active):
+        raise ValueError('prepared data is missing configured market/coins')
+
+    def selected(series, market, at):
+        symbols = active['perp' if market == 'mark' else market]
+        return {s: b for s, b in series[market].get(at, {}).items() if s in symbols}
+
+    marks = {s:b.open for s,b in selected(prepared.opens, 'spot', config.start).items()}
+    book.perp_marks = {s:b.open for s,b in selected(prepared.opens, 'mark', config.start).items()}
     cooldown = defaultdict(set)
     pending_exits = set()
     observed_spot = {s:config.start for s in marks}
@@ -188,33 +198,36 @@ def simulate(config, prepared):
         book.check_isolated_collateral(at)
         book.enforce_risk(at, marks)
         if prepared.spot_gap_policy:
-            old_symbols=prepared.spot_gap_policy-prepared.five_source_symbols
+            old_symbols=(prepared.spot_gap_policy-prepared.five_source_symbols) & active['spot'].keys()
             book.curve[-1].update(stale_spot_symbols=sorted(stale_symbols(at, old_symbols)+
-                five_policy.stale_symbols(at,prepared.five_source_symbols)),
+                five_policy.stale_symbols(at,prepared.five_source_symbols & active['spot'].keys())),
                 spot_observed_at={s:t.isoformat() for s,t in observed_spot.items()})
         if prepared.mark_gap_policy:
-            book.curve[-1].update(stale_mark_symbols=stale_marks(at, {s: observed_mark[s] for s in prepared.mark_gap_policy}),
+            book.curve[-1].update(stale_mark_symbols=stale_marks(at, {s: observed_mark[s] for s in prepared.mark_gap_policy if s in active['perp']}),
                 mark_observed_at={s:t.isoformat() for s,t in observed_mark.items()})
 
     for at in prepared.timeline:
         closed = cooldown.pop(at, set())
-        closing = {m:prepared.closes[m].get(at,{}) for m in ('spot','perp')}
-        opening = {m:prepared.opens[m].get(at,{}) for m in ('spot','perp')}
-        if any(closing.values()) or prepared.closes['mark'].get(at):
+        closing = {m:selected(prepared.closes, m, at) for m in ('spot','perp')}
+        opening = {m:selected(prepared.opens, m, at) for m in ('spot','perp')}
+        closing_marks = selected(prepared.closes, 'mark', at)
+        opening_marks = selected(prepared.opens, 'mark', at)
+        if any(closing.values()) or closing_marks:
             marks.update({s:b.close for s,b in closing['spot'].items()})
             observed_spot.update({s:at for s in closing['spot']})
-            book.perp_marks.update({s:b.close for s,b in prepared.closes['mark'].get(at,{}).items()})
-            observed_mark.update({s:at for s in prepared.closes['mark'].get(at,{})})
+            book.perp_marks.update({s:b.close for s,b in closing_marks.items()})
+            observed_mark.update({s:at for s in closing_marks})
             check_stops(book,at,closing,closed,opening=False)
             cooldown[at+MS].update(closed)
             risk(at)
-        if any(opening.values()) or prepared.opens['mark'].get(at):
+        if any(opening.values()) or opening_marks:
             marks.update({s:b.open for s,b in opening['spot'].items()})
             observed_spot.update({s:at for s in opening['spot']})
-            book.perp_marks.update({s:b.open for s,b in prepared.opens['mark'].get(at,{}).items()})
-            observed_mark.update({s:at for s in prepared.opens['mark'].get(at,{})})
+            book.perp_marks.update({s:b.open for s,b in opening_marks.items()})
+            observed_mark.update({s:at for s in opening_marks})
         book.advance_day(at,marks)
-        for s,row in prepared.settlements.get(at,()):
+        settlements = [(s, row) for s, row in prepared.settlements.get(at,()) if s in active['perp']]
+        for s,row in settlements:
             book.perp_marks[s] = row.mark
             observed_mark[s] = at
             before=len(book.events)
@@ -222,10 +235,10 @@ def simulate(config, prepared):
             if (len(book.events)>before and int(round(at.timestamp()*1000)) in (
                     prepared.funding_reference_times or {}).get(s,set())):
                 book.events[-1]['funding_price_source']='native_m15_mark_open_reference_not_api_settlement_quote'
-        if prepared.settlements.get(at):
+        if settlements:
             risk(at)
         if at == config.end:
-            last = {m:prepared.closes[m][at-MS] for m in ('spot','perp')}
+            last = {m:selected(prepared.closes, m, at-MS) for m in ('spot','perp')}
             for market in last:
                 for s,bar in sorted(last[market].items()):
                     close_position(book,market,s,at,bar.close,'window_end')
@@ -252,11 +265,11 @@ def simulate(config, prepared):
                     closed.add((market,s))
                     risk(at)
                 pending_exits.discard((market,s))
-        is_signal_time = at in prepared.features['spot']['BTCUSDT']
+        is_signal_time = at in prepared.features['spot'][next(iter(config.weights))]
         if not is_signal_time:
             continue
         for market,side in (('spot',1),('perp',-1)):
-            for s in sorted(config.weights):
+            for s in sorted(active[market]):
                 p = position(book,market,s)
                 if not p.quantity:
                     continue
@@ -287,7 +300,7 @@ def simulate(config, prepared):
             risk(at)
         for market,side in (('spot',1),('perp',-1)):
             candidates = {}
-            for s in sorted(config.weights):
+            for s in sorted(active[market]):
                 if s not in opening[market] or position(book,market,s).quantity or (market,s) in closed:
                     continue
                 obs = prepared.observations[market][s][at][(config.entry_window,config.exit_window)]
@@ -295,7 +308,7 @@ def simulate(config, prepared):
                     continue
                 f = prepared.features[market][s][at]
                 failed = entry_filters(f,side,config.filter_level,
-                                       adx_threshold=getattr(config,'adx_threshold',25))
+                                       adx_threshold=adx_threshold(config,market,s))
                 if failed:
                     book.event(at,'entry_blocked','indicator_filters',market=market,symbol=s,
                         failed_filters=failed,signal_available_at=at.isoformat())
@@ -338,14 +351,15 @@ def result(config, prepared, book):
         raise ValueError('filter study trade PnL does not reconcile')
     contributions = {}
     for market in ('spot','perp'):
-        for s in sorted(config.weights):
+        for s in sorted(market_weights(config,market)):
             trades = [t for t in book.trades if t['market']==market and t['symbol']==s]
             contributions[market+':'+s] = dict(closed_trades=len(trades), **{
                 k:float(sum((t[k] for t in trades),ZERO)) for k in
                 ('gross_pnl','exchange_fee','slippage_cost','funding_paid','net_pnl')})
     blockers = Counter(f for e in book.events if e['reason']=='indicator_filters' for f in e['failed_filters'])
     valid = not book.limitations
-    payload = {**config.model_dump(mode='json'), 'symbol':'+'.join(s.removesuffix('USDT') for s in config.weights),'market':'spot+short1x'}
+    symbols = sorted(set(config.weights) | set(market_weights(config,'perp')))
+    payload = {**config.model_dump(mode='json'), 'symbol':'+'.join(s.removesuffix('USDT') for s in symbols),'market':'spot+short1x' if config.include_perp else 'spot'}
     summary = dict(initial_capital=float(config.capital),final_equity_known=float(book.cash),
         net_pnl=float(net) if valid else None,pnl_after_known_costs=float(net),
         net_return_pct=float(net/config.capital*100) if valid else None,
@@ -376,7 +390,9 @@ def result(config, prepared, book):
         status='complete' if valid else 'limited',config=payload,
         inputs=dict(dataset_checksum=prepared.checksum,config_checksum=fingerprint(payload),funding_audit=prepared.funding_audit),
         summary=summary,methodology=dict(
-            allocation='60/40 Spot/isolated Short1x; both '+ ' '.join(s.removesuffix('USDT')+str(int(w*100)) for s,w in config.weights.items())+'; independent realized sizing, no reserve/transfers',
+            allocation=(allocation_text(config)+'; Short-only1x; independent realized Spot/Perp sizing, no reserve/transfers'
+                        if hasattr(config,'adx_by_market') else
+                        '60/40 Spot/isolated Short1x; both '+ ' '.join(s.removesuffix('USDT')+str(int(w*100)) for s,w in config.weights.items())+'; independent realized sizing, no reserve/transfers'),
             signals='closed native H4 Donchian; preceding channel excludes trigger; no D1/Jev/LLM',
             atr='simple TR14 preserves old sizing min(1,.02/ATR%); initial and ratcheting price stop ATRx3',
             indicators='EMA SMA seeds; DMI14/ADX14 Wilder; prior20 volume SMA and strict >1.2x',
