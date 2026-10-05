@@ -29,6 +29,17 @@ def test_five_cases_restore_adx_config_and_verify_full_journals(tmp_path):
     assert (tmp_path/'runs'/'comparison.md').exists()
     resumed=run_study(path,tmp_path/'runs',resume=True,progress=lambda _:None)
     assert resumed==result
+    from intraday.replay_v2.donchian_adx_analysis import describe
+    analysis=describe(tmp_path/'runs'/'comparison.json',tmp_path/'analysis')
+    assert len(analysis['results'])==5
+    assert analysis['results'][0]['rejected_off_trades']['closed_trades']==0
+    assert not analysis['activation_allowed']
+    assert (tmp_path/'analysis'/'report.md').exists()
+    changed=json.loads(path.read_text());changed['window']['end']='2026-10-03T00:00:00+00:00'
+    other=tmp_path/'other.json';_write(other,encoded(changed))
+    import pytest
+    with pytest.raises(ValueError,match='binding changed'):
+        run_study(other,tmp_path/'runs',resume=True,progress=lambda _:None)
 
 
 def test_calendar_periods_use_equal_halves_and_label_partial_window():

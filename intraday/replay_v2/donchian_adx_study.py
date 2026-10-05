@@ -1,10 +1,10 @@
 """Five exploratory A4 variants, full-journal verification and continuous capital."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
-from intraday.replay_v2.artifacts import _write, publish_report, read_report, SERIES
+from intraday.replay_v2.artifacts import _write, publish_report, SERIES
 from intraday.replay_v2.donchian_adx_config import ADXStudyConfig, cases
 from intraday.replay_v2.donchian_filter_data import decode_bundle, verify_files
 from intraday.replay_v2.donchian_filter_engine import prepare, simulate
