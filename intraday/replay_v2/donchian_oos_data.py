@@ -7,6 +7,7 @@ from intraday.replay_v2.donchian_filter_data import (WARMUP, FilterSnapshot, fet
     from_futures, decode_bundle, verify_files)
 from intraday.replay_v2.donchian_oos_config import START, END, OOSConfig
 from intraday.replay_v2.donchian_oos_pipeline import verify_seal, publish_once
+from intraday.replay_v2.donchian_oos_warmup_repair import load_approved
 from intraday.replay_v2.funding import FundingSnapshot, fetch_funding_snapshot
 from intraday.replay_v2.historical_data import fetch_candle_snapshot
 from intraday.replay_v2.historical_mixed import funding_audit
@@ -37,12 +38,16 @@ def quality(config,data,funding):
 
 
 def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_spot_snapshot,
-            perp_fetcher=fetch_candle_snapshot,funding_fetcher=fetch_funding_snapshot):
+            perp_fetcher=fetch_candle_snapshot,funding_fetcher=fetch_funding_snapshot,approved_warmup_audit=None):
     frozen=verify_seal(seal_path)
     if 'reference_path' not in frozen:
         raise ValueError('old golden reference must be sealed before new data collection')
     config=OOSConfig(start=START,end=END)
     binding=dict(seal_checksum=frozen['seal_checksum'],window={'start':START.isoformat(),'end':END.isoformat()})
+    approved,repairs,original_hashes=({},[],{})
+    if approved_warmup_audit is not None:
+        approved,repairs,original_hashes=load_approved(approved_warmup_audit,START,END)
+        binding['approved_warmup_audit_sha256']=file_hash(approved_warmup_audit)
     root=Path(root).expanduser().resolve()
     root.mkdir(parents=True,exist_ok=resume,mode=0o700)
     if (root/'binding.json').exists():
@@ -50,12 +55,15 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
             raise ValueError('collection resume seal/window mismatch')
     else:
         _write(root/'binding.json',encoded(binding))
+    if approved:
+        publish_once(root/'repairs.json',encoded(repairs))
+        original_hashes[str(root/'repairs.json')]=file_hash(root/'repairs.json')
     if (root/'inputs.json').exists():
         raw=read_inputs(root/'inputs.json'); verify_files(raw['source_files_sha256'])
         decode_bundle(config,raw)
         return root/'inputs.json'
-    raw=dict(schema_version='donchian-filters-1',window=binding['window'],source_files_sha256={},
-             candles={},funding={},reuse_lineage={})
+    raw=dict(schema_version='donchian-filters-1',window=binding['window'],source_files_sha256=original_hashes,
+             candles={},funding={},reuse_lineage={},data_repairs=repairs)
     for symbol in sorted(config.weights):
         raw['candles'][symbol]={}; raw['reuse_lineage'][symbol]={}
         for tag in ('spot4h','spot15m','perp4h','perp15m','mark15m'):
@@ -66,13 +74,16 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
                 snap=FilterSnapshot.model_validate(read_inputs(path))
             else:
                 progress('Collect '+symbol+' '+tag+' (raw history only; no strategy)')
-                snap=(spot_fetcher(symbol,interval,start,END) if tag.startswith('spot') else
+                snap=(approved[symbol] if tag=='spot4h' and approved else
+                      spot_fetcher(symbol,interval,start,END) if tag.startswith('spot') else
                       from_futures(perp_fetcher(symbol,interval,start,END,
                                    price_kind='mark' if tag=='mark15m' else 'trade')))
                 _write(path,encoded(snap.model_dump(mode='json')))
             market='spot' if tag.startswith('spot') else 'mark' if tag=='mark15m' else 'perp'
             if (snap.symbol,snap.market,snap.interval,snap.coverage_start,snap.coverage_end)!=(symbol,market,interval,start,END):
                 raise ValueError('checkpoint native snapshot identity mismatch')
+            if tag=='spot4h' and approved and snap.snapshot_id!=approved[symbol].snapshot_id:
+                raise ValueError('normalized checkpoint changed approved source evidence')
             raw['candles'][symbol][tag]=snap.model_dump(mode='json')
             raw['reuse_lineage'][symbol][tag]=dict(parent_snapshot_id=None,active_rows_reused=False,
                                                  supplemental_snapshot_id=snap.snapshot_id)
@@ -88,6 +99,7 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
     raw['bundle_checksum']=fingerprint(raw)
     data,funding=decode_bundle(config,raw)
     qa=quality(config,data,funding)
+    qa['data_repairs']=repairs
     verify_seal(seal_path); verify_files(raw['source_files_sha256'])
     publish_once(root/'qa.json',encoded(qa))
     raw['source_files_sha256'][str(root/'qa.json')]=file_hash(root/'qa.json')
@@ -101,8 +113,9 @@ def main(argv=None):
     import argparse
     p=argparse.ArgumentParser(description='Collect sealed native Binance OOS history; public read-only')
     p.add_argument('--seal',required=True); p.add_argument('--output-root',required=True)
+    p.add_argument('--approved-warmup-audit',help='Explicit opt-in to the three checksum-bound closeTime repairs')
     p.add_argument('--resume',action='store_true'); args=p.parse_args(argv)
-    collect(args.seal,args.output_root,resume=args.resume)
+    collect(args.seal,args.output_root,resume=args.resume,approved_warmup_audit=args.approved_warmup_audit)
 
 
 if __name__=='__main__':

@@ -67,3 +67,32 @@ def test_resume_after_qa_publication_interruption(monkeypatch,tmp_path):
     monkeypatch.setattr(module,'_write',write)
     assert collect('seal',tmp_path/'data',resume=True,spot_fetcher=candles,perp_fetcher=candles,
                    funding_fetcher=funding,progress=lambda _:None).exists()
+
+
+def test_explicit_approved_collection_preserves_lineage_and_resume_binding(monkeypatch,tmp_path):
+    import json
+    import intraday.replay_v2.donchian_oos_data as module
+    from intraday.replay_v2.metrics import encoded
+    from intraday.replay_v2.portfolio_study import file_hash
+    cfg,raw=bundle()
+    audit=tmp_path/'audit.json'; module._write(audit,encoded({'fixture':'independently tested data loader'}))
+    approved={s:FilterSnapshot.model_validate(tags['spot4h']) for s,tags in raw['candles'].items()}
+    repairs=[{'symbol':s,'changed_field':'closeTime','prices_and_volume_unchanged':True} for s in approved]
+    monkeypatch.setattr(module,'START',cfg.start); monkeypatch.setattr(module,'END',cfg.end)
+    monkeypatch.setattr(module,'verify_seal',lambda _: {'seal_checksum':'a'*64,'reference_path':'old'})
+    monkeypatch.setattr(module,'load_approved',lambda *args:(approved,repairs,{str(audit):file_hash(audit)}))
+    def candles(symbol,interval,start,end,*,price_kind=None):
+        assert not (interval=='4h' and price_kind is None), 'should retain approved frozen H4, not refetch'
+        prefix='spot' if price_kind is None else 'perp' if price_kind=='trade' else 'mark'
+        return FilterSnapshot.model_validate(raw['candles'][symbol][prefix+interval])
+    monkeypatch.setattr(module,'from_futures',lambda snap:snap)
+    p=collect('seal',tmp_path/'data',approved_warmup_audit=audit,spot_fetcher=candles,perp_fetcher=candles,
+              funding_fetcher=lambda s,*args:FundingSnapshot.model_validate(raw['funding'][s]),progress=lambda _:None)
+    saved=json.loads(p.read_text())
+    assert saved['data_repairs']==repairs
+    assert json.loads((p.parent/'qa.json').read_text())['data_repairs']==repairs
+    assert saved['source_files_sha256'][str(audit)]==file_hash(audit)
+    assert str(p.parent/'repairs.json') in saved['source_files_sha256']
+    assert collect('seal',p.parent,approved_warmup_audit=audit,resume=True,progress=lambda _:None)==p
+    with pytest.raises(ValueError,match='seal/window'):
+        collect('seal',p.parent,resume=True,progress=lambda _:None)
