@@ -10,6 +10,7 @@ from intraday.replay_v2.donchian_oos_pipeline import verify_seal, publish_once
 from intraday.replay_v2.donchian_oos_warmup_repair import load_approved
 from intraday.replay_v2.donchian_spot_gap import SparseSpotSnapshot, SourceSpotCandle, load_approved as load_spot_gap
 from intraday.replay_v2.donchian_mark_gap import SparseMarkSnapshot, load_approved as load_mark_gap
+from intraday.replay_v2.donchian_funding_reference import ReferenceFundingSnapshot,load_approved as load_funding_reference
 from intraday.replay_v2.funding import FundingSnapshot, fetch_funding_snapshot
 from intraday.replay_v2.historical_data import fetch_candle_snapshot
 from intraday.replay_v2.historical_mixed import funding_audit
@@ -43,7 +44,7 @@ def quality(config,data,funding):
 
 def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_spot_snapshot,
             perp_fetcher=fetch_candle_snapshot,funding_fetcher=fetch_funding_snapshot,approved_warmup_audit=None,
-            approved_spot_gap_audit=None,approved_mark_gap_audit=None,reuse_root=None):
+            approved_spot_gap_audit=None,approved_mark_gap_audit=None,reuse_root=None,approved_funding_reference_audit=None):
     frozen=verify_seal(seal_path)
     if 'reference_path' not in frozen:
         raise ValueError('old golden reference must be sealed before new data collection')
@@ -63,6 +64,13 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
         sparse_marks,mark_log,hashes=load_mark_gap(approved_mark_gap_audit,START,END)
         original_hashes.update(hashes)
         binding['approved_mark_gap_audit_sha256']=file_hash(approved_mark_gap_audit)
+    approved_funding={}
+    if approved_funding_reference_audit is not None:
+        if not sparse_marks:
+            raise ValueError('funding reference requires checksum-bound audited native marks')
+        approved_funding,hashes=load_funding_reference(approved_funding_reference_audit,START,END,sparse_marks)
+        original_hashes.update(hashes)
+        binding['approved_funding_reference_audit_sha256']=file_hash(approved_funding_reference_audit)
     reuse=Path(reuse_root).expanduser().resolve() if reuse_root is not None else None
     binding['reuse_root']=str(reuse) if reuse else None
     root=Path(root).expanduser().resolve()
@@ -142,7 +150,11 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
             raw['source_files_sha256'][str(path)]=file_hash(path)
             progress(symbol+' '+tag+': '+str(len(snap.raw_rows))+' native bars verified')
         path=root/(symbol+'-funding.json')
-        snap=(FundingSnapshot.model_validate(read_inputs(path)) if path.exists() else funding_fetcher(symbol,START,END))
+        model=ReferenceFundingSnapshot if approved_funding else FundingSnapshot
+        snap=(model.model_validate(read_inputs(path)) if path.exists() else
+              approved_funding[symbol] if approved_funding else funding_fetcher(symbol,START,END))
+        if approved_funding and snap.funding_id!=approved_funding[symbol].funding_id:
+            raise ValueError('derived funding checkpoint changed approved source evidence')
         if not path.exists():
             _write(path,encoded(snap.model_dump(mode='json')))
         raw['funding'][symbol]=snap.model_dump(mode='json')
@@ -156,7 +168,12 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
         qa['spot_availability']=gap_log
     if sparse_marks:
         qa['mark_availability']=mark_log
-        qa['strict_checks']+='; explicitly approved one-bar mark gap only; trade/funding unchanged'
+        qa['strict_checks']+='; explicitly approved one-bar mark gap only; trade bars and funding rates/times unchanged'
+    if approved_funding:
+        qa['funding_price_reference']={s:dict(policy=snap.data_policy,quotes=len(snap.quote_lineage),
+            maximum_age_ms=max(q['age_ms'] for q in snap.quote_lineage),mark_snapshot_id=snap.mark_snapshot_id,
+            original_rates_and_times=True,original_raw_rows_preserved=True,settlement_price_not_api_confirmed=True)
+            for s,snap in approved_funding.items()}
     verify_seal(seal_path); verify_files(raw['source_files_sha256'])
     publish_once(root/'qa.json',encoded(qa))
     raw['source_files_sha256'][str(root/'qa.json')]=file_hash(root/'qa.json')
@@ -174,10 +191,11 @@ def main(argv=None):
     p.add_argument('--approved-spot-gap-audit',help='Explicit opt-in to audited Spot M15 source gaps; no synthetic bars')
     p.add_argument('--approved-mark-gap-audit',help='Explicit opt-in to audited one-bar mark gap; stale observed mark only')
     p.add_argument('--reuse-root',help='Read-only checkpoint cache; same native identity/coverage/checksum required')
+    p.add_argument('--approved-funding-reference-audit',help='Explicit funding price-reference opt-in; actual native mark opens within31ms')
     p.add_argument('--resume',action='store_true'); args=p.parse_args(argv)
     collect(args.seal,args.output_root,resume=args.resume,approved_warmup_audit=args.approved_warmup_audit,
             approved_spot_gap_audit=args.approved_spot_gap_audit,approved_mark_gap_audit=args.approved_mark_gap_audit,
-            reuse_root=args.reuse_root)
+            reuse_root=args.reuse_root,approved_funding_reference_audit=args.approved_funding_reference_audit)
 
 
 if __name__=='__main__':

@@ -42,6 +42,7 @@ class Prepared:
     funding_audit: dict
     spot_gap_policy: bool = False
     mark_gap_policy: bool = False
+    funding_reference_times: dict | None = None
 
 
 def prepare(config, data, funding):
@@ -100,6 +101,13 @@ def prepare(config, data, funding):
     audit = funding_audit(config, funding)
     if not all(v['complete'] for v in audit.values()):
         raise ValueError('incomplete funding history cannot support this comparison')
+    reference_times={}
+    for s,h in funding.items():
+        if hasattr(h,'reference_times_ms'):
+            reference_times[s]=set(h.reference_times_ms)
+            audit[s]['price_reference']=dict(policy=h.data_policy,quotes=len(h.reference_times_ms),
+                maximum_age_ms=31,mark_snapshot_id=h.mark_snapshot_id,
+                original_rates_and_times=True,settlement_price_not_api_confirmed=True)
     settlements = defaultdict(list)
     for s, history in sorted(funding.items()):
         if history.symbol != s:
@@ -112,7 +120,7 @@ def prepare(config, data, funding):
     checksum = fingerprint(dict(series=identities,
         funding={s:h.model_dump(mode='json') for s,h in sorted(funding.items())}))
     return Prepared(config.start, config.end, features, observations, h4, opens, closes,
-                    settlements, timeline, checksum, audit, gap_policy, mark_policy)
+                    settlements, timeline, checksum, audit, gap_policy, mark_policy, reference_times)
 
 
 def position(book, market, symbol):
@@ -187,7 +195,11 @@ def simulate(config, prepared):
         for s,row in prepared.settlements.get(at,()):
             book.perp_marks[s] = row.mark
             observed_mark[s] = at
+            before=len(book.events)
             book.settle_funding(s,at,row.rate,row.mark)
+            if (len(book.events)>before and int(round(at.timestamp()*1000)) in (
+                    prepared.funding_reference_times or {}).get(s,set())):
+                book.events[-1]['funding_price_source']='native_m15_mark_open_reference_not_api_settlement_quote'
         if prepared.settlements.get(at):
             risk(at)
         if at == config.end:
@@ -328,6 +340,8 @@ def result(config, prepared, book):
         summary['spot_availability'] = availability(book.curve)
     if prepared.mark_gap_policy:
         summary['mark_availability'] = mark_availability(book.curve)
+    if prepared.funding_reference_times:
+        summary['funding_price_reference']={s:prepared.funding_audit[s]['price_reference'] for s in prepared.funding_reference_times}
     return dict(schema_version='2',evaluator_version=VERSION,
         result_id=fingerprint(dict(version=VERSION,config=payload,data=prepared.checksum)),
         research_only=True,activation_allowed=False,official_gate_eligible=False,
@@ -345,11 +359,14 @@ def result(config, prepared, book):
             costs=('Spot10/5bps, Perp5/5bps fee/cash-charged slippage each fill; actual funding separate'
                    if getattr(config, 'cost_multiplier', 1) == 1 else
                    'Spot20/10bps, Perp10/10bps fee/cash-charged slippage each fill; actual funding unchanged'),
-            drawdown='native M15 marks open/close plus funding/cost; observe-only; not exact tick/intrabar DD'),
+            drawdown='native M15 marks open/close plus funding/cost; observe-only; not exact tick/intrabar DD',
+            **({'funding_pricing':'Original API rates/times; missing settlement quotes use actual native mark open 0-31ms before settlement, explicitly reference not API-confirmed settlement price'}
+               if prepared.funding_reference_times else {})),
         limitations=sorted(book.limitations | {'approximate_m15_volume_profile_not_tick_volume_at_price',
             'm15_ohlc_touch_execution_order_unknown', 'daily_gaps_and_exit_costs_can_overshoot',
             'ideal_fractional_fills_without_order_book_or_partial_fills','no_exact_liquidation_or_historical_demo_simulation',
             'window_already_seen_not_untouched_out_of_sample'} | (
                 {'spot_source_gap_stale_valuation_and_delayed_execution'} if prepared.spot_gap_policy else set()) | (
-                {'mark_source_gap_stale_valuation'} if prepared.mark_gap_policy else set())),
+                {'mark_source_gap_stale_valuation'} if prepared.mark_gap_policy else set()) | (
+                {'missing_funding_settlement_quote_native_mark_open_reference_0_to_31ms'} if prepared.funding_reference_times else set())),
         v1_reference=None,equity_curve=book.curve,trades=book.trades,events=book.events)

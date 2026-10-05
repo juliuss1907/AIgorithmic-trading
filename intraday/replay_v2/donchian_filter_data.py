@@ -239,7 +239,18 @@ def decode_bundle(config, raw):
             data[s][tag] = snap.candles()
         for market in ('spot','perp'):
             verify_boundaries(s, data[s][market+'4h'], data[s][market+'15m'], config.start, config.end, market+' H4/M15')
-        history = FundingSnapshot.model_validate(raw['funding'][s]).history
+        payload=raw['funding'][s]
+        if 'data_policy' in payload:
+            from intraday.replay_v2.donchian_funding_reference import decode
+            mark_payload=payloads['mark15m']
+            if 'data_policy' in mark_payload:
+                from intraday.replay_v2.donchian_mark_gap import SparseMarkSnapshot
+                mark_snap=SparseMarkSnapshot.model_validate(mark_payload)
+            else:
+                mark_snap=FilterSnapshot.model_validate(mark_payload)
+            history=decode(payload,mark_snap).history
+        else:
+            history=FundingSnapshot.model_validate(payload).history
         if history.symbol != s or history.coverage_start > config.start or history.coverage_end < config.end:
             raise ValueError('funding identity/coverage mismatch')
         funding[s] = history

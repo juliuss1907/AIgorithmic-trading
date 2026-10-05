@@ -76,3 +76,27 @@ reuse-file manifest verifies source hashes/identity/coverage and binds resumes.
 No failed batch or previous freeze is overwritten. Reference04 must reproduce
 legacy ledgers before freeze04/new collection. Strategy and criteria remain
 unchanged; no fresh strategy PnL has been viewed.
+
+## Approved funding price references, not original settlement quotes
+
+The actual funding API preserves rates/times but returns empty`markPrice` for
+2005 BTC and ETH settlements and2080 SOL settlements from2022-01-01 through
+2023-10-31. All have an actual native M15 mark open0–31ms before settlement.
+Operator explicitly approved that OPEN price as a reference, not an API-confirmed
+settlement quote. Policy:`approved-funding-native-mark-open-31ms-v1`.
+
+Original raw rows retain empty marks, original rates/timestamps and source SHA256.
+Derived snapshots record every reference funding time, actual complete source
+mark row/row hash, source snapshot ID and age. Decoder cross-checks them against
+the actual native mark series. Never replace an existing API quote, use a later
+close/high/low, accept a future or older-than31ms open, invent funding rates,
+or weaken shared FundingSnapshot validation. Unknown quote periods still fail.
+Ledger events, input/audit metadata, summary and limitations disclose the reference
+pricing assumption. Known cost/PnL is not exact historical account reconciliation.
+Funding coverage remains strict: observed largest interval8h+28ms is below8h+1s.
+
+Opt-in:`--approved-funding-reference-audit /absolute/diagnostics/native-funding-audit.json`.
+Requires the checksum-bound native mark audit. Reverify six legacy journals,
+review/commit and freeze05 before collecting the new derived bundle. Preserve all
+old freezes/failed batches; no fresh strategy PnL has been inspected. Strategy,
+fees/slippage assumptions and scoring criteria remain unchanged.

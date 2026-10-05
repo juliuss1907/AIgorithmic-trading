@@ -81,6 +81,13 @@ labels; native trade/funding remain strict, no mark bars are synthesized.
 checkpoint snapshots of the exact identity/coverage, with source-file hashes
 and resume binding. It does not reuse or overwrite an earlier freeze or verdict.
 
+The separate approved funding pricing policy uses
+`--approved-funding-reference-audit /absolute/diagnostics/native-funding-audit.json`.
+Empty historical API settlement-price quotes are priced with real native mark
+OPEN references0–31ms earlier; rates/times/raw originals remain unchanged.
+Existing quotes are not replaced. Reports disclose reference pricing rather
+than presenting these as API-confirmed historical settlement prices.
+
 Progress shows case names only. Evaluator verdict is announced before PnL.
 Each of seven runs has a mechanical full-journal deterministic verification.
 For a technical interruption only, repeat the same collection/run command with
