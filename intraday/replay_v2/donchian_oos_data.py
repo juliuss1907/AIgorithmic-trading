@@ -1,0 +1,109 @@
+"""Explicit historical collection after freeze; no interpolation or runtime writes."""
+
+from pathlib import Path
+
+from intraday.replay_v2.artifacts import _write
+from intraday.replay_v2.donchian_filter_data import (WARMUP, FilterSnapshot, fetch_spot_snapshot,
+    from_futures, decode_bundle, verify_files)
+from intraday.replay_v2.donchian_oos_config import START, END, OOSConfig
+from intraday.replay_v2.donchian_oos_pipeline import verify_seal, publish_once
+from intraday.replay_v2.funding import FundingSnapshot, fetch_funding_snapshot
+from intraday.replay_v2.historical_data import fetch_candle_snapshot
+from intraday.replay_v2.historical_mixed import funding_audit
+from intraday.replay_v2.historical_study import read_inputs
+from intraday.replay_v2.metrics import encoded, fingerprint
+from intraday.replay_v2.portfolio_study import file_hash
+
+
+def quality(config,data,funding):
+    audit=funding_audit(config,funding)
+    if not all(value['complete'] for value in audit.values()):
+        raise ValueError('funding gap exceeds 8h+1s: '+encoded(audit))
+    series={}
+    for symbol,tags in data.items():
+        series[symbol]={tag:dict(bars=len(rows),zero_volume=sum(r.volume==0 for r in rows)
+                               if tag!='mark15m' else None) for tag,rows in tags.items()}
+    basis={}
+    for symbol,tags in data.items():
+        spot={row.opened_at:row.close for row in tags['spot15m'] if row.opened_at>=config.start}
+        perp={row.opened_at:row.close for row in tags['perp15m'] if row.opened_at>=config.start}
+        ratios=[(at,abs(perp[at]/value-1)) for at,value in spot.items()]
+        basis[symbol]=dict(maximum_absolute_basis_pct=float(max(v for _,v in ratios)*100),
+                          over_5pct=[dict(at=at.isoformat(),absolute_basis_pct=float(v*100)) for at,v in ratios if v>.05])
+    return dict(strict_checks='passed: no missing/duplicate/nonfinite bars, OHLC bounds, native H4/M15 boundaries',
+        funding=audit,series=series,basis=basis,
+        anomalies_are_flags_not_deleted=True,data_repairs=[],
+        descriptive_event_months={'2022-05':'LUNA','2022-11':'FTX','2023-03':'USDC depeg'})
+
+
+def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_spot_snapshot,
+            perp_fetcher=fetch_candle_snapshot,funding_fetcher=fetch_funding_snapshot):
+    frozen=verify_seal(seal_path)
+    if 'reference_path' not in frozen:
+        raise ValueError('old golden reference must be sealed before new data collection')
+    config=OOSConfig(start=START,end=END)
+    binding=dict(seal_checksum=frozen['seal_checksum'],window={'start':START.isoformat(),'end':END.isoformat()})
+    root=Path(root).expanduser().resolve()
+    root.mkdir(parents=True,exist_ok=resume,mode=0o700)
+    if (root/'binding.json').exists():
+        if not resume or read_inputs(root/'binding.json')!=binding:
+            raise ValueError('collection resume seal/window mismatch')
+    else:
+        _write(root/'binding.json',encoded(binding))
+    if (root/'inputs.json').exists():
+        raw=read_inputs(root/'inputs.json'); verify_files(raw['source_files_sha256'])
+        decode_bundle(config,raw)
+        return root/'inputs.json'
+    raw=dict(schema_version='donchian-filters-1',window=binding['window'],source_files_sha256={},
+             candles={},funding={},reuse_lineage={})
+    for symbol in sorted(config.weights):
+        raw['candles'][symbol]={}; raw['reuse_lineage'][symbol]={}
+        for tag in ('spot4h','spot15m','perp4h','perp15m','mark15m'):
+            interval='4h' if tag.endswith('4h') else '15m'
+            start=START if tag=='mark15m' else START-WARMUP[interval]
+            path=root/(symbol+'-'+tag+'.json')
+            if path.exists():
+                snap=FilterSnapshot.model_validate(read_inputs(path))
+            else:
+                progress('Collect '+symbol+' '+tag+' (raw history only; no strategy)')
+                snap=(spot_fetcher(symbol,interval,start,END) if tag.startswith('spot') else
+                      from_futures(perp_fetcher(symbol,interval,start,END,
+                                   price_kind='mark' if tag=='mark15m' else 'trade')))
+                _write(path,encoded(snap.model_dump(mode='json')))
+            market='spot' if tag.startswith('spot') else 'mark' if tag=='mark15m' else 'perp'
+            if (snap.symbol,snap.market,snap.interval,snap.coverage_start,snap.coverage_end)!=(symbol,market,interval,start,END):
+                raise ValueError('checkpoint native snapshot identity mismatch')
+            raw['candles'][symbol][tag]=snap.model_dump(mode='json')
+            raw['reuse_lineage'][symbol][tag]=dict(parent_snapshot_id=None,active_rows_reused=False,
+                                                 supplemental_snapshot_id=snap.snapshot_id)
+            raw['source_files_sha256'][str(path)]=file_hash(path)
+            progress(symbol+' '+tag+': '+str(len(snap.raw_rows))+' native bars verified')
+        path=root/(symbol+'-funding.json')
+        snap=(FundingSnapshot.model_validate(read_inputs(path)) if path.exists() else funding_fetcher(symbol,START,END))
+        if not path.exists():
+            _write(path,encoded(snap.model_dump(mode='json')))
+        raw['funding'][symbol]=snap.model_dump(mode='json')
+        raw['source_files_sha256'][str(path)]=file_hash(path)
+    raw['source_files_sha256'][str(root/'binding.json')]=file_hash(root/'binding.json')
+    raw['bundle_checksum']=fingerprint(raw)
+    data,funding=decode_bundle(config,raw)
+    qa=quality(config,data,funding)
+    verify_seal(seal_path); verify_files(raw['source_files_sha256'])
+    publish_once(root/'qa.json',encoded(qa))
+    raw['source_files_sha256'][str(root/'qa.json')]=file_hash(root/'qa.json')
+    raw['bundle_checksum']=fingerprint({k:v for k,v in raw.items() if k!='bundle_checksum'})
+    _write(root/'inputs.json',encoded(raw))
+    progress('Collection and strict QA complete; no strategy results inspected.')
+    return root/'inputs.json'
+
+
+def main(argv=None):
+    import argparse
+    p=argparse.ArgumentParser(description='Collect sealed native Binance OOS history; public read-only')
+    p.add_argument('--seal',required=True); p.add_argument('--output-root',required=True)
+    p.add_argument('--resume',action='store_true'); args=p.parse_args(argv)
+    collect(args.seal,args.output_root,resume=args.resume)
+
+
+if __name__=='__main__':
+    main()
