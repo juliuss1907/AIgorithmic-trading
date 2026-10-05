@@ -280,7 +280,8 @@ def simulate(config, prepared):
                 if not obs['long_entry' if side > 0 else 'short_entry']:
                     continue
                 f = prepared.features[market][s][at]
-                failed = entry_filters(f,side,config.filter_level)
+                failed = entry_filters(f,side,config.filter_level,
+                                       adx_threshold=getattr(config,'adx_threshold',25))
                 if failed:
                     book.event(at,'entry_blocked','indicator_filters',market=market,symbol=s,
                         failed_filters=failed,signal_available_at=at.isoformat())
