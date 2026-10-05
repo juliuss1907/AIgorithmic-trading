@@ -11,6 +11,7 @@ from intraday.replay_v2.donchian_oos_warmup_repair import load_approved
 from intraday.replay_v2.donchian_spot_gap import SparseSpotSnapshot, SourceSpotCandle, load_approved as load_spot_gap
 from intraday.replay_v2.donchian_mark_gap import SparseMarkSnapshot, load_approved as load_mark_gap
 from intraday.replay_v2.donchian_funding_reference import ReferenceFundingSnapshot,load_approved as load_funding_reference
+from intraday.replay_v2.donchian_native_boundaries import POLICY as BOUNDARY_POLICY,disclosure
 from intraday.replay_v2.funding import FundingSnapshot, fetch_funding_snapshot
 from intraday.replay_v2.historical_data import fetch_candle_snapshot
 from intraday.replay_v2.historical_mixed import funding_audit
@@ -44,12 +45,14 @@ def quality(config,data,funding):
 
 def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_spot_snapshot,
             perp_fetcher=fetch_candle_snapshot,funding_fetcher=fetch_funding_snapshot,approved_warmup_audit=None,
-            approved_spot_gap_audit=None,approved_mark_gap_audit=None,reuse_root=None,approved_funding_reference_audit=None):
+            approved_spot_gap_audit=None,approved_mark_gap_audit=None,reuse_root=None,approved_funding_reference_audit=None,
+            approved_native_boundaries=False):
     frozen=verify_seal(seal_path)
     if 'reference_path' not in frozen:
         raise ValueError('old golden reference must be sealed before new data collection')
     config=OOSConfig(start=START,end=END)
     binding=dict(seal_checksum=frozen['seal_checksum'],window={'start':START.isoformat(),'end':END.isoformat()})
+    if approved_native_boundaries: binding['native_boundary_policy']=BOUNDARY_POLICY
     approved,repairs,original_hashes=({},[],{})
     if approved_warmup_audit is not None:
         approved,repairs,original_hashes=load_approved(approved_warmup_audit,START,END)
@@ -107,6 +110,7 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
         return root/'inputs.json'
     raw=dict(schema_version='donchian-filters-1',window=binding['window'],source_files_sha256=original_hashes,
              candles={},funding={},reuse_lineage={},data_repairs=repairs)
+    if approved_native_boundaries: raw['native_boundary_policy']=BOUNDARY_POLICY
     for symbol in sorted(config.weights):
         raw['candles'][symbol]={}; raw['reuse_lineage'][symbol]={}
         for tag in ('spot4h','spot15m','perp4h','perp15m','mark15m'):
@@ -164,6 +168,7 @@ def collect(seal_path,root, *, resume=False, progress=print, spot_fetcher=fetch_
     data,funding=decode_bundle(config,raw)
     qa=quality(config,data,funding)
     qa['data_repairs']=repairs
+    if approved_native_boundaries: qa['native_boundary_disclosure']=disclosure()
     if sparse:
         qa['spot_availability']=gap_log
     if sparse_marks:
@@ -192,10 +197,12 @@ def main(argv=None):
     p.add_argument('--approved-mark-gap-audit',help='Explicit opt-in to audited one-bar mark gap; stale observed mark only')
     p.add_argument('--reuse-root',help='Read-only checkpoint cache; same native identity/coverage/checksum required')
     p.add_argument('--approved-funding-reference-audit',help='Explicit funding price-reference opt-in; actual native mark opens within31ms')
+    p.add_argument('--approved-native-boundaries',action='store_true',help='Explicit exact native H4/M15 boundary differences; original prices retained')
     p.add_argument('--resume',action='store_true'); args=p.parse_args(argv)
     collect(args.seal,args.output_root,resume=args.resume,approved_warmup_audit=args.approved_warmup_audit,
             approved_spot_gap_audit=args.approved_spot_gap_audit,approved_mark_gap_audit=args.approved_mark_gap_audit,
-            reuse_root=args.reuse_root,approved_funding_reference_audit=args.approved_funding_reference_audit)
+            reuse_root=args.reuse_root,approved_funding_reference_audit=args.approved_funding_reference_audit,
+            approved_native_boundaries=args.approved_native_boundaries)
 
 
 if __name__=='__main__':

@@ -10,6 +10,8 @@ from pydantic import model_validator
 
 from intraday.replay_v2.donchian_filter_data import FilterSnapshot
 from intraday.replay_v2.intraday_timeframes import IntradayCandle
+from intraday.replay_v2.intraday_data import verify_boundaries
+from decimal import Decimal
 
 
 POLICY = 'binance-spot-m15-audited-20230324-v1'
@@ -20,6 +22,24 @@ PARTIAL_CLOSES = {
     'ETHUSDT': {1640321100000:1640321996158, 1679661000000:1679661583061},
     'SOLUSDT': {1679661000000:1679661586948},
 }
+BOUNDARY_OPEN=datetime(2023,3,24,12,tzinfo=timezone.utc)
+BOUNDARY_PRICES={'BTCUSDT':(Decimal('28079.99'),Decimal('28080')),
+                 'ETHUSDT':(Decimal('1789.51'),Decimal('1789.52'))}
+
+
+def verify_spot_boundaries(symbol,large,small,start,end,label):
+    """Exactly two approved native open differences, never a price tolerance."""
+    opens={b.opened_at:b.open for b in small}
+    closes={b.available_at:b.close for b in small}
+    retained=[]
+    for bar in large:
+        if (start<=bar.opened_at<end and bar.opened_at==BOUNDARY_OPEN and symbol in BOUNDARY_PRICES and
+                (opens.get(bar.opened_at)!=bar.open or closes.get(bar.available_at)!=bar.close)):
+            if (bar.open,opens.get(bar.opened_at))!=BOUNDARY_PRICES[symbol] or closes.get(bar.available_at)!=bar.close:
+                raise ValueError('unapproved Spot boundary price difference')
+        else:
+            retained.append(bar)
+    verify_boundaries(symbol,retained,small,start,end,label)
 
 
 class SourceSpotCandle(IntradayCandle):
@@ -80,6 +100,8 @@ def availability(samples):
     return dict(data_policy=POLICY, synthetic_bars=0,
         missing_opens=[at.isoformat() for at in GAP_OPENS],
         partial_close_times_ms=PARTIAL_CLOSES,
+        approved_boundary_open_differences={s:dict(at=BOUNDARY_OPEN.isoformat(),
+            h4_open=str(prices[0]),m15_open=str(prices[1]),original_prices_unchanged=True) for s,prices in BOUNDARY_PRICES.items()},
         stale_valuation_samples=sum(bool(row.get('stale_spot_symbols')) for row in samples),
         execution='No Spot fills while unavailable; pending exits at next actual Spot open',
         valuation='Last observed Spot price, explicitly stale during source unavailability')

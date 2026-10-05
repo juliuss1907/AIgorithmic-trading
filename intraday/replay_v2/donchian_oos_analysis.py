@@ -134,6 +134,8 @@ def describe(comparison,output_root, *, reference=None):
             first_observed_equity=float(month_curve[0]['equity_known']) if month_curve else None,
             last_observed_equity=float(month_curve[-1]['equity_known']) if month_curve else None)
     result=dict(verdict=score,comparison_sha256=file_hash(comparison),primary_summary=item['summary'],
+        data_assumptions={k:item['summary'][k] for k in ('spot_availability','mark_availability',
+            'funding_price_reference','native_boundary_disclosure') if k in item['summary']},
         year_marked_equity=annual_equity(curve,config.capital),
         year_closed_trades={k:trade_stats(v) for k,v in by_year.items()},
         coin_market={k:trade_stats(v) for k,v in by_coin.items()},
@@ -173,6 +175,13 @@ def describe(comparison,output_root, *, reference=None):
             'No tuning, A3 fallback, activation, official gate update or VPS deployment.',
             'Native M15 OHLC cannot prove tick fills/liquidation. Portfolio DD is sampled, observe-only.',
             'Retrospective holdout and descriptive intervals do not prove future profitability.','']
+    if result['data_assumptions']:
+        lines+=['## Approved source-data assumptions','',
+            'Original prices/rates/timestamps preserved. No synthetic bars. Source timestamps are UTC.',
+            'Spot unavailability delays fills; stale Spot/mark valuations give known-sample DD only.',
+            'Missing funding settlement quotes use causal native mark-open references, not API-confirmed settlement prices.',
+            'Only the exact approved H4/M15 price-view differences are admitted; no generic tolerance.',
+            encoded(result['data_assumptions']),'']
     _write(root/'report.md','\n'.join(lines))
     _write(root/'manifest.json',encoded(dict(files={name:file_hash(root/name) for name in ('analysis.json','report.md')},
                                             comparison_sha256=file_hash(comparison))))

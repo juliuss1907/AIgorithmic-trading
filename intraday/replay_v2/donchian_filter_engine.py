@@ -15,11 +15,12 @@ from intraday.replay_v2.intraday_data import verify_boundaries
 from intraday.replay_v2.metrics import fingerprint
 from intraday.replay_v2.portfolio_book import ZERO, ONE
 from intraday.replay_v2.donchian_spot_gap import (
-    SourceSpotCandle, spot_candles, missing_profile_count, stale_symbols, availability,
+    SourceSpotCandle, spot_candles, missing_profile_count, stale_symbols, availability,verify_spot_boundaries,
 )
 from intraday.replay_v2.donchian_mark_gap import (
     SourceMarkCandle, mark_candles, stale_symbols as stale_marks, availability as mark_availability,
 )
+from intraday.replay_v2.donchian_native_boundaries import POLICY as BOUNDARY_POLICY,verify_perp_boundaries,disclosure
 
 
 VERSION = 'historical-donchian-filter-study-v1.0'
@@ -43,9 +44,12 @@ class Prepared:
     spot_gap_policy: bool = False
     mark_gap_policy: bool = False
     funding_reference_times: dict | None = None
+    native_boundary_policy: str | None = None
 
 
-def prepare(config, data, funding):
+def prepare(config, data, funding, *, native_boundary_policy=None):
+    if native_boundary_policy not in (None,BOUNDARY_POLICY):
+        raise ValueError('unknown native boundary exception policy')
     if set(data) != set(config.weights) or set(funding) != set(config.weights):
         raise ValueError('filter research requires BTC ETH SOL in both markets and funding')
     features, observations, h4 = {}, {}, {}
@@ -70,7 +74,10 @@ def prepare(config, data, funding):
             identities[s][tag] = fingerprint([b.row() for b in rows])
         for market in ('spot','perp'):
             large, small = series[market+'4h'], series[market+'15m']
-            verify_boundaries(s, large, small, config.start, config.end, market+' H4/M15')
+            checker=verify_spot_boundaries if market=='spot' and gap_policy else verify_boundaries
+            if market=='perp' and native_boundary_policy:
+                checker=verify_perp_boundaries
+            checker(s, large, small, config.start, config.end, market+' H4/M15')
             indicators = indicator_series(large)
             small_times = [b.available_at for b in small]
             features.setdefault(market, {})[s] = {}
@@ -117,10 +124,11 @@ def prepare(config, data, funding):
                 settlements[row.at].append((s,row))
     timeline = sorted(set().union(*(set(v) for v in (*opens.values(), *closes.values())),
                                  settlements, {config.end}))
-    checksum = fingerprint(dict(series=identities,
-        funding={s:h.model_dump(mode='json') for s,h in sorted(funding.items())}))
+    identity=dict(series=identities,funding={s:h.model_dump(mode='json') for s,h in sorted(funding.items())})
+    if native_boundary_policy: identity['native_boundary_policy']=native_boundary_policy
+    checksum=fingerprint(identity)
     return Prepared(config.start, config.end, features, observations, h4, opens, closes,
-                    settlements, timeline, checksum, audit, gap_policy, mark_policy, reference_times)
+                    settlements, timeline, checksum, audit, gap_policy, mark_policy, reference_times,native_boundary_policy)
 
 
 def position(book, market, symbol):
@@ -342,6 +350,8 @@ def result(config, prepared, book):
         summary['mark_availability'] = mark_availability(book.curve)
     if prepared.funding_reference_times:
         summary['funding_price_reference']={s:prepared.funding_audit[s]['price_reference'] for s in prepared.funding_reference_times}
+    if prepared.native_boundary_policy:
+        summary['native_boundary_disclosure']=disclosure()
     return dict(schema_version='2',evaluator_version=VERSION,
         result_id=fingerprint(dict(version=VERSION,config=payload,data=prepared.checksum)),
         research_only=True,activation_allowed=False,official_gate_eligible=False,
@@ -368,5 +378,6 @@ def result(config, prepared, book):
             'window_already_seen_not_untouched_out_of_sample'} | (
                 {'spot_source_gap_stale_valuation_and_delayed_execution'} if prepared.spot_gap_policy else set()) | (
                 {'mark_source_gap_stale_valuation'} if prepared.mark_gap_policy else set()) | (
-                {'missing_funding_settlement_quote_native_mark_open_reference_0_to_31ms'} if prepared.funding_reference_times else set())),
+                {'missing_funding_settlement_quote_native_mark_open_reference_0_to_31ms'} if prepared.funding_reference_times else set()) | (
+                {'exact_whitelisted_native_h4_m15_price_disagreements'} if prepared.native_boundary_policy else set())),
         v1_reference=None,equity_curve=book.curve,trades=book.trades,events=book.events)

@@ -88,6 +88,12 @@ OPEN references0–31ms earlier; rates/times/raw originals remain unchanged.
 Existing quotes are not replaced. Reports disclose reference pricing rather
 than presenting these as API-confirmed historical settlement prices.
 
+Use`--approved-native-boundaries` only for the separately approved exact five
+native H4/M15 price-view differences recorded in the data policy. It adds an
+explicit bundle/engine dataset policy; no generalized tolerance or modified
+prices. All remaining boundaries are exact. Reverify legacy journals and create
+freeze06 before the new batch; never overwrite prior freezes/batches.
+
 Progress shows case names only. Evaluator verdict is announced before PnL.
 Each of seven runs has a mechanical full-journal deterministic verification.
 For a technical interruption only, repeat the same collection/run command with

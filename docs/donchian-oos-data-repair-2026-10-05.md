@@ -100,3 +100,28 @@ Requires the checksum-bound native mark audit. Reverify six legacy journals,
 review/commit and freeze05 before collecting the new derived bundle. Preserve all
 old freezes/failed batches; no fresh strategy PnL has been inspected. Strategy,
 fees/slippage assumptions and scoring criteria remain unchanged.
+
+## Exact approved native H4/M15 price-view differences
+
+Operator approved exactly five disagreements after the full active-window
+boundary audit, before any OOS strategy performance was inspected. No price
+normalization, reconstruction or generic epsilon. Native H4 indicators and
+native M15 fills retain their own original source values.
+
+| Market | Symbol | H4 open UTC | Field | H4 | M15 |
+|---|---|---|---|---|---|
+| Spot | BTCUSDT | 2023-03-24 12:00 | open | 28079.99 | 28080.00 |
+| Spot | ETHUSDT | 2023-03-24 12:00 | open | 1789.51 | 1789.52 |
+| Perp | BTCUSDT | 2023-11-10 12:00 | close | 37118.40 | 37092.60 |
+| Perp | ETHUSDT | 2023-11-10 12:00 | close | 2085.32 | 2091.11 |
+| Perp | SOLUSDT | 2023-11-10 12:00 | close | 51.1510 | 50.9140 |
+
+Spot exceptions are part of the explicitly approved audited Spot source policy.
+Perp additionally requires`--approved-native-boundaries`; policy ID
+`approved-native-boundary-prices-2023-v1` binds bundle/checkpoint/seal and engine
+dataset identity. All other fields/bars/coins/times retain exact native boundary
+validation. Missing bars, alternate discrepant prices, unknown policies or
+tampered originals still fail. Existing default validators remain unchanged.
+Spot availability metadata, Perp QA/summary and limitations disclose these views.
+The separate one-bar mark gap and funding reference pricing approvals remain
+in force. Commit and freeze06 after tests/review and legacy-ledger verification.

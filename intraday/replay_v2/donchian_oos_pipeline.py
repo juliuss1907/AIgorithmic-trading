@@ -155,7 +155,7 @@ def run(inputs_path,root, *, seal_path=None, reference=False, golden_path=None, 
         return cached
     data,funding=decode_bundle(variants[0][1],raw)
     progress('Preparing frozen causal features (no performance output)')
-    prepared=prepare(variants[0][1],data,funding)
+    prepared=prepare(variants[0][1],data,funding,native_boundary_policy=raw.get('native_boundary_policy'))
     lineage=raw['source_files_sha256']; del raw,data,funding
     golden=read_inputs(golden_path) if golden_path else None
     results=[]

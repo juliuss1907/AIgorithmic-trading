@@ -216,6 +216,10 @@ def decode_bundle(config, raw):
             set(raw[k]) != set(config.weights) for k in ('candles','funding','reuse_lineage')):
         raise ValueError('filter input bundle identity mismatch')
     data, funding = {}, {}
+    if 'native_boundary_policy' in raw:
+        from intraday.replay_v2.donchian_native_boundaries import POLICY
+        if raw['native_boundary_policy']!=POLICY:
+            raise ValueError('unknown native boundary exception policy')
     for s, payloads in raw['candles'].items():
         if set(payloads) != {'spot4h','spot15m','perp4h','perp15m','mark15m'}:
             raise ValueError('missing native filter series')
@@ -238,7 +242,14 @@ def decode_bundle(config, raw):
                 raise ValueError('native filter snapshot identity mismatch')
             data[s][tag] = snap.candles()
         for market in ('spot','perp'):
-            verify_boundaries(s, data[s][market+'4h'], data[s][market+'15m'], config.start, config.end, market+' H4/M15')
+            checker=verify_boundaries
+            if market=='spot' and 'data_policy' in payloads['spot15m']:
+                from intraday.replay_v2.donchian_spot_gap import verify_spot_boundaries
+                checker=verify_spot_boundaries
+            if market=='perp' and raw.get('native_boundary_policy'):
+                from intraday.replay_v2.donchian_native_boundaries import verify_perp_boundaries
+                checker=verify_perp_boundaries
+            checker(s, data[s][market+'4h'], data[s][market+'15m'], config.start, config.end, market+' H4/M15')
         payload=raw['funding'][s]
         if 'data_policy' in payload:
             from intraday.replay_v2.donchian_funding_reference import decode
