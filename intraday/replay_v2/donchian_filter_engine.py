@@ -21,6 +21,9 @@ from intraday.replay_v2.donchian_mark_gap import (
     SourceMarkCandle, mark_candles, stale_symbols as stale_marks, availability as mark_availability,
 )
 from intraday.replay_v2.donchian_native_boundaries import POLICY as BOUNDARY_POLICY,verify_perp_boundaries,disclosure
+from intraday.replay_v2.donchian_adx_boundaries import (
+    POLICY as JOIN_POLICY, verify_join_boundaries, disclosure as join_disclosure,
+)
 
 
 VERSION = 'historical-donchian-filter-study-v1.0'
@@ -48,7 +51,7 @@ class Prepared:
 
 
 def prepare(config, data, funding, *, native_boundary_policy=None):
-    if native_boundary_policy not in (None,BOUNDARY_POLICY):
+    if native_boundary_policy not in (None,BOUNDARY_POLICY,JOIN_POLICY):
         raise ValueError('unknown native boundary exception policy')
     if set(data) != set(config.weights) or set(funding) != set(config.weights):
         raise ValueError('filter research requires BTC ETH SOL in both markets and funding')
@@ -76,7 +79,7 @@ def prepare(config, data, funding, *, native_boundary_policy=None):
             large, small = series[market+'4h'], series[market+'15m']
             checker=verify_spot_boundaries if market=='spot' and gap_policy else verify_boundaries
             if market=='perp' and native_boundary_policy:
-                checker=verify_perp_boundaries
+                checker=verify_join_boundaries if native_boundary_policy==JOIN_POLICY else verify_perp_boundaries
             checker(s, large, small, config.start, config.end, market+' H4/M15')
             indicators = indicator_series(large)
             small_times = [b.available_at for b in small]
@@ -352,7 +355,7 @@ def result(config, prepared, book):
     if prepared.funding_reference_times:
         summary['funding_price_reference']={s:prepared.funding_audit[s]['price_reference'] for s in prepared.funding_reference_times}
     if prepared.native_boundary_policy:
-        summary['native_boundary_disclosure']=disclosure()
+        summary['native_boundary_disclosure']=(join_disclosure() if prepared.native_boundary_policy==JOIN_POLICY else disclosure())
     return dict(schema_version='2',evaluator_version=VERSION,
         result_id=fingerprint(dict(version=VERSION,config=payload,data=prepared.checksum)),
         research_only=True,activation_allowed=False,official_gate_eligible=False,
