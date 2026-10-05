@@ -59,3 +59,26 @@ batch folders beneath ~/.local/state/aigorithmic-trading/reports/donchian-oos-20
   last-observed mark valuation for this15-minute source gap. Never auto-extend
   Spot execution availability policy to mark/Perp/funding.
 - No push, merge, deployment, model calls or trading activation performed.
+
+## Final completion — supersedes the earlier collection blockers
+
+All separately approved source policies are implemented and recorded before
+fresh PnL inspection: Spot availability, mark stale interval, funding native-open
+references and exactly 5 native boundary price-view discrepancies. No original
+price/rate/time data rewritten or synthetic bars; strict defaults unchanged.
+Engine e1d4918, freeze06 b2a479bd5035c15709a18295315ff4c47815158f5a06eed8ece95b899fe8ebf9.
+Strategy and machine criteria still match freeze01. Reference06 reproduces all
+six legacy full journals; all seven new runs deterministic, immutable and scored.
+
+Completed new verdict: **Inconclusive**. G1/G2/G3 pass; H1/H3/H4 pass (3/6).
+Primary net 348.67 USDT, final 1348.67, +34.87%, known DD 10.47%, 204 trades.
+Fee/slippage x2 actual ledger: net 249.23, final 1249.23, +24.92%, DD 11.35%.
+No retuning, automatic fallback or activation. Operator may consider prospective
+paper with frozen rules; new variants require new evidence, not reuse of OOS.
+
+Full report: [completed results](../docs/donchian-oos-results-2026-10-05.md).
+Private `analysis-20261005-06/report.md` includes annual/coin/market/event/exit,
+benchmarks, bootstrap and separate-account pooling. Report/source/seal manifests
+verified. Full regression: 1294 passed, 1 unchanged Hermes template baseline failure;
+build and scoped reviews pass. Original raw/failed batches/checkouts preserved.
+No push/merge/VPS/runtime/gate/champion/provider/model/order changes.
