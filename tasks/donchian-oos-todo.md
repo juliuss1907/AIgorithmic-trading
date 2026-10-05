@@ -34,3 +34,26 @@ No normalization, interpolation, deletion, engine change or new-window replay
 was performed. An explicit policy decision is needed for the irregular warmup
 bucket. Raw diagnostics are preserved under `diagnostics-20261005-01` in the
 same report root. See its `status.md` for evidence and next decision.
+
+## Approved correction and next data blocker
+
+Operator approved the three warmup closeTime corrections. Commit:`f9ed083`.
+New freeze:`freeze-20261005-02.json`; original freeze/evidence preserved.
+Only `donchian_oos_data.py` and its new repair helper changed in the sealed
+source set. Strategy, engine signals/risk/sizing, lockfile and machine criteria
+remain checksum-identical. Raw originals, three derived H4 snapshots and
+`data-20261005-02/repairs.json` are retained. Reviewed bounded correction;
+15 repair/data tests pass. Full suite before the last new integration test:
+1272 passed,1 failed (same missing ignored Hermes template); wheel/sdist build.
+
+QA then stopped at additional, unapproved native M15 irregularities. Full
+same-source Spot M15 timestamp audit of all three symbols:100987 rows each,
+no duplicates; five missing opens each on2023-03-24T12:45..13:45UTC plus
+an early-closing12:30 candle. BTC/ETH also have an early close at
+2021-12-24T04:45UTC (warmup);SOL does not. Narrow re-query confirms the
+active-window payloads. Raw data and SHA256 are under
+`diagnostics-m15-20261005-02`; see its `status.md`.
+
+No additional repairs, fabricated prices, synthetic candles, omitted event
+days, engine relaxation or OOS strategy runs. Need explicit operator choice
+for missing active Spot data; this is not covered by three-row metadata approval.
