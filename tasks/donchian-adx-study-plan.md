@@ -138,3 +138,18 @@ Final accounting checks reconcile every trade group, fee/slippage/funding total,
 yearly/half-year change and full marked-curve DD. All source checksums remain
 unchanged. Completed artifacts: `final-report.md`, `equity-drawdown.png`,
 `final-verification.json` and `final-manifest.json` in the new private root.
+
+## Setup 2 isolated coin accounts — 2026-10-06
+
+The user explicitly requested standalone SOL/ZEC/NEAR, superseding the older
+no-standalone scope, and confirmed1,000USDT per independent account. Same window,
+ADX20, Spot60/Short40 and approved data; total initial capital3,000USDT.
+See [the isolated-account specification](../docs/donchian-adx-single.md).
+
+- [x] Add locked opt-in profile and test selected-coin accounting, serialization/resume.
+- [x] Add verified costs/outcomes/holding-time/annual/half-year and Setup-2 attribution reports.
+- [ ] Freeze clean source/config/input checksums before replay.
+- [ ] Reproduce original Setup-2 IDs, summary, methodology and all full journals.
+- [ ] Run three accounts twice and publish all journals and sample trades.
+- [ ] Complete independent accounting/source checks, regression and build.
+- [ ] Publish verified results and commit delivery locally; preserve operating backlog.
