@@ -30,9 +30,10 @@ def run_study(inputs_path, report_root, *, progress=print):
     root = Path(report_root).expanduser().resolve()
     root.mkdir(parents=True,mode=0o700,exist_ok=False)
     _write(root/'inputs.json',encoded(raw))
-    frozen = read_inputs(root/'inputs.json')
-    data,funding = decode_bundle(variants[0][1],frozen)
-    del raw,frozen
+    # The validated decode above is reused; the frozen copy only has to match it.
+    if fingerprint(read_inputs(root/'inputs.json')) != fingerprint(raw):
+        raise ValueError('frozen filter input copy differs from validated input')
+    del raw
     progress('Preparing causal H4 features and prior20-day M15 profiles')
     prepared = prepare(variants[0][1],data,funding)
     del data,funding
