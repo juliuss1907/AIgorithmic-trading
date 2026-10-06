@@ -176,3 +176,22 @@ Evaluator `historical-donchian-filter-study-v1.1`; report:
 All 20 case summaries are identical to the 2026-10-04 results. This book already
 anchored midnight marks, and the shared resume rule did not change any resumption
 on this dataset. Full `uv run pytest -q`: **1,245 passed**.
+
+## Prospective paper test — A4-Donchian30-10
+
+[ADR-002](decisions/002-a4-donchian-prospective-paper.md) freezes A4-Donchian30-10 at
+2026-10-02 00:00 UTC with pre-registered criteria. Weekly, by hand, into new directories:
+
+```bash
+uv run python -m intraday.replay_v2.donchian_prospective collect \
+  --base-inputs /path/to/donchian-filters-20261004-inputs-complete/inputs.json \
+  --output-root /path/to/donchian-prospective-YYYYMMDD-inputs
+uv run python -m intraday.replay_v2.donchian_prospective evaluate \
+  --inputs /path/to/donchian-prospective-YYYYMMDD-inputs/inputs.json \
+  --report-root /path/to/donchian-prospective-YYYYMMDD
+```
+
+`collect` fetches only public data after the freeze up to the latest published H4 boundary
+(`--end` overrides it). `evaluate` replays from the freeze, verifies a deterministic rerun and
+writes `evaluation.json` with the verdict (`insufficient_sample`, `pass` or `fail`). A verdict
+never activates trading. First run, 2026-10-06 (4.5 days): 0 trades, `insufficient_sample`.
