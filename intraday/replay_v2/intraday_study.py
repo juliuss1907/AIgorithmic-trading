@@ -1,7 +1,6 @@
 """Three paired local intraday experiments with frozen offline verification."""
 
 from datetime import datetime, timedelta, timezone
-import hashlib
 import json
 from pathlib import Path
 
@@ -14,7 +13,7 @@ from intraday.replay_v2.intraday_book import IntradayConfig
 from intraday.replay_v2.intraday_engine import simulate_intraday
 from intraday.replay_v2.intraday_audit import audit_drawdown
 from intraday.replay_v2 import intraday_data
-from intraday.replay_v2.metrics import encoded
+from intraday.replay_v2.metrics import encoded, journal_hash
 from intraday.replay_v2.portfolio_study import END, file_hash, load_inputs
 from intraday.store import IntradayStore
 
@@ -30,13 +29,6 @@ def study_configs(start, end, trend_filter=True):
     return [('A-H4-D1-trailH1', control)] + [(name, IntradayConfig(start=start, end=end,
         trend_filter=trend_filter, perp_trailing_interval=interval)) for name,interval in
         [('B-H1-H4H8-trailH1','1h'), ('C-H1-H4H8-trailM15','15m')]]
-
-
-def journal_hash(rows):
-    digest = hashlib.sha256()
-    for row in rows:
-        digest.update((encoded(row)+'\n').encode())
-    return digest.hexdigest()
 
 
 def verify_reference(directory, report):

@@ -1,7 +1,6 @@
 """Three paired trailing cadences on one immutable historical base dataset."""
 
 from datetime import timedelta, timezone, datetime
-import hashlib
 import json
 from pathlib import Path
 
@@ -10,7 +9,7 @@ from intraday.replay_v2.artifacts import SERIES, _write, publish_report, read_re
 from intraday.replay_v2.contracts import Candle, FundingHistory
 from intraday.replay_v2.historical_mixed import HistoricalConfig, simulate_historical, funding_audit
 from intraday.replay_v2.historical_study import read_inputs, collect_inputs, decode_inputs
-from intraday.replay_v2.metrics import encoded
+from intraday.replay_v2.metrics import encoded, journal_hash
 from intraday.replay_v2.portfolio_study import START, END, file_hash, load_inputs
 from intraday.replay_v2 import trailing_data
 from intraday.store import IntradayStore
@@ -84,10 +83,7 @@ def run_study(database, report_root, *, start=START, end=END, inputs_path=None, 
         if loaded['result_id'] != repeated['result_id'] or loaded['summary'] != repeated['summary']:
             raise ValueError('trailing cadence summary does not reproduce')
         for series in SERIES:
-            digest = hashlib.sha256()
-            for row in repeated[series]:
-                digest.update((encoded(row)+'\n').encode())
-            if file_hash(Path(saved['report_directory'])/(series+'.jsonl')) != digest.hexdigest():
+            if file_hash(Path(saved['report_directory'])/(series+'.jsonl')) != journal_hash(repeated[series]):
                 raise ValueError('trailing cadence journal does not reproduce')
         trades = [t for t in repeated['trades'] if t['market'] == 'perp']
         item = {'variant': interval, 'perp_trailing_interval': interval, 'run_id': saved['run_id'],

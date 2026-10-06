@@ -1,7 +1,6 @@
 """Explicit 24-month historical study and immutable offline reproduction."""
 
 from datetime import timedelta, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,7 +11,7 @@ from intraday.replay_v2.contracts import Candle, FundingHistory
 from intraday.replay_v2.funding import FundingSnapshot, fetch_funding_snapshot
 from intraday.replay_v2.historical_data import CandleSnapshot, fetch_candle_snapshot
 from intraday.replay_v2.historical_mixed import HistoricalConfig, funding_audit, simulate_historical
-from intraday.replay_v2.metrics import encoded, fingerprint
+from intraday.replay_v2.metrics import encoded, fingerprint, journal_hash
 from intraday.replay_v2.portfolio_research import validate_inputs
 from intraday.replay_v2.portfolio_study import START, END, file_hash, load_inputs
 from intraday.replay_v2 import realized_trailing_study
@@ -315,10 +314,7 @@ def run_study(database, report_root, *, start=START, end=END, collect_perp=False
         if loaded['result_id'] != repeated['result_id'] or loaded['summary'] != repeated['summary']:
             raise ValueError('historical published summary does not reproduce')
         for series in SERIES:
-            digest = hashlib.sha256()
-            for row in repeated[series]:
-                digest.update((encoded(row)+'\n').encode())
-            if file_hash(Path(saved['report_directory'])/(series+'.jsonl')) != digest.hexdigest():
+            if file_hash(Path(saved['report_directory'])/(series+'.jsonl')) != journal_hash(repeated[series]):
                 raise ValueError('historical published ledger does not reproduce')
         item = dict(variant=name, include_perp=cfg.include_perp, perp_stop=cfg.perp_stop, perp_size=cfg.perp_size,
             daily_loss_pct=float(cfg.daily_loss*100), max_drawdown_pct=float(cfg.max_drawdown*100),

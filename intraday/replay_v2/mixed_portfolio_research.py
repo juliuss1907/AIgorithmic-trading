@@ -1,7 +1,6 @@
 """Explicit offline Spot+Perp study; no scheduler, lifecycle or credentials."""
 
 from datetime import datetime, timedelta, timezone
-import hashlib
 import json
 from pathlib import Path
 
@@ -12,7 +11,7 @@ from intraday.replay_v2.data import load_dataset
 from intraday.replay_v2.funding import fetch_funding_snapshot, read_funding_snapshot, save_funding_snapshot
 from intraday.replay_v2.mixed_book import MixedConfig
 from intraday.replay_v2.mixed_research import perp_diagnostics, simulate_mixed
-from intraday.replay_v2.metrics import encoded
+from intraday.replay_v2.metrics import encoded, journal_hash
 from intraday.replay_v2.portfolio_research import validate_inputs
 from intraday.replay_v2.portfolio_study import file_hash, load_inputs
 from intraday.store import IntradayStore
@@ -111,10 +110,7 @@ def run_study(database, report_root, *, start=START, end=END, collect_funding=Fa
         if loaded["result_id"] != repeated["result_id"] or loaded["summary"] != repeated["summary"]:
             raise ValueError("mixed portfolio publication or deterministic replay mismatch")
         for name_series in SERIES:
-            digest = hashlib.sha256()
-            for row in repeated[name_series]:
-                digest.update((encoded(row)+"\n").encode())
-            if file_hash(Path(saved["report_directory"])/(name_series+".jsonl")) != digest.hexdigest():
+            if file_hash(Path(saved["report_directory"])/(name_series+".jsonl")) != journal_hash(repeated[name_series]):
                 raise ValueError("published mixed ledger series differ from deterministic replay")
         results.append({"variant": name, "daily_loss_pct": float(config.daily_loss*100),
             "run_id": saved["run_id"], "result_id": report["result_id"], "status": report["status"],

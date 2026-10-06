@@ -18,6 +18,14 @@ def fingerprint(value):
     return hashlib.sha256(encoded(value).encode()).hexdigest()
 
 
+def journal_hash(rows):
+    """SHA256 of a JSONL journal exactly as publish_report writes it."""
+    digest = hashlib.sha256()
+    for row in rows:
+        digest.update((encoded(row)+'\n').encode())
+    return digest.hexdigest()
+
+
 def dataset_fingerprint(data):
     return fingerprint({"rule": data.rule.model_dump(mode="json"),
         "candles": [c.model_dump(mode="json") for c in data.candles],
