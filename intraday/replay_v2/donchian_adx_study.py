@@ -78,34 +78,39 @@ def runtime_hashes():
 
 
 def verify_three_coin(comparison_path, output_root, *, progress=print, universe='three'):
-    """Replay a prior three/five-coin study against its immutable publications."""
+    """Replay old three/five studies, or setup 2, against immutable publications."""
     from intraday.replay_v2.artifacts import read_report
     from intraday.replay_v2.intraday_study import verify_reference
     old=read_inputs(comparison_path)
-    if universe == 'five':
+    if universe in ('five', 'setups'):
         from intraday.replay_v2.donchian_five_data import read_manifest
         raw=read_manifest(old['inputs_path'])
     elif universe == 'three':
         raw=read_join_inputs(old['inputs_path'])
     else:
-        raise ValueError('legacy verification requires three or five coins')
+        raise ValueError('legacy verification requires three, five or setups')
     if file_hash(old['inputs_path'])!=old['inputs_sha256']:
         raise ValueError('legacy input changed')
     verify_files(raw['source_files_sha256'])
     start,end=(datetime.fromisoformat(raw['window'][k]) for k in ('start','end'))
     variants=cases(start,end,universe=universe)
     if len(old['results'])!=len(variants): raise ValueError('requires five legacy ADX cases')
+    references=old['results']
+    if universe=='setups':
+        if old['preset']!='donchian-adx-setups':raise ValueError('requires a locked setups reference')
+        variants=[variants[1]];references=[references[1]]
     binding=dict(engine_commit=git('rev-parse','HEAD'),sources=runtime_hashes(),
                  reference_sha256=file_hash(comparison_path),inputs_sha256=old['inputs_sha256'],
                  configs={n:c.model_dump(mode='json') for n,c in variants})
     root=Path(output_root); root.mkdir(parents=True,mode=0o700,exist_ok=False)
     _write(root/'binding.json',encoded(binding))
-    progress(f'Preparing unchanged {universe}-coin data for full legacy verification')
-    data,funding=decode_bundle(variants[0][1],raw)
-    prepared=prepare(variants[0][1],data,funding,native_boundary_policy=raw.get('native_boundary_policy'))
+    progress(f'Preparing unchanged {universe} data for full legacy verification')
+    preparation_config=config_type('five')(start=start,end=end) if universe=='setups' else variants[0][1]
+    data,funding=decode_bundle(preparation_config,raw)
+    prepared=prepare(preparation_config,data,funding,native_boundary_policy=raw.get('native_boundary_policy'))
     lineage=raw['source_files_sha256']; del raw,data,funding
     results=[]
-    for (name,cfg),item in zip(variants,old['results']):
+    for (name,cfg),item in zip(variants,references):
         if item['variant']!=name or item['config_checksum']!=fingerprint(cfg.model_dump(mode='json')):
             raise ValueError('legacy config identity changed')
         verify_item(item)
@@ -132,7 +137,7 @@ def verify_three_coin(comparison_path, output_root, *, progress=print, universe=
 def run_study(inputs_path, report_root, *, resume=False, progress=print, universe='three'):
     model=config_type(universe)
     source=Path(inputs_path).expanduser().resolve();before=file_hash(source)
-    if universe in ('five', 'setups'):
+    if universe in ('five', 'setups', 'single'):
         from intraday.replay_v2.donchian_five_data import read_manifest
         raw=read_manifest(source)
     else:
@@ -150,7 +155,7 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
         root.mkdir(parents=True,mode=0o700)
         _write(root/'binding.json',encoded(binding))
     progress('Preparing shared causal H4 features and native M15 volume profiles')
-    preparation_config = (config_type('five')(start=start,end=end) if universe=='setups' else variants[0][1])
+    preparation_config = (config_type('five')(start=start,end=end) if universe in ('setups','single') else variants[0][1])
     data,funding=decode_bundle(preparation_config,raw)
     prepared=prepare(preparation_config,data,funding,native_boundary_policy=raw.get('native_boundary_policy'))
     del data,funding,raw
@@ -190,7 +195,7 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
     verify_files(lineage)
     if file_hash(source)!=before or runtime_hashes()!=binding['sources']:
         raise ValueError('research evidence/source changed')
-    receipt=dict(preset='donchian-adx-setups' if universe=='setups' else 'donchian-adx-exploration',window={'start':start.isoformat(),'end':end.isoformat()},
+    receipt=dict(preset='donchian-adx-single' if universe=='single' else 'donchian-adx-setups' if universe=='setups' else 'donchian-adx-exploration',window={'start':start.isoformat(),'end':end.isoformat()},
                  research_only=True,research_on_seen_data=True,activation_allowed=False,official_gate_eligible=False,
                  source_unchanged=True,inputs_path=str(source),inputs_sha256=before,
                  source_files_sha256=lineage,binding_checksum=fingerprint(binding),results=results)
@@ -211,6 +216,14 @@ def markdown(receipt):
         s=item['summary'];net=s['net_pnl'];ret=s['net_return_pct']
         lines.append(f"| {item['variant']} | {s['final_equity_known']:.2f} | {net if net is not None else 'UNKNOWN'} | "
                      f"{ret if ret is not None else 'UNKNOWN'} | {s['max_drawdown_known_pct']:.2f} | {s['closed_trades']} |")
+    if receipt['preset']=='donchian-adx-single':
+        lines += ['', 'Three independent1000USDT accounts, one each for SOL, ZEC and NEAR; total initial capital3000USDT.',
+                  'Each account: Spot60/Short40, ADX20 strictly above and rising, directional DMI, Short-only1x.',
+                  'Realized-only reinvestment separately within Spot/Short; no transfers between accounts.',
+                  'Donchian30/10 H4, EMA200/50, VolumeMA20x1.2, volume profile and ATR14x3 retained.',
+                  'Daily3% per account; next UTC day AND flat resume; DD observe-only.',
+                  'Each row is a separate account, not a combined1000USDT portfolio.', '']
+        return '\n'.join(lines)
     if receipt['preset']=='donchian-adx-setups':
         from intraday.replay_v2.donchian_adx_setups import ADXSetupConfig, allocation_text
         lines += ['', 'Initial1000USDT; Short-only1x; realized-only reinvestment separately within Spot/Perp.',
@@ -236,17 +249,17 @@ def markdown(receipt):
 def main(argv=None):
     import argparse
     from intraday.replay_v2.donchian_adx_data import collect_join
-    parser=argparse.ArgumentParser(description='Local five-case A4 ADX exploration; no models or trading')
+    parser=argparse.ArgumentParser(description='Local A4 ADX research; no models or trading')
     parser.add_argument('--report-root',required=True)
     parser.add_argument('--inputs')
-    parser.add_argument('--universe',choices=('three','five','setups'),default='three')
+    parser.add_argument('--universe',choices=('three','five','setups','single'),default='three')
     parser.add_argument('--early-inputs');parser.add_argument('--late-inputs')
     parser.add_argument('--resume',action='store_true')
     args=parser.parse_args(argv)
     root=Path(args.report_root).expanduser().resolve()
     source=args.inputs
-    if args.universe in ('five','setups') and source is None:
-        parser.error('--universe five/setups requires a validated --inputs manifest')
+    if args.universe in ('five','setups','single') and source is None:
+        parser.error('--universe five/setups/single requires a validated --inputs manifest')
     if source is None:
         if not args.early_inputs or not args.late_inputs:parser.error('supply --inputs or both parent inputs')
         source=root/'data'/'inputs.json'

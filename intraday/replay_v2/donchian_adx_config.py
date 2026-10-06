@@ -32,6 +32,9 @@ class FiveCoinADXConfig(ADXStudyConfig):
 
 
 def config_type(universe='three'):
+    if universe == 'single':
+        from intraday.replay_v2.donchian_adx_single import SingleCoinADXConfig
+        return SingleCoinADXConfig
     if universe == 'setups':
         from intraday.replay_v2.donchian_adx_setups import ADXSetupConfig
         return ADXSetupConfig
@@ -41,6 +44,9 @@ def config_type(universe='three'):
 
 
 def cases(start=START, end=END, *, universe='three'):
+    if universe == 'single':
+        from intraday.replay_v2.donchian_adx_single import single_cases
+        return single_cases(start, end)
     if universe == 'setups':
         from intraday.replay_v2.donchian_adx_setups import setup_cases
         return setup_cases(start, end)
