@@ -417,7 +417,7 @@ changes Spot allocations and its economic path.
 It hits the +5% profit guard on 12 days and the Perp loss guard on 17 days;
 24 of 144 Perp trades exit at protective stops. Its Perp sleeve return is
 32.2203%, but sleeve DD is **21.6093%** and its worst observed day is
-**-6.4805%**, despite a 3% trigger. The 9.5172% figure is the **combined
+**-6.4804%**, despite a 3% trigger. The 9.5172% figure is the **combined
 portfolio** DD. This experiment does not establish a guaranteed daily loss
 cap, a guaranteed daily income, or a low-risk standalone Perp strategy.
 
@@ -513,7 +513,7 @@ The equity Spot-only control does trade the full window and improves return
 by 2.8395 percentage points, with higher observed DD (9.4107% versus 7.9954%).
 The mixed equity result must not be credited with later market gains that its
 terminal halt prevented it from trading. Its worst observed Perp day is
--6.8126%, despite the unchanged 3% trigger; 4h/funding sampling, gaps and exit
+-6.8125%, despite the unchanged 3% trigger; 4h/funding sampling, gaps and exit
 costs still do not establish a hard intraday loss cap.
 
 All four complete summaries and journals reproduce offline. An independent
@@ -604,7 +604,7 @@ triggering the initial-capital floor; its activation is covered by tests.
 The equity mixed book finishes at 1,296.1976 USDT after 344 trades: Spot
 contributes +327.4754, Perp **-31.2778** (BTC -4.0413, ETH -27.2365). Perp
 has 161 trades, 27 daily loss pauses and 18 daily profit pauses, with **32.5596%
-sleeve DD** and a worst observed day of -6.8126%. Portfolio DD and Perp sleeve
+sleeve DD** and a worst observed day of -6.8125%. Portfolio DD and Perp sleeve
 DD must not be conflated. Spot-only equity growth finishes at 1,321.1976;
 adding Perp reduces total return by 2.5000 percentage points versus that
 paired control, including indirect shared-cash/risk effects.
@@ -956,3 +956,32 @@ The separate `perp-short-reserve` preset compares Spot-only, unchanged original 
 and short-only isolated2x with reserve off versus restore/repay. New Perp allocation
 is a margin budget, not the old notional cap. See [short/reserve research](perp-short-reserve-research.md)
 for flow-neutral ledger contracts, offline CLI, immutable evidence and full703-day results.
+
+
+## Rerun after daily-loss fixes — 2026-10-06
+
+Two ledger fixes change the evaluator: a parent daily-loss resume no longer
+erases a loss taken on the new UTC day before the book is flat, and the parent
+and Perp-sleeve UTC daily baselines now anchor at the 00:00 marks in every
+engine (previously only the Donchian filter book did). The study was replayed
+offline from the same frozen inputs (identical SHA256) into a new directory;
+every variant passed the deterministic double replay. Old evidence is kept.
+
+Evaluators: `historical-mixed-quant-v1.3`, `historical-perp-daily-policy-v1.1`,
+`historical-equity-growth-v1.1`, `historical-capital-guard-v1.1`,
+`historical-realized-sizing-v1.1`, `historical-net-trade-trailing-v1.1`,
+`historical-trailing-cadence-v1.1`. Reports under `/home/julius/.local/state/aigorithmic-trading/reports/`:
+`historical-mixed-20261006-rerun/`, `historical-mixed-20261006-rerun-stop-extension/`,
+`perp-daily-policy-20261006-rerun/`, `perp-daily-compounding-20261006-rerun/`,
+`perp-capital-guard-20261006-rerun-observe-only/`,
+`perp-capital-guard-20261006-rerun-initial-capital/`,
+`perp-realized-trailing-20261006-rerun/` and
+`perp-trailing-cadence-20261006-rerun-703days/`.
+
+Every economic summary (final equity, returns, DD, trades, pauses, costs) in these
+24-month and 703-day trailing-cadence studies is unchanged. Only the descriptive
+Perp worst observed day and maximum giveback move, by at most 0.005 pp (the
+-6.4804% and -6.8125% figures above are updated). The 24-month baseline report
+additionally carries `perp_stop_exit_count`, a field added after the original run.
+The recorded-Jev study had zero entries and no daily halt, so it is not affected.
+Full `uv run pytest -q`: **1,245 passed**.

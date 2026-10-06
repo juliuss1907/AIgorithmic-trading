@@ -135,29 +135,29 @@ Capital is restarted from 1,000 USDT, not carried from earlier experiments.
 | Case | Final USDT | Portfolio return | Spot net USDT | Perp net USDT | Engine portfolio DD | Common M15 portfolio DD | Perp trades | Trailing exits |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | A H4/D1, trailingH1 | 1,419.6712 | +41.9671% | +381.7541 | +37.9171 | 13.0254% | 13.0313% | 148 | 65 |
-| B H1/H4/H8, trailingH1 | 1,281.5854 | +28.1585% | +353.0909 | −71.5055 | 14.4062% | 14.4062% | 507 | 48 |
+| B H1/H4/H8, trailingH1 | 1,281.0081 | +28.1008% | +353.0888 | −72.0807 | 14.4483% | 14.4483% | 507 | 48 |
 | C H1/H4/H8, trailingM15 | 1,276.7334 | +27.6733% | +353.0764 | −76.3430 | 14.2573% | 14.2573% | 512 | 70 |
 
 The faster entry setups do **not** improve this dataset: B/C finish
-138.0858/142.9378 USDT below A. All reject the unchanged DD<10% research
+138.6632/142.9378 USDT below A. All reject the unchanged DD<10% research
 check; none is an official acceptance or deployment recommendation.
 Portfolio profitability in B/C comes from Spot, not profitable Perp.
 
-Perp gross price PnL is +91.2691/+67.1168/+64.6914 USDT for A/B/C, while
-Perp fee+slippage rises from **48.2103 to 133.8432/136.4191 USDT**; actual
-funding costs are 5.1417/4.7791/4.6153 USDT. Thus B/C's positive gross
+Perp gross price PnL is +91.2691/+66.5001/+64.6914 USDT for A/B/C, while
+Perp fee+slippage rises from **48.2103 to 133.8040/136.4191 USDT**; actual
+funding costs are 5.1417/4.7768/4.6153 USDT. Thus B/C's positive gross
 price PnL is consumed by more frequent trading costs. Both long and short
 Perp net PnL are negative for B/C. This describes these assumed costs and
 observed trades, not a claim that all H1 strategies are unprofitable.
 
-Mean Perp holding time falls from61.4054h to20.1923h/19.2954h. Donchian
+Mean Perp holding time falls from61.4054h to20.1928h/19.2954h. Donchian
 exits rise48→341/326, ATR touch stops21→107/107. Perp daily loss pauses
 are12/9/8; finer daily risk does not eliminate cumulative drawdown or
-gap/exit-cost overshoot. Worst observed Perp day is −4.7169% for A versus
-−3.5442% for B/C, not a guaranteed −3% cap.
+gap/exit-cost overshoot. Worst observed Perp day is −4.7181% for A versus
+−3.5441% for B/C, not a guaranteed −3% cap.
 
 Perp sleeve DD (engine / passive common-grid) is **22.3115% / 24.7835%**
-for A, **37.6345% / 37.6345%** for B and **37.4809% / 37.4809%** for C.
+for A, **37.7912% / 37.7912%** for B and **37.4809% / 37.4809%** for C.
 Sampling A's unchanged book more frequently reveals deeper Perp drawdown
 without changing any A fills or original summary. Spot rules stay unchanged;
 shared constraints reduce B/C Spot net PnL relative to A.
@@ -207,3 +207,23 @@ Full `uv run pytest -q`: **1,184 passed**, 29 existing dependency warnings.
 `uv build` (wheel and source distribution) and `git diff --check` pass.
 No dependency, runtime, worker, rule, gate, database, soak or account change;
 local commits only, no push, merge or deployment.
+
+
+## Rerun after daily-loss fixes — 2026-10-06
+
+Two ledger fixes change the evaluator: a parent daily-loss resume no longer
+erases a loss taken on the new UTC day before the book is flat, and the parent
+and Perp-sleeve UTC daily baselines now anchor at the 00:00 marks in every
+engine (previously only the Donchian filter book did). The study was replayed
+offline from the same frozen inputs (identical SHA256) into a new directory;
+every variant passed the deterministic double replay. Old evidence is kept.
+
+Evaluator `historical-perp-intraday-timeframes-v1.1`; report:
+`/home/julius/.local/state/aigorithmic-trading/reports/perp-intraday-timeframes-20261006-rerun/`.
+A and C keep their economic summaries; only the descriptive worst observed Perp
+day moves (A −4.7169%→−4.7181%, C −3.5442%→−3.5441%). B changes slightly and the
+B figures above are updated: its first behavioral divergence is 2026-06-25
+16:00 UTC, where the Perp daily return sat at −3.000% and the midnight-mark
+baseline moved the halt by one 15m tick. `--baseline-reference` is not used for
+this rerun because A's result ID changes with the evaluator version.
+Full `uv run pytest -q`: **1,245 passed**.

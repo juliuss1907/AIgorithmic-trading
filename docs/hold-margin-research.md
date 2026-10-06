@@ -100,3 +100,22 @@ and three journals. All three new cases are replayed twice from the same frozen
 exports; publication verifies identities, summaries, journals, sidecars and audits.
 Source database and exported input checksums remain unchanged.
 Full regression: 1,210 tests passed; package build passed.
+
+
+## Rerun after daily-loss fixes — 2026-10-06
+
+Two ledger fixes change the evaluator: a parent daily-loss resume no longer
+erases a loss taken on the new UTC day before the book is flat, and the parent
+and Perp-sleeve UTC daily baselines now anchor at the 00:00 marks in every
+engine (previously only the Donchian filter book did). The study was replayed
+offline from the same frozen inputs (identical SHA256) into a new directory;
+every variant passed the deterministic double replay. Old evidence is kept.
+
+Evaluator `historical-hold-margin-research-v1.1`; report:
+`/home/julius/.local/state/aigorithmic-trading/reports/hold-margin-20261006-rerun-v2/`.
+The study checks its control against the frozen short-reserve root, whose
+control identity changes with the new evaluator version, so `--frozen-root`
+points at `perp-short-reserve-20261006-rerun/`; its three input files are
+byte-identical to the original root. All three economic summaries are unchanged;
+only the descriptive worst observed Perp day moves by less than 0.003 pp.
+Full `uv run pytest -q`: **1,245 passed**.

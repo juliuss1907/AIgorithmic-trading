@@ -39,12 +39,12 @@ Portfolio DD uses a passive common-M15 audit with Spot H4 as-of valuation.
 | Case | Final USDT | Net PnL | Return | Portfolio DD | Closed trades |
 |---|---:|---:|---:|---:|---:|
 | Spot Donchian100 | 1,485.18 | +485.18 | +48.52% | 16.49% | 93 |
-| Perp intraday3x trailM15 full margin | 498.73 | -501.27 | -50.13% | 69.57% | 770 |
+| Perp intraday3x trailM15 full margin | 494.28 | -505.72 | -50.57% | 69.84% | 772 |
 
-Spot contributions: BTC+193.25, ETH+95.86, SOL+196.07. Perp: BTC-168.60,
-ETH+20.95, SOL-353.62. Perp gross price PnL+579.24 less exchange fees519.74,
-slippage519.74 and funding41.02 gives net-501.27. Long395 trades net-190.81;
-short375 net-310.46. There are100 trailing exits,86 stop exits,117 Perp daily
+Spot contributions: BTC+193.25, ETH+95.86, SOL+196.07. Perp: BTC-135.72,
+ETH-1.37, SOL-368.63. Perp gross price PnL+570.11 less exchange fees517.54,
+slippage517.54 and funding40.76 gives net-505.72. Long395 trades net-190.25;
+short377 net-315.47. There are100 trailing exits,86 stop exits,117 Perp daily
 halts and138 parent daily pauses. No DD terminal halt.
 
 Both exceed the descriptive10% DD research criterion. These are not official
@@ -84,3 +84,21 @@ twice offline and verified at publication; source and lineage hashes remain unch
 `legacy-default-verification.json` verifies the previous C intraday identity,
 full summary and three journals are unchanged by the opt-in book hook.
 Regression: 1,214 tests passed; package build passed.
+
+
+## Rerun after daily-loss fixes — 2026-10-06
+
+Two ledger fixes change the evaluator: a parent daily-loss resume no longer
+erases a loss taken on the new UTC day before the book is flat, and the parent
+and Perp-sleeve UTC daily baselines now anchor at the 00:00 marks in every
+engine (previously only the Donchian filter book did). The study was replayed
+offline from the same frozen inputs (identical SHA256) into a new directory;
+every variant passed the deterministic double replay. Old evidence is kept.
+
+Evaluator `historical-single-sleeve-research-v1.1`; report:
+`/home/julius/.local/state/aigorithmic-trading/reports/single-sleeve-20261006-rerun/`.
+Spot Donchian100 is unchanged. Perp-only changes slightly (figures above updated):
+its first behavioral divergence is 2024-12-03 around 15:00 UTC, with the Perp
+daily return at the −3% threshold, after which fills drift (770→772 trades).
+Trailing exits100, stop exits86, Perp daily halts117 and parent pauses138 are
+unchanged. Full `uv run pytest -q`: **1,245 passed**.

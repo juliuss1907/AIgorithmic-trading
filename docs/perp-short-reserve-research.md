@@ -124,7 +124,7 @@ larger budgets for a losing strategy. Both new cases have37 Perp daily loss
 pauses, no parent daily pause, and zero10% emergency stop exits. Daily guards
 can close earlier than price stops. Neither loss threshold guarantees exact
 maximum loss: marks/contracts, gaps and exit costs can overshoot. Worst
-observed Perp day in the replenished case is−9.7304%, despite3% trigger.
+observed Perp day in the replenished case is−9.7328%, despite3% trigger.
 
 Restore/repay makes21 transfers: gross draw145.6968, repayment45.6968,
 net debt100, remaining reserve0. Actual Perp capital253.0040 includes100 net
@@ -167,3 +167,20 @@ Verification: `uv run pytest -q` **1,205 passed**,29 existing dependency
 warnings;21 new focused tests. `uv build` wheel/source distribution,
 research-link checks, CLI help and `git diff --check` pass. Local commits only;
 no dependency, runtime, worker, source database, gate, soak or account changes.
+
+
+## Rerun after daily-loss fixes — 2026-10-06
+
+Two ledger fixes change the evaluator: a parent daily-loss resume no longer
+erases a loss taken on the new UTC day before the book is flat, and the parent
+and Perp-sleeve UTC daily baselines now anchor at the 00:00 marks in every
+engine (previously only the Donchian filter book did). The study was replayed
+offline from the same frozen inputs (identical SHA256) into a new directory;
+every variant passed the deterministic double replay. Old evidence is kept.
+
+Evaluator `historical-perp-short-reserve-v1.1`; report:
+`/home/julius/.local/state/aigorithmic-trading/reports/perp-short-reserve-20261006-rerun/`.
+All four economic summaries (final equity, returns, DD, trades, pauses, reserve
+flows) are unchanged. Only descriptive Perp statistics move: worst observed day
+−4.7169%→−4.7181% for A and −9.7304%→−9.7328% for both Short2x cases (updated
+above). Full `uv run pytest -q`: **1,245 passed**.

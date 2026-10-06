@@ -160,3 +160,19 @@ Verification:1,240 tests passed with29 existing dependency deprecation warnings;
 package build and CLI help checks passed. Independent correctness/data reviews
 had no unresolved Required/Critical findings. No push, merge, deployment or
 activation was performed.
+
+
+## Rerun after daily-loss fixes — 2026-10-06
+
+Two ledger fixes change the evaluator: a parent daily-loss resume no longer
+erases a loss taken on the new UTC day before the book is flat, and the parent
+and Perp-sleeve UTC daily baselines now anchor at the 00:00 marks in every
+engine (previously only the Donchian filter book did). The study was replayed
+offline from the same frozen inputs (identical SHA256) into a new directory;
+every variant passed the deterministic double replay. Old evidence is kept.
+
+Evaluator `historical-donchian-filter-study-v1.1`; report:
+`/home/julius/.local/state/aigorithmic-trading/reports/donchian-filters-20261006-rerun/`.
+All 20 case summaries are identical to the 2026-10-04 results. This book already
+anchored midnight marks, and the shared resume rule did not change any resumption
+on this dataset. Full `uv run pytest -q`: **1,245 passed**.
