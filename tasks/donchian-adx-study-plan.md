@@ -177,3 +177,35 @@ workspace `state/research-reports/donchian-adx-single-20261006/`; an independent
 local checkout and engine Git bundle preserve source commits. Initial edits in
 the now-read-only research worktree remain documented in `execution-note.json`.
 Original user checkout tracked files and operating backlog remain unchanged.
+
+## Setup 2 trade diagnostics — 2026-10-06
+
+Descriptive-only follow-up of419existing trades: SOL/ZEC/NEAR4:3:3,
+ADX20, Spot60/Short40, same continuous1,000USDT account and window.
+See [locked diagnostic rules](../docs/donchian-setup2-diagnostics.md) and
+[completed findings](../docs/donchian-setup2-diagnostic-results.md).
+
+- [x] Freeze analysis commit, five one-variable bin definitions, review criterion,
+      source comparison/config/dataset checksums and all full journals before outcomes.
+- [x] Require419unique causal entry-feature joins and positive nominal initial1R;
+      reconcile177wins/242losses,663.9825net and174.5137costs.
+- [x] Publish portfolio/six-market groups, entry-year/half-year cohorts,
+      signed funding, costs, mean net R/PF and global top10-winner overlap.
+- [x] Publish separate net-USDT/net-R top1/5/10/20rankings and fixed-journal
+      remainder sums, explicitly without counterfactual-replay claims.
+- [x] Apply n≥20 and≥3negative complete2022–2025entry years with≥5trades;
+      retain empty/low-sample bins and exclude partial2026from eligibility.
+- [x] Independently audit all419trade rows,112groups/1,792CSV rows and tails;
+     36focused tests pass; source18reports and strategy code remain unchanged.
+- [x] Preserve original publication and publish corrected Markdown rendering,
+      local source commits, checksum manifests, and private charts/CSV/JSON.
+
+Analysis freeze `312e4f5`; independent audit `ad38776`. Private artifacts:
+workspace `state/research-reports/donchian-setup2-diagnostics-20261006/`.
+SOL Short volume ratio(1.2,2]is−72.76USDT/−0.173mean R over31trades;
+ZEC Spot directional EMA50 distance>2ATR is+13.06USDT/−0.00554mean R over68trades,
+including3global top10USDT winners. Both meet the predefined review criterion;
+neither is automatically selected for exclusion. Top10winners sum758.80USDT,
+leaving−94.82USDT in409other fixed-journal trades. Only7gross winners become
+net losers after costs. No new strategy runs, threshold changes, OOS claim,
+push, merge, deploy, LLM calls or activation. Operating backlog stays intact.
