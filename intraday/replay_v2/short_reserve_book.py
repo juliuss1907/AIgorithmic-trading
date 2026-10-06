@@ -8,7 +8,7 @@ from pydantic import model_validator
 from intraday.replay_v2.historical_mixed import HistoricalConfig
 from intraday.replay_v2.historical_capital import HistoricalBook
 from intraday.replay_v2.mixed_book import PERP_FEE, PERP_SLIP
-from intraday.replay_v2.perp_daily import PerpDailyBook, PerpDailyState
+from intraday.replay_v2.perp_daily import PerpDailyBook, PerpDailyState, PerpSleeveRisk
 from intraday.replay_v2.portfolio_book import ONE, ZERO
 
 
@@ -69,13 +69,13 @@ class FlowDailyState(PerpDailyState):
         self.day_flows += amount
 
 
-class ShortReserveBook(PerpDailyBook):
+class ShortReserveBook(PerpSleeveRisk, PerpDailyBook):
     def __init__(self, config):
         super().__init__(config)
         self.daily = FlowDailyState(config.capital*config.perp_cap, config.start)
         self.reserve_initial = config.capital*config.reserve
         self.drawn = self.repaid = ZERO
-        self.perp_curve, self.transfers = [], []
+        self.transfers = []
         self.flat_at = None
 
     @property
@@ -144,25 +144,11 @@ class ShortReserveBook(PerpDailyBook):
             'perp_performance_equity':str(self.daily.last_equity-self.daily.capital_flows),
             'reserve_balance':str(self.reserve_balance)}
 
-    def record_perp(self, at, stage):
-        self.perp_curve.append(dict(at=at.isoformat(), stage=stage, **self.daily_curve_fields()))
-
     def observe(self, at, marks, *, stage='risk'):
         equity = super().observe(at, marks, stage=stage)
         self.curve[-1]['perp_capital_flows'] = str(self.daily.capital_flows)
         self.record_perp(at, 'parent_checkpoint')
         return equity
-
-    def enforce_perp_risk(self, at):
-        self.daily.observe(at, self.perp_equity())
-        reason = self.daily.evaluate(at) if not self.halted else None
-        if reason:
-            if reason == 'perp_capital_exhausted':
-                self.limitations.add(reason)
-            self.event(at, 'perp_daily_halt', reason, market='perp',
-                **self.daily_curve_fields(), until=self.daily.until.isoformat())
-            self.note_perp_flat(at)
-        self.record_perp(at, 'perp_risk')
 
     def enforce_risk(self, at, marks):
         HistoricalBook.enforce_risk(self, at, marks)

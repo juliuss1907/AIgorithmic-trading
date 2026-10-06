@@ -146,6 +146,30 @@ class PerpDailyBook(HistoricalBook):
         self.event(at, 'perp_daily_resume', 'next_utc_day_and_perp_flat', previous_reason=previous, market='perp')
 
 
+class PerpSleeveRisk:
+    """Perp-only daily risk on a finer clock than the parent, with its own sleeve curve."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.perp_curve = []
+
+    def record_perp(self, at, stage):
+        self.perp_curve.append(dict(at=at.isoformat(), stage=stage, **self.daily_curve_fields()))
+
+    def enforce_perp_risk(self, at):
+        # Re-observing the same equity is idempotent. Unlike the 'parent_checkpoint' row
+        # written by observe, the 'perp_risk' row records the post-evaluation lock state.
+        self.daily.observe(at, self.perp_equity())
+        reason = self.daily.evaluate(at) if not self.halted else None
+        if reason:
+            if reason == 'perp_capital_exhausted':
+                self.limitations.add(reason)
+            self.event(at, 'perp_daily_halt', reason, market='perp',
+                **self.daily_curve_fields(), until=self.daily.until.isoformat())
+            self.note_perp_flat(at)
+        self.record_perp(at, 'perp_risk')
+
+
 def daily_summary(book, valid=True, *, curve=None):
     """Descriptive statistics, not an activation or a newly optimized gate."""
     d = book.daily
