@@ -60,13 +60,6 @@ class FilterBook(HistoricalBook):
         super().__init__(config)
         self.trails = {}
 
-    def advance_day(self, at, marks=None):
-        if at.date() < self.day:
-            raise ValueError('filter study clock cannot go backwards')
-        if at.date() != self.day:
-            self.day = at.date()
-            self.day_start = self.equity(marks) if marks is not None else self.last_equity
-
     def observe(self, at, marks, *, stage='risk'):
         equity = super().observe(at,marks,stage=stage)
         self.curve[-1].update(day_start_equity=str(self.day_start),

@@ -92,11 +92,13 @@ class MixedBook(PortfolioBook):
             "perp_gross_notional": str(perp), "locked_margin": str(self.locked_margin)})
         return equity
 
-    def advance_day(self, at):
+    def advance_day(self, at, marks=None):
         if at.date() < self.day:
             raise ValueError("portfolio time cannot go backwards")
         if at.date() != self.day:
-            self.day, self.day_start = at.date(), self.last_equity
+            # Callers pass the tick's midnight marks so an overnight gap counts in the new day.
+            self.day = at.date()
+            self.day_start = self.equity(marks) if marks is not None else self.last_equity
 
     @property
     def terminal_risk_halted(self):

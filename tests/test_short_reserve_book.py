@@ -138,3 +138,14 @@ def test_spot_cash_floor_uses_remaining_reserve_not_original_ten_percent():
     # Canonical fractional division has Decimal precision28; use the same
     # sub-attounit accounting tolerance as full journal reconciliation.
     assert b.cash >= D('-1e-18')
+
+
+def test_new_day_baselines_use_midnight_marks_not_previous_tick():
+    b, marks = book()
+    b.enter_perp('BTCUSDT', START, marks, D(100), -1, D('.10'))
+    b.observe(START, marks)
+    before, perp_before = b.last_equity, b.perp_equity()
+    b.perp_marks['BTCUSDT'] = D(110)  # Overnight gap against the short.
+    b.advance_day(START+timedelta(days=1), marks)
+    assert b.day_start == b.equity(marks) < before
+    assert b.daily.day_start == b.perp_equity() < perp_before

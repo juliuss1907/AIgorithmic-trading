@@ -75,9 +75,12 @@ class PerpDailyBook(HistoricalBook):
         return self.daily.cash+sum((p.quantity*(self.perp_marks[s]-p.entry_price)
                                    for s, p in self.perps.items() if p.quantity), ZERO)
 
-    def advance_day(self, at):
-        super().advance_day(at)
+    def advance_day(self, at, marks=None):
+        day = self.day
+        super().advance_day(at, marks)
         self.daily.advance_day(at)
+        if marks is not None and self.day != day and self.perp_equity() > 0:
+            self.daily.day_start = self.perp_equity()  # Same midnight-mark anchor as the parent.
 
     def enter_perp(self, symbol, at, marks, price, side, stop_distance, *, approved_target=None):
         if self.daily.locked:

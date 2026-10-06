@@ -253,7 +253,6 @@ def simulate_historical(config, candles, daily, perp, funding, *, trailing_bars=
     opening_times = set(opens)
     recently_closed = {}
     for at in sorted(opening_times | set(closing_times) | {config.end} | set(settlements) | set(fine_open) | set(fine_close)):
-        book.advance_day(at)
         closed = recently_closed.pop(at, set())
         if at in closing_times:
             previous = closing_times[at]
@@ -266,6 +265,7 @@ def simulate_historical(config, candles, daily, perp, funding, *, trailing_bars=
             perp_open = {s: trades[s][perp_idx[s][at]] for s in trades}
             marks.update({s: c.open for s, c in spot_open.items()})
             book.perp_marks.update({s: mark_bars[s][at].open for s in trades})
+        book.advance_day(at, marks)
         for s, row in sorted(settlements.get(at, ())):
             book.perp_marks[s] = row.mark
             book.settle_funding(s, at, row.rate, row.mark)

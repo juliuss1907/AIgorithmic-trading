@@ -79,7 +79,6 @@ def simulate_short_reserve(config, candles, daily, perp, funding, native, *,
     recently_closed = {}
     times = sorted(set(contract.opens) | set(contract.closes) | set(settlements) | {config.end})
     for at in times:
-        book.advance_day(at)
         closed = recently_closed.pop(at, set())
         spot_close, perp_close = spot_clock.closes.get(at, {}), contract.closes.get(at, {})
         spot_open, perp_open = spot_clock.opens.get(at, {}), contract.opens.get(at, {})
@@ -87,6 +86,7 @@ def simulate_short_reserve(config, candles, daily, perp, funding, native, *,
         marks.update({s:b.open for s,b in spot_open.items()})
         book.perp_marks.update({s:b.close for s,b in mark_clock.closes.get(at, {}).items()})
         book.perp_marks.update({s:b.open for s,b in mark_clock.opens.get(at, {}).items()})
+        book.advance_day(at, marks)
         for s, row in sorted(settlements.get(at, ())):
             book.perp_marks[s] = row.mark
             book.settle_funding(s, at, row.rate, row.mark)

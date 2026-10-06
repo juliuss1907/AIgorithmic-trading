@@ -135,8 +135,8 @@ def test_h4_boundary_keeps_existing_risk_exit_priority(priority, monkeypatch):
             second.model_copy(update={'open': D(102), 'high': D(103)}))
     # Set the competing condition before the common H4 open is evaluated.
     advance = TradeTrailingBook.advance_day
-    def advance_hook(book, at):
-        advance(book, at)
+    def advance_hook(book, at, marks=None):
+        advance(book, at, marks)
         if at == START+WIDTH:
             if priority == 'contract_stop_gap':
                 for p in book.perps.values():
