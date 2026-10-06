@@ -79,6 +79,21 @@ def test_only_parent_daily_lock_then_next_utc_day_flat_resume():
     assert b.day_start == b.equity(marks)
 
 
+def test_parent_resume_keeps_new_day_loss_from_overnight_perp():
+    b, marks = book()
+    b.enter_perp('BTCUSDT', START, marks, D(100), -1, D('.1'))
+    b.perp_marks['BTCUSDT'] = D(120)
+    b.enforce_risk(START+timedelta(hours=1), marks)
+    assert b.halt_reason == 'daily_loss_limit'
+    next_day = START+timedelta(days=1)
+    b.advance_day(next_day, marks)  # Perp still open at midnight.
+    b.perp_marks['BTCUSDT'] = D(140)
+    b.close_perp('BTCUSDT', next_day, D(140), 'daily_loss_limit')
+    assert b.equity(marks) <= b.day_start*(1-b.config.daily_loss)
+    b.maybe_resume(next_day, marks)
+    assert b.halted and b.pause_until == START+timedelta(days=2)
+
+
 def test_peak_drawdown_above_ten_percent_is_observed_not_terminal_halt():
     b,marks = book()
     b.cash = b.day_start = D(850)

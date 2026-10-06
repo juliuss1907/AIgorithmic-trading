@@ -112,9 +112,11 @@ class MixedBook(PortfolioBook):
         if reason:
             self.halt_reason = reason
             self.event(at, "halt", reason, upgraded_from="daily_loss_limit")
+        elif equity <= self.day_start*(ONE-self.config.daily_loss):
+            # advance_day owns day_start. A new-day loss must not be erased on resumption.
+            self.pause_until = at.replace(hour=0, minute=0, second=0, microsecond=0)+timedelta(days=1)
         else:
             self.halted, self.halt_reason = False, None
-            self.day_start = equity
             self.event(at, "resume", "next_utc_day_and_flat")
 
     def enforce_risk(self, at, marks):

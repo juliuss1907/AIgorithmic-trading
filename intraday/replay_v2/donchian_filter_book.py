@@ -108,9 +108,3 @@ class FilterBook(HistoricalBook):
     def close_perp(self, symbol, at, price, reason):
         super().close_perp(symbol, at, price, reason)
         self.trails.pop(('perp', symbol), None)
-
-    def maybe_resume(self, at, marks):
-        if self.halt_reason == 'daily_loss_limit' and at >= self.pause_until and self.flat:
-            self.halted, self.halt_reason = False, None
-            # advance_day owns day_start. Never erase an overnight/open gap loss.
-            self.event(at, 'resume', 'next_utc_day_and_flat')

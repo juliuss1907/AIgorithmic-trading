@@ -70,6 +70,26 @@ def test_daily_halt_waits_for_actual_flatten_then_resumes_without_resetting_peak
     assert not book.halted and book.peak == peak
 
 
+def test_daily_resume_does_not_erase_new_day_loss_before_flatten():
+    book = marked_book()
+    book.enter_batch(START, SPOT, {s: Decimal(1) for s in SPOT})
+    book.enforce_risk(START, {s: Decimal(94) for s in SPOT})
+    assert book.halt_reason == "daily_loss_limit"
+    next_day = START + timedelta(days=1)
+    book.advance_day(next_day)
+    day_start = book.day_start
+    lower = {s: Decimal(88) for s in SPOT}  # Gap loss after midnight, before the fill.
+    for s in SPOT:
+        book.close(s, next_day, lower[s], "daily_loss_limit")
+    book.maybe_resume(next_day, lower)
+    assert book.halted and book.day_start == day_start
+    assert book.pause_until == datetime(2026, 10, 2, tzinfo=timezone.utc)
+    book.observe(next_day, lower)
+    book.advance_day(next_day + timedelta(days=1))
+    book.maybe_resume(next_day + timedelta(days=1), lower)
+    assert not book.halted
+
+
 def test_terminal_dd_has_priority_and_is_never_resumed():
     book = marked_book()
     book.enter_batch(START, SPOT, {s: Decimal(1) for s in SPOT})
