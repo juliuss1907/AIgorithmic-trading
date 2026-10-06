@@ -148,8 +148,32 @@ See [the isolated-account specification](../docs/donchian-adx-single.md).
 
 - [x] Add locked opt-in profile and test selected-coin accounting, serialization/resume.
 - [x] Add verified costs/outcomes/holding-time/annual/half-year and Setup-2 attribution reports.
-- [ ] Freeze clean source/config/input checksums before replay.
-- [ ] Reproduce original Setup-2 IDs, summary, methodology and all full journals.
-- [ ] Run three accounts twice and publish all journals and sample trades.
-- [ ] Complete independent accounting/source checks, regression and build.
-- [ ] Publish verified results and commit delivery locally; preserve operating backlog.
+- [x] Freeze clean source/config/input checksums before replay.
+- [x] Reproduce original Setup-2 IDs, summary, methodology and all full journals.
+- [x] Run three accounts twice and publish all journals and sample trades.
+- [x] Complete independent accounting/source checks, available regression and build;
+      record the sandbox web-test blocker separately.
+- [x] Publish verified results and commit delivery locally; preserve operating backlog.
+
+Frozen engine `c772c53887972ca16344481e6283514731014bf8`; original manifest and
+prepared dataset checksums unchanged. All15prior profile config IDs remain
+unchanged; Setup-2 reproduces its full publication. Six new simulations match
+result IDs, summary, methodology and all journals. Independent checks reconcile
+all421entries/trades, costs, funding, capital, full-curve DD and calendar periods.
+
+SOL final1546.70USDT/return54.67%/DD21.70%/149trades/60wins/89losses/13daily stops.
+ZEC final1182.28USDT/return18.23%/DD22.21%/135trades/55wins/80losses/10daily stops.
+NEAR final1974.86USDT/return97.49%/DD20.68%/137trades/64wins/73losses/4daily stops.
+These are three separate1,000USDT accounts, not one1,000USDT portfolio.
+
+Regression1287pass,1known Hermes template failure;83tests in12TestClient files
+remain unverified because a minimal empty FastAPI app also hangs in this sandbox.
+The full-suite attempt and minimal diagnostic are preserved; wheel/sdist build
+passes. No unrelated framework/environment fix was introduced.
+
+The managed filesystem changed mid-task, making the old research worktree and
+private reports directory read-only. Persistent artifacts therefore live under
+workspace `state/research-reports/donchian-adx-single-20261006/`; an independent
+local checkout and engine Git bundle preserve source commits. Initial edits in
+the now-read-only research worktree remain documented in `execution-note.json`.
+Original user checkout tracked files and operating backlog remain unchanged.
