@@ -88,22 +88,21 @@ class EquityBook(PortfolioBook):
         if self.cash < 0:
             raise ValueError('equity cash conservation failed')
 
+    @property
+    def fee_rate(self):
+        return self.config.commission
+
+    @property
+    def slip_rate(self):
+        return self.config.slippage
+
     def close(self, symbol, at, price, reason):
-        p = self.positions[symbol]
-        if not p.quantity:
+        if not self.positions[symbol].quantity:
             return
-        notional = p.quantity*price
-        fee, slip = notional*self.config.commission, notional*self.config.slippage
-        gross = p.quantity*(price-p.entry_price)
-        self.cash += notional-fee-slip
-        self.fees += fee
-        self.slippage += slip
-        self.trades.append({'symbol': symbol, 'opened_at': p.entered_at.isoformat(), 'closed_at': at.isoformat(),
-            'quantity': str(p.quantity), 'entry_price': str(p.entry_price), 'exit_price': str(price),
-            'gross_pnl': gross, 'commission': p.entry_fee+fee, 'slippage_cost': p.entry_slip+slip,
-            'net_pnl': gross-p.entry_fee-p.entry_slip-fee-slip, 'exit_reason': reason})
-        self.positions[symbol] = Position()
-        self.event(at, 'exit', reason, symbol=symbol, price=str(price))
+        super().close(symbol, at, price, reason)
+        # Keep the published equity journal fields: 'commission', no cash on exit events.
+        self.trades[-1]['commission'] = self.trades[-1].pop('exchange_fee')
+        self.events[-1].pop('cash')
 
     def enforce_risk(self, at, marks):
         equity = self.observe(at, marks)
