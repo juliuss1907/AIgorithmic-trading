@@ -54,6 +54,16 @@ def test_margin_and_reserve_cannot_be_spent_again():
     assert book.positions["BTCUSDT"].quantity * 100 < 240
 
 
+def test_spot_batch_that_overdraws_cash_fails_loudly(monkeypatch):
+    book = marked_book()
+    book.cash = Decimal(100)
+    # Overstated room: sizing base and reserve no longer reflect the actual cash.
+    monkeypatch.setattr(book, "allocation_base", lambda marks: Decimal(1000))
+    monkeypatch.setattr(book, "reserve_floor", lambda marks: Decimal(-1000))
+    with pytest.raises(ValueError, match="cash conservation"):
+        book.enter_batch(START, SPOT, {"BTCUSDT": Decimal(1)})
+
+
 def test_daily_halt_waits_for_actual_flatten_then_resumes_without_resetting_peak():
     book = marked_book()
     book.enter_batch(START, SPOT, {s: Decimal(1) for s in SPOT})

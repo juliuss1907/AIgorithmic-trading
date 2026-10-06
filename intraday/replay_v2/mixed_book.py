@@ -10,6 +10,7 @@ from intraday.replay_v2.portfolio_book import FEE, SLIP, ONE, ZERO, PortfolioBoo
 
 
 PERP_FEE, PERP_SLIP = Decimal(".0005"), Decimal(".0005")
+CASH_TOLERANCE = Decimal("1e-18")  # Same sub-attounit tolerance as journal reconciliation.
 FIVE_WEIGHTS = {"BTCUSDT": ".40", "ETHUSDT": ".20", "SOLUSDT": ".20",
                 "NEARUSDT": ".10", "ZECUSDT": ".10"}
 
@@ -186,6 +187,8 @@ class MixedBook(PortfolioBook):
             self.event(at, "entry", "donchian_entry", symbol=s, market="spot", price=str(marks[s]),
                 notional=str(notional), quantity=str(quantity), base_equity=str(base),
                 requested_notional=str(requested), allocation_scale=str(scale))
+        if self.cash < -CASH_TOLERANCE:  # Spending all free cash may leave Decimal division dust.
+            raise ValueError("portfolio cash conservation failed")
 
     def close(self, symbol, at, price, reason):
         if self.positions[symbol].quantity:
