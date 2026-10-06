@@ -11,7 +11,7 @@ from intraday.replay_v2.short_reserve_book import ShortReserveBook, ShortReserve
 from intraday.replay_v2.short_reserve_engine import DonchianSpotPolicy, NativeClock, MS, simulate_short_reserve
 
 
-VERSION = 'historical-hold-margin-research-v1.0'
+VERSION = 'historical-hold-margin-research-v1.1'
 
 
 class AllocationConfig(ShortReserveConfig):

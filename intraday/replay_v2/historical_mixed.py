@@ -51,13 +51,13 @@ class HistoricalConfig(MixedConfig):
         return dict(sorted(value.items()))
 
 
-VERSION = 'historical-mixed-quant-v1.2'  # Explicit stop and notional-size experiments.
-DAILY_VERSION = 'historical-perp-daily-policy-v1.0'
-GROWTH_VERSION = 'historical-equity-growth-v1.0'
-GUARD_VERSION = 'historical-capital-guard-v1.0'
-REALIZED_VERSION = 'historical-realized-sizing-v1.0'
-TRADE_TRAILING_VERSION = 'historical-net-trade-trailing-v1.0'
-TRAILING_CADENCE_VERSION = 'historical-trailing-cadence-v1.0'
+VERSION = 'historical-mixed-quant-v1.3'  # Midnight-mark daily baseline; resume keeps new-day loss.
+DAILY_VERSION = 'historical-perp-daily-policy-v1.1'
+GROWTH_VERSION = 'historical-equity-growth-v1.1'
+GUARD_VERSION = 'historical-capital-guard-v1.1'
+REALIZED_VERSION = 'historical-realized-sizing-v1.1'
+TRADE_TRAILING_VERSION = 'historical-net-trade-trailing-v1.1'
+TRAILING_CADENCE_VERSION = 'historical-trailing-cadence-v1.1'
 
 
 @dataclass(frozen=True)

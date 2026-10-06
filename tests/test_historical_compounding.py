@@ -93,7 +93,7 @@ def test_growth_is_opt_in_historical_only_and_preserves_old_report_identity():
     assert 'capital_growth' not in MixedConfig.model_fields
     new = simulate_historical(cfg.model_copy(update={'capital_growth': 'equity'}), *fixture_inputs(cfg))
     assert new['config']['capital_growth'] == 'equity'
-    assert new['evaluator_version'] == 'historical-equity-growth-v1.0'
+    assert new['evaluator_version'] == 'historical-equity-growth-v1.1'
     assert old['result_id'] != new['result_id']
     assert old['inputs']['dataset_checksum'] == new['inputs']['dataset_checksum']
     with pytest.raises(ValueError):

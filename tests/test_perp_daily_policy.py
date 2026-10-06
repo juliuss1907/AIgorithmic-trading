@@ -189,7 +189,7 @@ def test_disabled_policy_retains_legacy_journal_shape_and_identity():
     assert 'perp_daily_policy' not in report['config']
     assert 'perp_daily' not in report['summary']
     assert all('perp_equity' not in row for row in report['equity_curve'])
-    assert report['evaluator_version'] == 'historical-mixed-quant-v1.2'
+    assert report['evaluator_version'] == 'historical-mixed-quant-v1.3'
 
 
 def test_daily_study_publishes_nine_reproducible_journals(tmp_path):

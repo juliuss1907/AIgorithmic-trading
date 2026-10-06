@@ -15,7 +15,7 @@ from intraday.replay_v2.portfolio_book import ONE, ZERO
 
 
 WEIGHTS = {'BTCUSDT':Decimal('.50'), 'ETHUSDT':Decimal('.25'), 'SOLUSDT':Decimal('.25')}
-VERSION = 'historical-single-sleeve-research-v1.0'
+VERSION = 'historical-single-sleeve-research-v1.1'
 
 
 class SpotOnlyConfig(HistoricalConfig):

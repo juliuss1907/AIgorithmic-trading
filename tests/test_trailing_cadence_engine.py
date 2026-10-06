@@ -96,8 +96,9 @@ def test_h4_result_and_complete_journals_retain_pre_cadence_identity():
     from intraday.replay_v2.artifacts import SERIES
     cfg = config()
     report = simulate_historical(cfg, *fixture_inputs(cfg))
-    # Independently confirmed against evaluator commit 670ade0.
-    assert report['result_id'] == 'f23f2885beebc72955771a9e506799049f41154662420ddfb33197c78a2959d1'
+    # Journals independently confirmed against evaluator commit 670ade0; result_id
+    # changed only with the v1.3 evaluator version (midnight-mark daily baseline).
+    assert report['result_id'] == 'af112b299f6e71abc0a06e249f08423a7b28ef22f9c3ef6182c66cd90f803cc6'
     assert fingerprint({s: report[s] for s in SERIES}) == '269c1958317146d8d151fc80788ae2be9f81e257ead2d7b13bd84f8a478c775e'
 
 

@@ -19,7 +19,7 @@ from intraday.replay_v2.portfolio_research import validate_inputs as validate_sp
 from intraday.spot_signal import evaluate_donchian
 
 
-VERSION = 'historical-perp-intraday-timeframes-v1.0'
+VERSION = 'historical-perp-intraday-timeframes-v1.1'
 MS = timedelta(milliseconds=1)
 
 

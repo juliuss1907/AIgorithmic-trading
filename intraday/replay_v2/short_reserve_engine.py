@@ -18,7 +18,7 @@ from intraday.replay_v2.portfolio_research import validate_inputs as validate_sp
 from intraday.replay_v2.short_reserve_book import ShortReserveBook
 
 
-VERSION = 'historical-perp-short-reserve-v1.0'
+VERSION = 'historical-perp-short-reserve-v1.1'
 PARAMETERS = SpotRuleParameters(entry_window=30, exit_window=8, atr_period=14)
 
 

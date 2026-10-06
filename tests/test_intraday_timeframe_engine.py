@@ -30,7 +30,7 @@ def test_h1_next_open_entries_atr_and_offline_reproduction(tmp_path):
     report = simulate_intraday(*args)
     repeated = simulate_intraday(*args)
     assert report == repeated
-    assert report['evaluator_version'] == 'historical-perp-intraday-timeframes-v1.0'
+    assert report['evaluator_version'] == 'historical-perp-intraday-timeframes-v1.1'
     assert report['summary']['closed_trades'] == 2
     assert report['summary']['realized_sizing']['final_capital']['perp'] < 300
     entries = [e for e in report['events'] if e['kind'] == 'entry']

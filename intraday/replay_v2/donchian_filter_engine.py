@@ -16,7 +16,7 @@ from intraday.replay_v2.metrics import fingerprint
 from intraday.replay_v2.portfolio_book import ZERO, ONE
 
 
-VERSION = 'historical-donchian-filter-study-v1.0'
+VERSION = 'historical-donchian-filter-study-v1.1'
 MS = timedelta(milliseconds=1)
 PAIRS = ((20,8),(20,10),(30,8),(30,10))
 

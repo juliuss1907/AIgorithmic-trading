@@ -136,7 +136,7 @@ def test_new_policy_reports_and_default_compatibility():
     for policy in ('observe-only', 'initial-capital'):
         report = simulate_historical(cfg.model_copy(update={'drawdown_policy': policy}), *fixture_inputs(cfg))
         guard = report['summary']['capital_guard']
-        assert report['evaluator_version'] == 'historical-capital-guard-v1.0'
+        assert report['evaluator_version'] == 'historical-capital-guard-v1.1'
         assert report['config']['drawdown_policy'] == guard['policy'] == policy
         assert guard['initial_capital_floor'] == (900 if policy=='initial-capital' else None)
         assert guard['minimum_equity_known'] <= 1000

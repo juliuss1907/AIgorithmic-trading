@@ -15,7 +15,7 @@ from intraday.scoped_gate import ScopedEntryGate
 from intraday.spot_signal import evaluate_donchian
 
 
-VERSION = "mixed-portfolio-research-v1"
+VERSION = "mixed-portfolio-research-v2"
 AGE = timedelta(seconds=45)
 
 
