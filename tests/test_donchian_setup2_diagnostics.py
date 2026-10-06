@@ -4,7 +4,8 @@ from decimal import Decimal as D
 import pytest
 
 from scripts.diagnose_donchian_setup2 import (
-    BINS, analyze, band, join_trades, needs_review, number, ranked_winners, stats,
+    BINS, analyze, band, csv_text, export_groups, freeze, join_trades, needs_review,
+    number, ranked_winners, stats, verify_snapshot,
 )
 
 
@@ -129,3 +130,52 @@ def test_usdt_and_r_rankings_and_overlap():
     s = stats([first, second], {first['trade_id']})
     assert s['global_top10_count'] == 1
     assert s['global_top10_net_usdt'] == D('16.5')
+
+
+def test_reordered_analysis_is_identical_and_partitions_reconcile():
+    from intraday.replay_v2.metrics import fingerprint
+    a, ae = fixture_trade()
+    b, be = fixture_trade('perp', exit_price='110')
+    rows = join_trades([a, b], [ae, be])
+    reversed_rows = join_trades([b, a], [be, ae])
+    assert fingerprint(rows) == fingerprint(reversed_rows)
+    result = analyze(rows)
+    assert fingerprint(result) == fingerprint(analyze(reversed_rows))
+    assert result['overall']['profit_factor'] == D('16.5')/D('21.5')
+    assert result['tails']['net_pnl'][0]['remaining']['net_pnl'] == D('-21.5')
+    for feature in BINS:
+        parts = [g for g in result['groups'] if g['scope'] == 'portfolio' and g['feature'] == feature]
+        assert sum(g['overall']['count'] for g in parts) == 2
+        assert sum(g['overall']['net_pnl'] for g in parts) == D('-5')
+
+
+def test_export_cohorts_and_exact_decimal_csv():
+    import csv
+    from io import StringIO
+    t, e = fixture_trade()
+    result = analyze(join_trades([t], [e]))
+    rows = export_groups(result)
+    assert len(rows) == 1792
+    parsed = list(csv.DictReader(StringIO(csv_text(rows))))
+    assert len(parsed) == 1792
+    assert parsed[0]['net_pnl'] == '16.5'
+    assert parsed[0]['period_type'] == 'overall'
+    assert parsed[1]['period'] == '2022'
+    assert parsed[5]['complete_period'] == 'False'
+
+
+def test_frozen_snapshot_detects_mutation(tmp_path):
+    from intraday.replay_v2.portfolio_study import file_hash
+    source = tmp_path/'source.json'
+    source.write_text('original')
+    frozen = {str(source): file_hash(source)}
+    verify_snapshot(frozen)
+    source.write_text('tampered')
+    with pytest.raises(ValueError, match='frozen source changed'):
+        verify_snapshot(frozen)
+
+
+def test_existing_root_is_rejected_before_any_read(tmp_path):
+    with pytest.raises(ValueError, match='no overwrite'):
+        freeze('/missing/comparison.json', tmp_path, '/missing/inventory.json')
+    assert not list(tmp_path.iterdir())
