@@ -9,6 +9,7 @@ from pydantic import Field, field_validator, model_validator
 
 from intraday.contracts import SpotRuleParameters
 from intraday.replay_v2.contracts import FrozenModel, utc, positive_policy_number
+from intraday.replay_v2.indicators import ema50_trend, trend_side
 from intraday.replay_v2.metrics import fingerprint
 from intraday.replay_v2.portfolio_book import ONE, ZERO, Position, PortfolioBook
 from intraday.spot_signal import evaluate_donchian
@@ -129,17 +130,11 @@ def prepare(config, frames):
         if sum(frame.index.date < config.start.date()) < 51:
             raise ValueError('51 prior sessions needed for EMA50 slope and channel warmup')
         rows = [[i, *values] for i, values in enumerate(frame[['open', 'high', 'low', 'close', 'volume']].values.tolist())]
-        closes, ema, prior, observations = [], None, None, []
-        for i, row in enumerate(rows):
-            close = Decimal(str(row[4]))
-            closes.append(close)
-            if len(closes) == 50:
-                ema = sum(closes)/50
-            elif ema is not None:
-                prior = ema
-                ema += Decimal(2)/51*(close-ema)
+        closes = [Decimal(str(row[4])) for row in rows]
+        observations = []
+        for i, (close, (ema, prior)) in enumerate(zip(closes, ema50_trend(closes))):
             obs = evaluate_donchian(rows[max(0, i-30):i+1], rule) if i >= 30 else None
-            observations.append((obs, prior is not None and close > ema > prior))
+            observations.append((obs, trend_side(close, ema, prior) == 1))
         prepared[s], signals[s] = frame, observations
     return schedule, prepared, signals
 

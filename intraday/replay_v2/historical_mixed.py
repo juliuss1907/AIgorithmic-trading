@@ -16,7 +16,7 @@ from intraday.replay_v2.mixed_book import MixedConfig
 from intraday.replay_v2.perp_daily import PerpDailyBook, daily_summary
 from intraday.replay_v2.trade_trailing import TradeTrailingBook
 from intraday.replay_v2.portfolio_book import ONE, ZERO, STOP
-from intraday.replay_v2.portfolio_research import WIDTH, daily_points, validate_inputs
+from intraday.replay_v2.portfolio_research import WIDTH, daily_trend, validate_inputs
 from intraday.replay_v2.study import months_before
 from intraday.spot_signal import evaluate_donchian
 
@@ -78,19 +78,8 @@ def perp_observation(rows):
 
 
 def daily_directions(rows):
-    validated = daily_points(rows)
-    closes, ema, prior, sides = [], None, None, []
-    for row in rows:
-        close = Decimal(str(row[4]))
-        closes.append(close)
-        if len(closes) == 50:
-            ema = sum(closes)/50
-        elif ema is not None:
-            prior = ema
-            ema += Decimal(2)/51*(close-ema)
-        sides.append(1 if prior is not None and close > ema > prior else
-                     -1 if prior is not None and close < ema < prior else 0)
-    return [point[0] for point in validated], sides
+    points = daily_trend(rows)
+    return [at for at, _ in points], [side for _, side in points]
 
 
 def stop_fraction(config, entry_price, atr):

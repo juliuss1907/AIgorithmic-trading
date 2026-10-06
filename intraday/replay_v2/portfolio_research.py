@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from intraday.contracts import SpotRuleParameters
 from intraday.replay_v2.contracts import Candle
+from intraday.replay_v2.indicators import ema50_trend, trend_side
 from intraday.replay_v2.metrics import fingerprint
 from intraday.replay_v2.portfolio_book import STOP, PortfolioBook, PortfolioConfig
 from intraday.replay_v2.study import months_before
@@ -19,8 +20,12 @@ DAY_MS = 86400000
 
 def daily_points(rows):
     """Validate native daily OHLC, then seed EMA50 with its first 50 closes."""
-    points, previous, ema, prior_ema = [], None, None, None
-    closes = []
+    return [(available, side == 1) for available, side in daily_trend(rows)]
+
+
+def daily_trend(rows):
+    """Validate native daily OHLC once; return (available_at, EMA50 side) per day."""
+    times, closes, previous = [], [], None
     for row in rows:
         if len(row) < 7:
             raise ValueError("invalid native 1d row")
@@ -37,16 +42,10 @@ def daily_points(rows):
         if not low <= min(op, close) <= max(op, close) <= high:
             raise ValueError("invalid native 1d OHLC")
         closes.append(close)
-        if len(closes) == 50:
-            ema = sum(closes) / 50
-        elif ema is not None:
-            prior_ema = ema
-            ema += Decimal(2) / 51 * (close - ema)
-        available = datetime.fromtimestamp((opening + DAY_MS)/1000, timezone.utc)
-        allowed = ema is not None and prior_ema is not None and close > ema > prior_ema
-        points.append((available, allowed))
+        times.append(datetime.fromtimestamp((opening + DAY_MS)/1000, timezone.utc))
         previous = opening
-    return points
+    return [(available, trend_side(close, ema, prior))
+            for available, close, (ema, prior) in zip(times, closes, ema50_trend(closes))]
 
 
 def validate_inputs(config, candles, daily):

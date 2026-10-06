@@ -2,9 +2,9 @@
 
 from bisect import bisect_right
 from datetime import timedelta
-from decimal import Decimal
 from typing import ClassVar, Literal
 
+from intraday.replay_v2.indicators import ema50_trend, trend_side
 from intraday.replay_v2.trailing_candle import TrailingCandle, WIDTHS as TRAILING_WIDTHS
 
 
@@ -18,18 +18,9 @@ class IntradayCandle(TrailingCandle):
 
 def trend_series(bars):
     """EMA50 seeded by 50 closes; direction requires a known prior EMA."""
-    ema, prior, closes, sides = None, None, [], []
-    for bar in bars:
-        close = bar.close
-        closes.append(close)
-        if len(closes) == 50:
-            ema = sum(closes)/50
-        elif ema is not None:
-            prior = ema
-            ema += Decimal(2)/51*(close-ema)
-        sides.append(1 if prior is not None and close > ema > prior else
-                     -1 if prior is not None and close < ema < prior else 0)
-    return [bar.available_at for bar in bars], sides
+    trend = ema50_trend([bar.close for bar in bars])
+    return ([bar.available_at for bar in bars],
+            [trend_side(bar.close, ema, prior) for bar, (ema, prior) in zip(bars, trend)])
 
 
 def consensus_at(series, at):
