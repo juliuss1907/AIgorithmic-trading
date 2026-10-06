@@ -46,3 +46,19 @@ def test_retained_rows_include_all_binance_evidence_columns():
     changed = SimpleNamespace(raw_rows=((ms,'100','101','99','100','10',ms+899999,'9999',42),))
     with pytest.raises(ValueError,match='parent rows'):
         verify_retained(changed,parent,START,START+timedelta(minutes=15))
+
+
+def test_prefix_must_match_parent_price_kind():
+    from intraday.replay_v2.donchian_filter_data import SOURCES, extend, snapshot
+    def snap(market, start, end):
+        ms, last = int(start.timestamp()*1000), int(end.timestamp()*1000)
+        rows = [[t,'100','101','99','100','10',t+899999] for t in range(ms, last, 900000)]
+        return snapshot(market=market, symbol='BTCUSDT', interval='15m', source=SOURCES[market],
+            coverage_start=start.isoformat().replace('+00:00','Z'), coverage_end=end.isoformat().replace('+00:00','Z'),
+            fetched_at=(end+timedelta(days=1)).isoformat().replace('+00:00','Z'), pages=1, raw_rows=rows)
+    mid, end = START+timedelta(minutes=30), START+timedelta(hours=1)
+    parent = snap('mark', mid, end)
+    with pytest.raises(ValueError, match='prefix identity'):
+        extend(parent, START, end, lambda s,i,a,z: snap('perp', a, z))
+    joined = extend(parent, START, end, lambda s,i,a,z: snap('mark', a, z))
+    assert joined.market == 'mark' and len(joined.candles()) == 4

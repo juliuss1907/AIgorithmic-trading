@@ -109,6 +109,8 @@ def extend(parent, start, end, fetcher):
     if not parent.coverage_start < end <= parent.coverage_end:
         raise ValueError('frozen parent does not cover active research window')
     prefix = fetcher(parent.symbol, parent.interval, start, parent.coverage_start) if start < parent.coverage_start else None
+    if prefix and (prefix.market, prefix.symbol, prefix.interval) != (parent.market, parent.symbol, parent.interval):
+        raise ValueError('supplemental prefix identity mismatch')
     first, last = int(start.timestamp()*1000), int(end.timestamp()*1000)
     suffix = tuple(row for row in parent.raw_rows if first <= row[0] < last)
     payload = parent.model_dump(mode='json', exclude={'snapshot_id'})
@@ -182,8 +184,9 @@ def collect(frozen_root, sol_inputs, output_root, *, resume=False, reuse_root=No
             elif tag.startswith('spot'):
                 snap = extend(parent, first, end, spot_fetcher) if parent else spot_fetcher(symbol, interval, first, end)
             else:
+                kind = 'mark' if tag == 'mark15m' else 'trade'
                 snap = extend(parent, first, end,
-                    lambda s,i,a,z:from_futures(perp_fetcher(s,i,a,z, price_kind='trade')))
+                    lambda s,i,a,z:from_futures(perp_fetcher(s,i,a,z, price_kind=kind)))
             expected_market = 'spot' if tag.startswith('spot') else 'mark' if tag == 'mark15m' else 'perp'
             if (snap.symbol, snap.market, snap.interval, snap.coverage_start, snap.coverage_end) != (
                     symbol, expected_market, interval, first, end):
