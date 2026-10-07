@@ -2,8 +2,10 @@
 
 ## Status
 
-Accepted 2026-10-06, before any post-freeze data was replayed. Research only:
-no orders, no runtime rule, no gate or activation change.
+Superseded 2026-10-07 by [ADR-003](003-setup2-prospective-paper.md): the operator switched the
+basket to NEAR/SOL/ZEC. Weekly runs stop; the one run (2026-10-02 → 2026-10-06, 0 trades,
+`insufficient_sample`) remains as evidence. Originally accepted 2026-10-06, before any
+post-freeze data was replayed. Research only: no orders, no runtime rule, no gate or activation change.
 
 ## Context
 

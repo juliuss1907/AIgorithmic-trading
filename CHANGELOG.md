@@ -4,6 +4,34 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-07 — Gộp nghiên cứu ADX vào engine và đổi paper-test sang Setup-2
+
+Nhánh: `integrate/donchian-research` (dựa trên `feature/a4-prospective-paper`). Julius đổi rổ coin của paper-test sang **NEAR/SOL/ZEC** với ADX20, tỷ trọng NEAR 30 / SOL 40 / ZEC 30. Đây chính là Setup-2 của nghiên cứu ADX.
+
+### Gộp chuỗi nhánh nghiên cứu (`3ecd3c9`)
+
+- Merge `feature/donchian-adx-setups` vào nhánh tích hợp. Nhánh này đã chứa sẵn `donchian-oos-2022-2024`, `donchian-adx-2022-2026` và `donchian-adx-five`.
+- Chỉ có 1 xung đột: cách đặt tên phí. Mình thống nhất về `spot_fee`/`spot_slip` vì nhánh cũng dùng chúng cho cost stress; `EquityBook` lấy phí từ config.
+- Bỏ qua 2 file đang sửa dở, chưa commit trong worktree `system-trading/donchian-adx`.
+- Kiểm chứng:
+  - 1370 test pass.
+  - 20 case Donchian filter 703 ngày trùng từng byte với lần chạy ngày 06/10.
+  - Setup-1…5 trùng toàn bộ summary và journal với kết quả gốc; chỉ `result_id` đổi theo evaluator v1.1.
+
+### Paper-test Setup-2 (ADR-003)
+
+- [ADR-003](docs/decisions/003-setup2-prospective-paper.md) thay thế ADR-002.
+  - Hash rule `a9c7140a…`, mốc đóng băng **2026-10-08 00:00 UTC**.
+  - Tiêu chí giữ như cũ: ≥ 120 ngày và ≥ 60 lệnh; PF ≥ 1,2; DD ≤ 12%; lãi ròng > 0 ở cả chi phí chuẩn lẫn chi phí gấp đôi.
+  - Dự kiến đủ mẫu vào khoảng tháng 6/2027.
+- Lịch sử Setup-2, 2022–2026 (dữ liệu đã nhìn trước): +66,40%, DD 10,85%, 419 lệnh, winrate 42,2%, PF 1,40.
+- `donchian_prospective.py`:
+  - Chạy Setup-2.
+  - Chi phí gấp đôi được replay thật bằng `cost_multiplier=2`, không còn là ước tính.
+  - `collect` tự tải cả warmup; nếu dữ liệu bị thiếu thì báo lỗi.
+  - Cửa sổ không bắt đầu đúng mốc đóng băng chỉ được tính là kiểm tra quy trình (`not_prospective`).
+- Đã chạy thử trên dữ liệu thật trước mốc (04/10 → 07/10): tải đủ warmup NEAR/SOL/ZEC, không thiếu nến, mất 9 giây.
+
 ## 2026-10-06 — Paper-test prospective cho A4-Donchian30-10
 
 Nhánh: `feature/a4-prospective-paper`. Chọn A4-Donchian30-10 làm ứng viên, vì đây là họ setup duy nhất có cả bằng chứng trong mẫu (703 ngày: +15,9%, DD 8,5%) lẫn ngoài mẫu (2022–24: +34,9%, DD 10,5%; chi phí gấp đôi vẫn +24,9%). Kết luận OOS là Inconclusive, nên **không bật** mà chỉ paper-test trên dữ liệu mới.

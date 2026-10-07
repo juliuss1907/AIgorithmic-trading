@@ -177,21 +177,24 @@ All 20 case summaries are identical to the 2026-10-04 results. This book already
 anchored midnight marks, and the shared resume rule did not change any resumption
 on this dataset. Full `uv run pytest -q`: **1,245 passed**.
 
-## Prospective paper test — A4-Donchian30-10
+## Prospective paper test — Setup-2 (NEAR/SOL/ZEC)
 
-[ADR-002](decisions/002-a4-donchian-prospective-paper.md) freezes A4-Donchian30-10 at
-2026-10-02 00:00 UTC with pre-registered criteria. Weekly, by hand, into new directories:
+[ADR-003](decisions/003-setup2-prospective-paper.md) freezes Setup-2 (NEAR 30 / SOL 40 / ZEC 30,
+60/40 Spot/Short1x, A4 filters with ADX20) at 2026-10-08 00:00 UTC with pre-registered criteria.
+It supersedes [ADR-002](decisions/002-a4-donchian-prospective-paper.md) (BTC/ETH/SOL A4, one run,
+0 trades). Weekly, by hand, into new directories:
 
 ```bash
 uv run python -m intraday.replay_v2.donchian_prospective collect \
-  --base-inputs /path/to/donchian-filters-20261004-inputs-complete/inputs.json \
-  --output-root /path/to/donchian-prospective-YYYYMMDD-inputs
+  --output-root /path/to/setup2-prospective-YYYYMMDD-inputs
 uv run python -m intraday.replay_v2.donchian_prospective evaluate \
-  --inputs /path/to/donchian-prospective-YYYYMMDD-inputs/inputs.json \
-  --report-root /path/to/donchian-prospective-YYYYMMDD
+  --inputs /path/to/setup2-prospective-YYYYMMDD-inputs/inputs.json \
+  --report-root /path/to/setup2-prospective-YYYYMMDD
 ```
 
-`collect` fetches only public data after the freeze up to the latest published H4 boundary
-(`--end` overrides it). `evaluate` replays from the freeze, verifies a deterministic rerun and
-writes `evaluation.json` with the verdict (`insufficient_sample`, `pass` or `fail`). A verdict
-never activates trading. First run, 2026-10-06 (4.5 days): 0 trades, `insufficient_sample`.
+`collect` fetches warmup and post-freeze public data up to the latest published H4 boundary
+(`--end` overrides it); a data gap fails it. `evaluate` replays from the freeze plus a full
+doubled-cost replay, verifies a deterministic rerun and writes `evaluation.json` with the verdict
+(`insufficient_sample`, `pass` or `fail`). A verdict never activates trading. The first run is
+possible after 2026-10-08 04:05 UTC. A pre-freeze pipeline check on real data (2026-10-04 →
+2026-10-07) collected all warmup without gaps in 9 seconds.
