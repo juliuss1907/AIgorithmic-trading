@@ -4,11 +4,14 @@ Collection and replay are separate. Every run replays the same frozen rule from 
 the latest published H4 boundary, so each week adds never-before-seen data to one window.
 """
 
+import json
+import os
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
+from intraday.config import APP_DIRECTORY
 from intraday.replay_v2.artifacts import SERIES, _write, publish_report, read_report
 from intraday.replay_v2.donchian_adx_setups import ADXSetupConfig, market_weights, specification
 from intraday.replay_v2.donchian_filter_data import WARMUP, decode_bundle, fetch_spot_snapshot, from_futures
@@ -162,6 +165,33 @@ def run(inputs_path, report_root, *, progress=print):
     return result
 
 
+def default_reports_root():
+    state = os.getenv('XDG_STATE_HOME')
+    return (Path(state).expanduser() if state else Path.home()/'.local'/'state')/APP_DIRECTORY/'reports'
+
+
+def scheduled(reports_root=None, *, now=None, progress=print, **fetchers):
+    """Timer entry point: one run per published H4 end; a repeat for the same end is a no-op."""
+    try:
+        end = latest_end(now)
+    except ValueError as exc:
+        progress(f'skip: {exc}')
+        return None
+    root = Path(reports_root or default_reports_root()).expanduser().resolve()
+    name = 'setup2-prospective-'+end.strftime('%Y%m%dT%H%MZ')
+    inputs, report = root/(name+'-inputs'), root/name
+    if (report/'evaluation.json').exists():
+        progress(f'skip: {report} already evaluated')
+        return json.loads((report/'evaluation.json').read_text())
+    if report.exists():
+        raise ValueError(f'incomplete report directory {report}; inspect it before rerunning')
+    if not (inputs/'inputs.json').exists():
+        if inputs.exists():
+            raise ValueError(f'incomplete input directory {inputs}; inspect it before rerunning')
+        collect(inputs, end, now=now, progress=progress, **fetchers)
+    return run(inputs/'inputs.json', report, progress=progress)
+
+
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(description='Prospective paper test of frozen Setup-2; no orders')
@@ -172,11 +202,15 @@ def main(argv=None):
     r = sub.add_parser('evaluate', help='Replay offline and score against pre-registered criteria')
     r.add_argument('--inputs', required=True)
     r.add_argument('--report-root', required=True)
+    t = sub.add_parser('scheduled', help='Collect and evaluate up to the latest published H4 end, once per end')
+    t.add_argument('--reports-root', help='Default: $XDG_STATE_HOME/aigorithmic-trading/reports')
     args = parser.parse_args(argv)
     if args.command == 'collect':
         collect(args.output_root, datetime.fromisoformat(args.end) if args.end else None)
-    else:
+    elif args.command == 'evaluate':
         run(args.inputs, args.report_root)
+    else:
+        scheduled(args.reports_root)
 
 
 if __name__ == '__main__':

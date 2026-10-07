@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Setup-2 prospective paper test every Monday at 12:00 Vietnam time
+
+[Timer]
+OnCalendar=Mon *-*-* 12:00:00 Asia/Ho_Chi_Minh
+Persistent=true
+AccuracySec=1min
+Unit=setup2-prospective.service
+
+[Install]
+WantedBy=timers.target

@@ -1,4 +1,4 @@
-.PHONY: test web research-worker paper-worker install-paper-timer paper-timer-status paper-alert-test uninstall-paper-timer
+.PHONY: test web research-worker paper-worker install-paper-timer paper-timer-status paper-alert-test uninstall-paper-timer install-prospective-timer prospective-timer-status uninstall-prospective-timer
 
 PORT ?= 8000
 
@@ -25,3 +25,12 @@ paper-alert-test:
 
 uninstall-paper-timer:
 	./scripts/paper-timer.sh uninstall
+
+install-prospective-timer:
+	./scripts/prospective-timer.sh install
+
+prospective-timer-status:
+	./scripts/prospective-timer.sh status
+
+uninstall-prospective-timer:
+	./scripts/prospective-timer.sh uninstall

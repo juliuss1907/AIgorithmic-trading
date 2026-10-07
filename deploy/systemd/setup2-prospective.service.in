@@ -1,0 +1,16 @@
+[Unit]
+Description=Setup-2 prospective paper test (ADR-003), public data only, no orders
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=6h
+StartLimitBurst=4
+
+[Service]
+Type=oneshot
+WorkingDirectory=@PROJECT_ROOT@
+ExecStart=@UV_PATH@ run --frozen python -m intraday.replay_v2.donchian_prospective scheduled
+Restart=on-failure
+RestartSec=30min
+TimeoutStartSec=30min
+NoNewPrivileges=true
+PrivateTmp=true

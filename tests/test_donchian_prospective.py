@@ -98,3 +98,20 @@ def test_evaluate_applies_pre_registered_criteria(days, trades, dd, stress_net, 
     result = dp.evaluate(report(days, trades, dd), stress)
     assert result['verdict'] == verdict
     assert {k for k, ok in result['checks'].items() if not ok} == failed
+
+
+def test_scheduled_runs_once_per_published_h4_end(tmp_path):
+    now = FREEZE+timedelta(hours=8, minutes=6)
+    quiet = lambda m: None
+    assert dp.scheduled(tmp_path, now=FREEZE+timedelta(hours=4), progress=quiet, **fetchers()) is None
+    first = dp.scheduled(tmp_path, now=now, progress=quiet, **fetchers())
+    assert first['verdict'] == 'insufficient_sample' and first['window_end'] == (FREEZE+timedelta(hours=8)).isoformat()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['setup2-prospective-20261008T0800Z',
+                                                         'setup2-prospective-20261008T0800Z-inputs']
+    assert dp.scheduled(tmp_path, now=now, progress=quiet, **fetchers()) == first
+
+
+def test_scheduled_refuses_an_incomplete_report_directory(tmp_path):
+    (tmp_path/'setup2-prospective-20261008T0400Z').mkdir()
+    with pytest.raises(ValueError, match='incomplete report'):
+        dp.scheduled(tmp_path, now=FREEZE+timedelta(hours=4, minutes=6), progress=lambda m: None, **fetchers())

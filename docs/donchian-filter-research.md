@@ -198,3 +198,22 @@ doubled-cost replay, verifies a deterministic rerun and writes `evaluation.json`
 (`insufficient_sample`, `pass` or `fail`). A verdict never activates trading. The first run is
 possible after 2026-10-08 04:05 UTC. A pre-freeze pipeline check on real data (2026-10-04 →
 2026-10-07) collected all warmup without gaps in 9 seconds.
+
+### Weekly timer
+
+`scheduled` does both steps up to the latest published H4 end, into
+`$XDG_STATE_HOME/aigorithmic-trading/reports/setup2-prospective-<YYYYMMDDTHHMMZ>{-inputs,}`.
+It skips an end that is already evaluated, skips before the first post-freeze H4 bar, and stops
+on a half-written directory instead of deleting it. A user systemd timer runs it every Monday at
+12:00 Vietnam time; `Persistent=true` runs a missed week when the machine is next on. Every run
+replays the whole window from the freeze, so a late or missed run loses no data.
+
+```bash
+make install-prospective-timer      # run from the checkout the timer should use
+make prospective-timer-status       # timer, next run, last 20 log lines
+make uninstall-prospective-timer
+```
+
+The unit pins `WorkingDirectory` to the installing checkout, so install it from a worktree that
+stays on this code (the module is not on `main` yet). Claude cloud sessions cannot run it:
+Binance answers HTTP 451 (restricted location) to every endpoint from there.
