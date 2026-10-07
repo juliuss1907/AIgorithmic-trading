@@ -8,6 +8,8 @@ StartLimitBurst=4
 [Service]
 Type=oneshot
 WorkingDirectory=@PROJECT_ROOT@
+# Same Telegram bot as the BTC paper timer; alerts are skipped when the file is absent.
+EnvironmentFile=-%h/.config/system-trading/paper-alerts.env
 ExecStart=@UV_PATH@ run --frozen python -m intraday.replay_v2.donchian_prospective scheduled
 Restart=on-failure
 RestartSec=30min

@@ -15,7 +15,12 @@ Nhánh: `integrate/donchian-research`. Julius hay tắt máy nên muốn chạy 
   - Bỏ qua nếu mốc đó đã chấm, hoặc nếu chưa có nến H4 nào sau mốc đóng băng.
   - Gặp thư mục dở dang thì dừng, không xoá.
 - **Timer systemd user:** thứ Hai lúc 12:00 giờ Việt Nam, `Persistent=true`. Cài bằng `make install-prospective-timer`; file nằm trong `deploy/systemd/setup2-prospective.*` và `scripts/prospective-timer.sh`.
-- **Không đổi gì ở rule, hash rule, tiêu chí hay runtime.** Thêm 2 test cho `scheduled`.
+- **Báo qua Telegram:** dùng chung bot của timer paper BTC (`paper-alerts.env`).
+  - Mỗi lần chấm mới gửi 1 tin: verdict, số ngày, số lệnh, winrate, PnL (kèm PnL khi chi phí gấp đôi), DD, PF.
+  - Chạy lỗi thì gửi lỗi; lần chạy bị bỏ qua thì không gửi gì.
+  - Gửi tin thất bại không làm hỏng lần chạy.
+- **Gộp vào `main`:** fast-forward `main` lên `integrate/donchian-research`, không có xung đột.
+- **Không đổi gì ở rule, hash rule, tiêu chí hay runtime.** Thêm 5 test cho `scheduled` và phần báo tin.
 
 ## 2026-10-07 — Gộp nghiên cứu ADX vào engine và đổi paper-test sang Setup-2
 

@@ -208,6 +208,10 @@ on a half-written directory instead of deleting it. A user systemd timer runs it
 12:00 Vietnam time; `Persistent=true` runs a missed week when the machine is next on. Every run
 replays the whole window from the freeze, so a late or missed run loses no data.
 
+The unit reads the BTC paper timer's Telegram file (`~/.config/system-trading/paper-alerts.env`).
+Each fresh evaluation sends one message with verdict, days, trades, return, drawdown and profit
+factor; a failed run sends the error. Skipped runs send nothing, and a failed alert never fails the run.
+
 ```bash
 make install-prospective-timer      # run from the checkout the timer should use
 make prospective-timer-status       # timer, next run, last 20 log lines

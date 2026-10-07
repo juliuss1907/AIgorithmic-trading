@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 from intraday.config import APP_DIRECTORY
+from intraday.notifications import TelegramNotifier
 from intraday.replay_v2.artifacts import SERIES, _write, publish_report, read_report
 from intraday.replay_v2.donchian_adx_setups import ADXSetupConfig, market_weights, specification
 from intraday.replay_v2.donchian_filter_data import WARMUP, decode_bundle, fetch_spot_snapshot, from_futures
@@ -170,8 +171,43 @@ def default_reports_root():
     return (Path(state).expanduser() if state else Path.home()/'.local'/'state')/APP_DIRECTORY/'reports'
 
 
-def scheduled(reports_root=None, *, now=None, progress=print, **fetchers):
+def notifier_from_env(environ=None):
+    """Same bot as the BTC paper timer (its EnvironmentFile); None when unset."""
+    env = os.environ if environ is None else environ
+    token, chat = env.get('TELEGRAM_BOT_TOKEN'), env.get('TELEGRAM_CHAT_ID')
+    return TelegramNotifier(token=token, chat_id=chat) if token and chat else None
+
+
+def message(result):
+    f = lambda v, spec: format(v, spec) if v is not None else 'n/a'
+    return (f"Setup-2 paper: {result['verdict']}\n"
+            f"{f(result['days'], '.1f')} ngày, {result['closed_trades']} lệnh, winrate {f(result['winrate_pct'], '.1f')}%\n"
+            f"PnL {f(result['net_return_pct'], '+.2f')}% (chi phí x2: {f(result['net_pnl_double_cost'], '+.2f')} USDT), "
+            f"DD {f(result['max_drawdown_pct'], '.2f')}%, PF {f(result['profit_factor'], '.2f')}")
+
+
+def notify(notifier, text, progress):
+    if notifier is None:
+        return
+    try:
+        notifier.send(text)
+    except Exception as exc:  # Fail open: an alert never fails the evaluation.
+        progress(f'telegram delivery failed: {type(exc).__name__}')
+
+
+def scheduled(reports_root=None, *, now=None, progress=print, notifier=None, **fetchers):
     """Timer entry point: one run per published H4 end; a repeat for the same end is a no-op."""
+    try:
+        result = _scheduled(reports_root, now=now, progress=progress, **fetchers)
+    except Exception as exc:
+        notify(notifier, f'Setup-2 paper: lỗi {type(exc).__name__}: {str(exc)[:300]}', progress)
+        raise
+    if result is not None and not result.pop('_skipped', False):
+        notify(notifier, message(result), progress)
+    return result
+
+
+def _scheduled(reports_root, *, now, progress, **fetchers):
     try:
         end = latest_end(now)
     except ValueError as exc:
@@ -182,7 +218,7 @@ def scheduled(reports_root=None, *, now=None, progress=print, **fetchers):
     inputs, report = root/(name+'-inputs'), root/name
     if (report/'evaluation.json').exists():
         progress(f'skip: {report} already evaluated')
-        return json.loads((report/'evaluation.json').read_text())
+        return dict(json.loads((report/'evaluation.json').read_text()), _skipped=True)
     if report.exists():
         raise ValueError(f'incomplete report directory {report}; inspect it before rerunning')
     if not (inputs/'inputs.json').exists():
@@ -210,7 +246,7 @@ def main(argv=None):
     elif args.command == 'evaluate':
         run(args.inputs, args.report_root)
     else:
-        scheduled(args.reports_root)
+        scheduled(args.reports_root, notifier=notifier_from_env())
 
 
 if __name__ == '__main__':

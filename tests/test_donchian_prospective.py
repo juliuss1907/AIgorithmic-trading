@@ -100,18 +100,45 @@ def test_evaluate_applies_pre_registered_criteria(days, trades, dd, stress_net, 
     assert {k for k, ok in result['checks'].items() if not ok} == failed
 
 
+class Bot:
+    def __init__(self, fail=False):
+        self.sent, self.fail = [], fail
+
+    def send(self, text):
+        if self.fail:
+            raise RuntimeError('down')
+        self.sent.append(text)
+
+
 def test_scheduled_runs_once_per_published_h4_end(tmp_path):
     now = FREEZE+timedelta(hours=8, minutes=6)
-    quiet = lambda m: None
-    assert dp.scheduled(tmp_path, now=FREEZE+timedelta(hours=4), progress=quiet, **fetchers()) is None
-    first = dp.scheduled(tmp_path, now=now, progress=quiet, **fetchers())
+    quiet, bot = (lambda m: None), Bot()
+    assert dp.scheduled(tmp_path, now=FREEZE+timedelta(hours=4), progress=quiet, notifier=bot, **fetchers()) is None
+    first = dp.scheduled(tmp_path, now=now, progress=quiet, notifier=bot, **fetchers())
     assert first['verdict'] == 'insufficient_sample' and first['window_end'] == (FREEZE+timedelta(hours=8)).isoformat()
     assert sorted(p.name for p in tmp_path.iterdir()) == ['setup2-prospective-20261008T0800Z',
                                                          'setup2-prospective-20261008T0800Z-inputs']
-    assert dp.scheduled(tmp_path, now=now, progress=quiet, **fetchers()) == first
+    assert dp.scheduled(tmp_path, now=now, progress=quiet, notifier=bot, **fetchers()) == first
+    assert len(bot.sent) == 1 and bot.sent[0].startswith('Setup-2 paper: insufficient_sample')
 
 
-def test_scheduled_refuses_an_incomplete_report_directory(tmp_path):
+def test_scheduled_refuses_an_incomplete_report_directory_and_alerts(tmp_path):
     (tmp_path/'setup2-prospective-20261008T0400Z').mkdir()
+    bot = Bot()
     with pytest.raises(ValueError, match='incomplete report'):
-        dp.scheduled(tmp_path, now=FREEZE+timedelta(hours=4, minutes=6), progress=lambda m: None, **fetchers())
+        dp.scheduled(tmp_path, now=FREEZE+timedelta(hours=4, minutes=6), progress=lambda m: None,
+                     notifier=bot, **fetchers())
+    assert len(bot.sent) == 1 and 'incomplete report' in bot.sent[0]
+
+
+def test_a_failed_alert_never_fails_the_run(tmp_path):
+    seen = []
+    result = dp.scheduled(tmp_path, now=FREEZE+timedelta(hours=4, minutes=6), progress=seen.append,
+                          notifier=Bot(fail=True), **fetchers())
+    assert result['verdict'] == 'insufficient_sample'
+    assert 'telegram delivery failed: RuntimeError' in seen
+
+
+def test_notifier_needs_both_telegram_variables():
+    assert dp.notifier_from_env({'TELEGRAM_BOT_TOKEN': 'x'}) is None
+    assert dp.notifier_from_env({'TELEGRAM_BOT_TOKEN': '1:a', 'TELEGRAM_CHAT_ID': '2'}) is not None
