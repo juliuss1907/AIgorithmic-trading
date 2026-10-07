@@ -1,7 +1,7 @@
 """Opt-in 60/40 realized-only cash books and symmetric H4 ATR trailing."""
 
 from decimal import Decimal
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import Field, model_validator
 
@@ -15,6 +15,7 @@ WEIGHTS = {'BTCUSDT':Decimal('.4'), 'ETHUSDT':Decimal('.3'), 'SOLUSDT':Decimal('
 
 
 class FilterConfig(HistoricalConfig):
+    study_weights: ClassVar[dict[str, Decimal]] = WEIGHTS
     entry_window: Literal[20, 30] = 20
     exit_window: Literal[8, 10] = 8
     filter_level: Literal[0, 1, 2, 3, 4] = 0
@@ -34,7 +35,7 @@ class FilterConfig(HistoricalConfig):
     @model_validator(mode='after')
     def fixed_study(self):
         if (self.capital != 1000 or self.entry_cap != Decimal('.6') or self.perp_cap != Decimal('.4') or
-                self.daily_loss != Decimal('.03') or self.weights != WEIGHTS or self.perp_weights != WEIGHTS or
+                self.daily_loss != Decimal('.03') or self.weights != self.study_weights or self.perp_weights != self.study_weights or
                 self.perp_daily_policy != 'disabled' or self.perp_trade_exit != 'baseline'):
             raise ValueError('filter study requires 60/40, BTC/ETH/SOL40/30/30 and parent-only daily3%')
         return self
@@ -58,6 +59,9 @@ class ATRTrail:
 class FilterBook(HistoricalBook):
     def __init__(self, config):
         super().__init__(config)
+        multiplier = getattr(config, 'cost_multiplier', 1)
+        self.spot_fee, self.spot_slip = FEE*multiplier, SLIP*multiplier
+        self.perp_fee, self.perp_slip = PERP_FEE*multiplier, PERP_SLIP*multiplier
         self.trails = {}
 
     def observe(self, at, marks, *, stage='risk'):
@@ -79,14 +83,14 @@ class FilterBook(HistoricalBook):
         used = self.budget_exposures(marks)[0]
         requests = sum((budget*self.weights[s]*m for s,m in multipliers.items()
                         if not self.positions[s].quantity), ZERO)
-        scale = min(ONE, max(ZERO, budget-used)/(ONE+FEE+SLIP)/requests) if requests else ZERO
+        scale = min(ONE, max(ZERO, budget-used)/(ONE+self.spot_fee+self.spot_slip)/requests) if requests else ZERO
         super().enter_batch(at, marks, {s:m*scale for s,m in multipliers.items()})
 
     def perp_target(self, symbol, marks):
         budget = self.perp_budget(marks)
         requested = budget*self.config.perp_weights[symbol]
-        target = max(ZERO, min(requested, (budget-self.locked_margin)/(ONE+PERP_FEE+PERP_SLIP),
-                               self.free_cash/(ONE+PERP_FEE+PERP_SLIP)))
+        target = max(ZERO, min(requested, (budget-self.locked_margin)/(ONE+self.perp_fee+self.perp_slip),
+                               self.free_cash/(ONE+self.perp_fee+self.perp_slip)))
         return self.allocation_base(marks), requested, target
 
     def enter_perp(self, symbol, at, marks, price, side, stop_distance, *, approved_target=None):

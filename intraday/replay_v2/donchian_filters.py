@@ -112,7 +112,7 @@ def volume_profile(rows, bins=50):
                 vah=float(edges[last+1]), volumes=hist.tolist(), covered_volume=float(covered))
 
 
-def entry_filters(f, side, level):
+def entry_filters(f, side, level, *, adx_threshold=25):
     """All applicable blockers, not merely the first one, for ablation reports."""
     failed = []
     if level >= 1:
@@ -121,8 +121,8 @@ def entry_filters(f, side, level):
         if f['ema50'] is None or f['prior_ema50'] is None or (
                 side*(f['close']-f['ema50']) <= 0 or side*(f['ema50']-f['prior_ema50']) <= 0):
             failed.append('ema50')
-    if level >= 2:
-        if f['adx'] is None or f['prior_adx'] is None or f['adx'] <= 25 or f['adx'] <= f['prior_adx']:
+    if level >= 2 and adx_threshold is not None:
+        if f['adx'] is None or f['prior_adx'] is None or f['adx'] <= adx_threshold or f['adx'] <= f['prior_adx']:
             failed.append('adx')
         if f['plus_di'] is None or f['minus_di'] is None or side*(f['plus_di']-f['minus_di']) <= 0:
             failed.append('dmi')

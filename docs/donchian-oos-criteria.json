@@ -1,0 +1,11 @@
+{
+  "version": "donchian-holdout-1",
+  "primary": "A4-Donchian30-10",
+  "stress": "A4-Donchian30-10-cost2",
+  "mandatory": {"net_min_exclusive": 0, "stress_net_min_exclusive": 0, "max_drawdown_pct": 15},
+  "hypotheses": {"cost_ratio_max": 0.6, "adx_drawdown_ratio_max": 0.75, "minimum_passes": 4},
+  "cases": ["A0-Donchian30-10", "A1-Donchian30-10", "A2-Donchian30-10", "A3-Donchian30-10", "A4-Donchian30-10", "A4-Donchian20-10", "A4-Donchian30-10-cost2"],
+  "research_only": true,
+  "activation_allowed": false,
+  "official_gate_eligible": false
+}

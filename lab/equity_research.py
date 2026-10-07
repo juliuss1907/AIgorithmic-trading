@@ -56,6 +56,7 @@ class EquityBook(PortfolioBook):
 
     def __init__(self, config):
         super().__init__(config)
+        self.spot_fee, self.spot_slip = config.commission, config.slippage  # Equity costs come from config.
         self.stops = {}
         self.halt_session = None
 
@@ -87,14 +88,6 @@ class EquityBook(PortfolioBook):
                        signal_available_at=available.isoformat())
         if self.cash < 0:
             raise ValueError('equity cash conservation failed')
-
-    @property
-    def fee_rate(self):
-        return self.config.commission
-
-    @property
-    def slip_rate(self):
-        return self.config.slippage
 
     def close(self, symbol, at, price, reason):
         if not self.positions[symbol].quantity:

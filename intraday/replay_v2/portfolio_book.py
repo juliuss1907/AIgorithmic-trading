@@ -60,10 +60,9 @@ class Position:
 
 
 class PortfolioBook:
-    fee_rate, slip_rate = FEE, SLIP  # Per-fill Spot costs; subclasses may read them from config.
-
     def __init__(self, config):
         self.config = config
+        self.spot_fee, self.spot_slip = FEE, SLIP
         self.cash = self.peak = self.day_start = self.last_equity = config.capital
         self.day = config.start.date()
         self.weights = dict(config.weights)
@@ -126,7 +125,7 @@ class PortfolioBook:
         total = sum(requests.values(), ZERO)
         if not total:
             return
-        available = max(ZERO, min(base * self.config.entry_cap - exposure, self.cash / (ONE + self.fee_rate + self.slip_rate)))
+        available = max(ZERO, min(base * self.config.entry_cap - exposure, self.cash / (ONE + self.spot_fee + self.spot_slip)))
         scale = min(ONE, available / total)
         for symbol, requested in requests.items():
             notional = requested * scale
@@ -138,7 +137,7 @@ class PortfolioBook:
             if quantity * price > notional:
                 quantity = quantity.next_minus()
             notional = quantity * price
-            fee, slip = notional * self.fee_rate, notional * self.slip_rate
+            fee, slip = notional * self.spot_fee, notional * self.spot_slip
             self.cash -= notional + fee + slip
             self.fees += fee
             self.slippage += slip
@@ -155,7 +154,7 @@ class PortfolioBook:
         if not position.quantity:
             return
         notional = position.quantity * price
-        fee, slip = notional * self.fee_rate, notional * self.slip_rate
+        fee, slip = notional * self.spot_fee, notional * self.spot_slip
         gross = position.quantity * (price - position.entry_price)
         self.cash += notional - fee - slip
         self.fees += fee
