@@ -32,6 +32,8 @@ rule; NEAR appears in the top five, and NEAR/SOL/ZEC at equal thirds ranks fifth
   least 14 days and a passing gate v2 for each enabled market, then an audited operator switch.
   Readiness labels it `no_backtest_evidence` until a backtest exists. Missing history blocks it
   with `history_not_ready`.
+- **Initial basket (chosen 2026-10-09):** ETH, NEAR, SOL at equal thirds in both markets, both
+  modes. Prospective paper test: [ADR-005](005-eth-near-sol-prospective-paper.md).
 - **Sequence:** research first (done for the five frozen coins), runtime after.
 
 ## Alternatives considered
@@ -43,8 +45,7 @@ rule; NEAR appears in the top five, and NEAR/SOL/ZEC at equal thirds ranks fifth
 
 ## Consequences
 
-The initial basket must be chosen (keep NEAR/SOL/ZEC, or another; a different basket needs its
-own freeze if a prospective test is wanted). ADR-003 says a runtime port follows a prospective
-`pass`; building the runtime before that is an explicit operator choice to record when the
+The prospective test (ADR-005) is the evidence a runtime port should follow; building the
+runtime before its `pass` is an explicit operator choice to record when the
 implementation plan is approved. The Perp short side needs new runtime work (H4 Perp candles,
 deterministic Perp parameters, a gate path not built on recorded Jev decisions).

@@ -1,4 +1,4 @@
-"""Prospective paper test of frozen Setup-2 (ADR-003); public data only, no orders.
+"""Prospective paper test of the frozen ETH-NEAR-SOL basket (ADR-005); public data only, no orders.
 
 Collection and replay are separate. Every run replays the same frozen rule from the freeze to
 the latest published H4 boundary, so each week adds never-before-seen data to one window.
@@ -14,7 +14,8 @@ from typing import Literal
 from intraday.config import APP_DIRECTORY
 from intraday.notifications import TelegramNotifier
 from intraday.replay_v2.artifacts import SERIES, _write, publish_report, read_report
-from intraday.replay_v2.donchian_adx_setups import ADXSetupConfig, market_weights, specification
+from intraday.replay_v2.donchian_adx_setups import (BasketConfig, BasketStressConfig, basket_specification,
+                                                    market_weights)
 from intraday.replay_v2.donchian_filter_data import WARMUP, decode_bundle, fetch_spot_snapshot, from_futures
 from intraday.replay_v2.donchian_filter_engine import prepare, simulate
 from intraday.replay_v2.funding import fetch_funding_snapshot
@@ -24,19 +25,16 @@ from intraday.replay_v2.metrics import encoded, fingerprint, journal_hash
 from intraday.replay_v2.portfolio_study import file_hash
 
 
-FREEZE = datetime(2026, 10, 8, tzinfo=timezone.utc)
-CASE, SETUP = 'Setup-2', 2
-# fingerprint of every ADXSetupConfig field except start/end; docs/decisions/003 records it.
-RULE_HASH = 'a9c7140a83e185d6dc0ff05734df7089bf645d8a8f7d7ff1fe677bb9eac7df04'
-# Pre-registered 2026-10-07, before any post-freeze data was replayed.
+# ADR-005 replaces ADR-003 (Setup-2 NEAR/SOL/ZEC, frozen 2026-10-08, never run).
+FREEZE = datetime(2026, 10, 10, tzinfo=timezone.utc)
+CASE, BASKET = 'ETH-NEAR-SOL', ('ETH', 'NEAR', 'SOL')
+# fingerprint of every BasketConfig field except start/end; docs/decisions/005 records it.
+RULE_HASH = 'bf6fccc9dc3cc1148c45f42a9b43bff4a80221a9b68230f40a18c6675cd51c88'
+# Pre-registered 2026-10-09, before any post-freeze data was replayed.
+PREFIX = 'eth-near-sol-prospective-'
 CRITERIA = dict(min_days=120, min_trades=60, min_profit_factor=Decimal('1.2'), max_drawdown_pct=Decimal(12))
 TAGS = ('spot4h', 'spot15m', 'perp4h', 'perp15m', 'mark15m')
 H4 = timedelta(hours=4)
-
-
-class CostStressConfig(ADXSetupConfig):
-    """Same rule with every fill's fee and slippage doubled; funding unchanged."""
-    cost_multiplier: Literal[2] = 2
 
 
 def iso(at):
@@ -48,10 +46,10 @@ def rule_hash(cfg):
 
 
 def config(end, *, start=FREEZE, stress=False):
-    cls = CostStressConfig if stress else ADXSetupConfig
-    cfg = cls(start=start, end=end, setup=SETUP, **specification(SETUP))
+    cls = BasketStressConfig if stress else BasketConfig
+    cfg = cls(start=start, end=end, basket=BASKET, **basket_specification(BASKET))
     if not stress and rule_hash(cfg) != RULE_HASH:
-        raise ValueError('prospective rule differs from the frozen Setup-2 case')
+        raise ValueError('prospective rule differs from the frozen '+CASE+' case')
     return cfg
 
 
@@ -180,7 +178,7 @@ def notifier_from_env(environ=None):
 
 def message(result):
     f = lambda v, spec: format(v, spec) if v is not None else 'n/a'
-    return (f"Setup-2 paper: {result['verdict']}\n"
+    return (f"{CASE} paper: {result['verdict']}\n"
             f"{f(result['days'], '.1f')} ngày, {result['closed_trades']} lệnh, winrate {f(result['winrate_pct'], '.1f')}%\n"
             f"PnL {f(result['net_return_pct'], '+.2f')}% (chi phí x2: {f(result['net_pnl_double_cost'], '+.2f')} USDT), "
             f"DD {f(result['max_drawdown_pct'], '.2f')}%, PF {f(result['profit_factor'], '.2f')}")
@@ -200,7 +198,7 @@ def scheduled(reports_root=None, *, now=None, progress=print, notifier=None, **f
     try:
         result = _scheduled(reports_root, now=now, progress=progress, **fetchers)
     except Exception as exc:
-        notify(notifier, f'Setup-2 paper: lỗi {type(exc).__name__}: {str(exc)[:300]}', progress)
+        notify(notifier, f'{CASE} paper: lỗi {type(exc).__name__}: {str(exc)[:300]}', progress)
         raise
     if result is not None and not result.pop('_skipped', False):
         notify(notifier, message(result), progress)
@@ -214,7 +212,7 @@ def _scheduled(reports_root, *, now, progress, **fetchers):
         progress(f'skip: {exc}')
         return None
     root = Path(reports_root or default_reports_root()).expanduser().resolve()
-    name = 'setup2-prospective-'+end.strftime('%Y%m%dT%H%MZ')
+    name = PREFIX+end.strftime('%Y%m%dT%H%MZ')
     inputs, report = root/(name+'-inputs'), root/name
     if (report/'evaluation.json').exists():
         progress(f'skip: {report} already evaluated')
@@ -230,7 +228,7 @@ def _scheduled(reports_root, *, now, progress, **fetchers):
 
 def main(argv=None):
     import argparse
-    parser = argparse.ArgumentParser(description='Prospective paper test of frozen Setup-2; no orders')
+    parser = argparse.ArgumentParser(description=f'Prospective paper test of frozen {CASE}; no orders')
     sub = parser.add_subparsers(dest='command', required=True)
     c = sub.add_parser('collect', help='Fetch public warmup and post-freeze data into a new input directory')
     c.add_argument('--output-root', required=True)

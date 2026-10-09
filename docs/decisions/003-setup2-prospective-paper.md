@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted 2026-10-07, before the freeze and before any post-freeze data was replayed.
-Supersedes [ADR-002](002-a4-donchian-prospective-paper.md). Research only: no orders,
+Superseded 2026-10-09 by [ADR-005](005-eth-near-sol-prospective-paper.md): the operator chose
+ETH/NEAR/SOL for the three-coin system (ADR-004). No run took place. Originally accepted 2026-10-07,
+before the freeze and before any post-freeze data was replayed. Supersedes [ADR-002](002-a4-donchian-prospective-paper.md). Research only: no orders,
 no runtime rule, no gate or activation change.
 
 ## Context

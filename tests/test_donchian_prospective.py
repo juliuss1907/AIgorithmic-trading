@@ -5,7 +5,7 @@ from decimal import Decimal as D
 import pytest
 
 from intraday.replay_v2 import donchian_prospective as dp
-from intraday.replay_v2.donchian_adx_setups import ADXSetupConfig, specification
+from intraday.replay_v2.donchian_adx_setups import BasketConfig, basket_specification
 from intraday.replay_v2.donchian_filter_data import fetch_spot_snapshot
 from intraday.replay_v2.funding import fetch_funding_snapshot
 from intraday.replay_v2.historical_data import fetch_candle_snapshot
@@ -36,17 +36,21 @@ def fetchers():
         funding_fetcher=lambda s, a, z, now: fetch_funding_snapshot(s, a, z, fetch_json=funding, now=now))
 
 
-def test_rule_hash_pins_setup_2_near_sol_zec_adx20():
+def test_rule_hash_pins_the_eth_near_sol_basket_adx20():
     cfg = dp.config(FREEZE+timedelta(hours=8))
-    assert dp.symbols() == ['NEARUSDT', 'SOLUSDT', 'ZECUSDT']
-    assert cfg.weights == {'NEARUSDT': D('.3'), 'SOLUSDT': D('.4'), 'ZECUSDT': D('.3')} == cfg.perp_weights
+    assert dp.symbols() == ['ETHUSDT', 'NEARUSDT', 'SOLUSDT']
+    assert cfg.weights == cfg.perp_weights and sum(cfg.weights.values()) == 1
+    assert max(cfg.weights.values())-min(cfg.weights.values()) <= D('1e-27')
     assert cfg.adx_by_market == {m: dict.fromkeys(dp.symbols(), 20) for m in ('spot', 'perp')}
-    other = ADXSetupConfig(start=FREEZE, end=FREEZE+timedelta(hours=8), setup=1, **specification(1))
+    assert (cfg.filter_level, cfg.entry_cap, cfg.perp_cap) == (4, D('.6'), D('.4'))
+    other_basket = ('NEAR', 'SOL', 'ZEC')
+    other = BasketConfig(start=FREEZE, end=FREEZE+timedelta(hours=8), basket=other_basket,
+                         **basket_specification(other_basket))
     assert dp.rule_hash(other) != dp.RULE_HASH
     assert dp.config(FREEZE+timedelta(hours=8), stress=True).cost_multiplier == 2
 
 
-@pytest.mark.parametrize('now,end', [('2026-10-08T04:04', 'too early'), ('2026-10-08T04:06', 4), ('2026-10-09T13:49', 36)])
+@pytest.mark.parametrize('now,end', [('2026-10-10T04:04', 'too early'), ('2026-10-10T04:06', 4), ('2026-10-11T13:49', 36)])
 def test_latest_end_waits_for_a_published_h4_boundary_after_freeze(now, end):
     at = datetime.fromisoformat(now+':00+00:00')
     if end == 'too early':
@@ -116,14 +120,14 @@ def test_scheduled_runs_once_per_published_h4_end(tmp_path):
     assert dp.scheduled(tmp_path, now=FREEZE+timedelta(hours=4), progress=quiet, notifier=bot, **fetchers()) is None
     first = dp.scheduled(tmp_path, now=now, progress=quiet, notifier=bot, **fetchers())
     assert first['verdict'] == 'insufficient_sample' and first['window_end'] == (FREEZE+timedelta(hours=8)).isoformat()
-    assert sorted(p.name for p in tmp_path.iterdir()) == ['setup2-prospective-20261008T0800Z',
-                                                         'setup2-prospective-20261008T0800Z-inputs']
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['eth-near-sol-prospective-20261010T0800Z',
+                                                         'eth-near-sol-prospective-20261010T0800Z-inputs']
     assert dp.scheduled(tmp_path, now=now, progress=quiet, notifier=bot, **fetchers()) == first
-    assert len(bot.sent) == 1 and bot.sent[0].startswith('Setup-2 paper: insufficient_sample')
+    assert len(bot.sent) == 1 and bot.sent[0].startswith('ETH-NEAR-SOL paper: insufficient_sample')
 
 
 def test_scheduled_refuses_an_incomplete_report_directory_and_alerts(tmp_path):
-    (tmp_path/'setup2-prospective-20261008T0400Z').mkdir()
+    (tmp_path/'eth-near-sol-prospective-20261010T0400Z').mkdir()
     bot = Bot()
     with pytest.raises(ValueError, match='incomplete report'):
         dp.scheduled(tmp_path, now=FREEZE+timedelta(hours=4, minutes=6), progress=lambda m: None,

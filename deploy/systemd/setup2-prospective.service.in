@@ -1,5 +1,5 @@
 [Unit]
-Description=Setup-2 prospective paper test (ADR-003), public data only, no orders
+Description=ETH-NEAR-SOL prospective paper test (ADR-005), public data only, no orders
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=6h
