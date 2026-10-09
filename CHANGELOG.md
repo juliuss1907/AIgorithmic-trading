@@ -29,6 +29,15 @@ Dữ liệu 2022-01 → 2026-10, input đóng băng 5 coin.
 - Case đối chứng Setup-2 trùng từng byte với lần kiểm tra ngày 07/10.
 - **Lưu ý:** chọn 1 trong 10 rổ trên dữ liệu đã thấy là thiên lệch chọn mẫu, không phải bằng chứng OOS. Nếu đổi khỏi NEAR/SOL/ZEC thì cần ADR mới với mốc đóng băng mới.
 
+### Quyết định vận hành (ADR-004)
+
+Ghi tại [ADR-004](docs/decisions/004-three-coin-system.md), chưa triển khai:
+- **Tối đa 3 coin cho toàn hệ thống:** soak, Jev và trade đều chỉ chạy trên 3 coin này.
+- **Rule:** Setup-2 tạo tín hiệu, Jev xác nhận.
+- **Mỗi coin tùy chỉnh được:** chế độ (Spot, Perp hoặc cả hai) và tỷ trọng riêng.
+- **Đổi coin, tỷ trọng hay chế độ:** chỉ khi portfolio đã tạm dừng và không còn vị thế mở.
+- **Đổi coin nhanh, không cần backtest:** coin mới cần ≥600 nến H4, soak ≥14 ngày và qua gate v2; được gắn nhãn `no_backtest_evidence`.
+
 ### Kiểm thử
 
 - 11 test mới.
