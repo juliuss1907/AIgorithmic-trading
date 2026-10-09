@@ -4,6 +4,36 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-09 — Backtest 10 rổ 3 coin với rule Setup-2
+
+Nhánh: `feature/donchian-basket3`. Julius muốn cả hệ thống chỉ chạy 3 coin, giữ rule Setup-2 (A4 + ADX20) và cho Jev xác nhận tín hiệu. Thứ tự là backtest trước rồi mới làm runtime. Chi tiết xem [donchian-basket3](docs/donchian-basket3.md).
+
+### Đã làm
+
+- **Config rổ mới:** `BasketConfig` / `BasketStressConfig` (chi phí x2), áp rule Setup-2 lên 3 coin trong BTC/ETH/NEAR/SOL/ZEC, tỷ trọng chia đều.
+- **Chạy runner:** thêm universe `baskets` cho runner ADX, kèm case đối chứng Setup-2.
+- **Xếp hạng:** module `donchian_basket_analysis`.
+- **Không đổi engine, runtime hay VPS.**
+
+### Kết quả
+
+Dữ liệu 2022-01 → 2026-10, input đóng băng 5 coin.
+
+- **Cả 10 rổ đều có lãi** ở cả hai giai đoạn và cả khi chi phí gấp đôi: lãi +52,8% đến +84,2%, DD 9,9–13,0%, PF 1,35–1,51.
+- **Top 3 theo lãi/DD:**
+  - BTC-NEAR-SOL: +84,2%, DD 10,6%.
+  - ETH-NEAR-SOL: +81,8%, DD 11,6%.
+  - ETH-NEAR-ZEC: +66,2%, DD 9,9%.
+- **NEAR/SOL/ZEC chia đều xếp thứ 5:** +65,9%, DD 11,3%.
+- **5 rổ đứng đầu đều có NEAR.**
+- Case đối chứng Setup-2 trùng từng byte với lần kiểm tra ngày 07/10.
+- **Lưu ý:** chọn 1 trong 10 rổ trên dữ liệu đã thấy là thiên lệch chọn mẫu, không phải bằng chứng OOS. Nếu đổi khỏi NEAR/SOL/ZEC thì cần ADR mới với mốc đóng băng mới.
+
+### Kiểm thử
+
+- 11 test mới.
+- Toàn bộ suite: 1384 pass, 1 fail có sẵn từ trước trên `main` (`test_perp_collection_migration`). Test này pass hôm 07/10 và fail từ 09/10, nhiều khả năng phụ thuộc ngày chạy, không liên quan tới thay đổi này.
+
 ## 2026-10-07 — Timer hằng tuần cho paper-test Setup-2
 
 Nhánh: `integrate/donchian-research`. Julius hay tắt máy nên muốn chạy paper-test trên cloud.
