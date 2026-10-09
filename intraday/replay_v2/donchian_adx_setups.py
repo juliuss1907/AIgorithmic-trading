@@ -1,6 +1,7 @@
 """The five user-requested allocation/ADX setups, locked before replay."""
 
 from decimal import Decimal as D
+from itertools import combinations
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -65,13 +66,71 @@ class ADXSetupConfig(HistoricalConfig):
 
     @model_validator(mode='after')
     def locked_setup(self):
-        expected = specification(self.setup)
-        if (any(getattr(self, k) != v for k, v in expected.items()) or
-                self.capital != 1000 or self.daily_loss != D('.03') or
-                self.perp_daily_policy != 'disabled' or self.perp_trade_exit != 'baseline' or
-                self.perp_size != 'full' or self.perp_trailing_interval != '4h'):
+        if not matches(self, specification(self.setup)):
             raise ValueError('requested ADX setup allocation/threshold/risk rules changed')
         return self
+
+
+def matches(config, expected):
+    """Allocation/threshold map as specified and the Setup risk rules unchanged."""
+    return (all(getattr(config, k) == v for k, v in expected.items()) and
+            config.capital == 1000 and config.daily_loss == D('.03') and
+            config.perp_daily_policy == 'disabled' and config.perp_trade_exit == 'baseline' and
+            config.perp_size == 'full' and config.perp_trailing_interval == '4h')
+
+
+CANDIDATES = ('BTC', 'ETH', 'NEAR', 'SOL', 'ZEC')
+BASKETS = tuple(combinations(CANDIDATES, 3))
+
+
+def basket_specification(basket):
+    """Setup-2 rules (A4, ADX20 both markets, Spot60/Short40) on equal thirds of three coins."""
+    if tuple(basket) not in BASKETS:
+        raise ValueError('requires three distinct coins of BTC/ETH/NEAR/SOL/ZEC in order')
+    thirds = weights(**dict.fromkeys(basket, 1))
+    adx = dict.fromkeys(thirds, 20)
+    return dict(weights=dict(thirds), perp_weights=dict(thirds), adx_by_market={'spot': adx, 'perp': dict(adx)},
+                entry_cap=D('.6'), perp_cap=D('.4'), include_perp=True)
+
+
+class BasketConfig(HistoricalConfig):
+    universe: Literal['baskets'] = 'baskets'
+    basket: tuple[str, str, str]
+    filter_level: Literal[4] = 4
+    entry_window: Literal[30] = 30
+    exit_window: Literal[10] = 10
+    adx_threshold: Literal[20] = 20  # Compatibility only; the explicit map governs entries.
+    adx_by_market: dict[str, dict[str, Literal[20]]]
+    perp_cap: D = Field(ge=0, le=1)
+    reserve: Literal[0] = 0
+    leverage: Literal[1] = 1
+    trend_filter: Literal[False] = False
+    capital_growth: Literal['realized'] = 'realized'
+    drawdown_policy: Literal['observe-only'] = 'observe-only'
+    perp_stop: Literal['atr14-3x'] = 'atr14-3x'
+
+    @model_validator(mode='after')
+    def locked_basket(self):
+        if not matches(self, basket_specification(self.basket)):
+            raise ValueError('three-coin basket allocation/threshold/risk rules changed')
+        return self
+
+
+class BasketStressConfig(BasketConfig):
+    """Same basket with every fill's fee and slippage doubled; funding unchanged."""
+    cost_multiplier: Literal[2] = 2
+
+
+def basket_name(basket):
+    return '-'.join(basket)
+
+
+def basket_cases(start, end):
+    """Setup-2 control, then every basket at normal and doubled costs."""
+    control = ADXSetupConfig(start=start, end=end, setup=2, **specification(2))
+    return [('Setup-2', control)] + [
+        (basket_name(b)+suffix, cls(start=start, end=end, basket=b, **basket_specification(b)))
+        for b in BASKETS for suffix, cls in (('', BasketConfig), ('-cost2x', BasketStressConfig))]
 
 
 def setup_cases(start, end):

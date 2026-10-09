@@ -18,6 +18,9 @@ from intraday.replay_v2.metrics import encoded, fingerprint
 from intraday.replay_v2.portfolio_study import file_hash
 
 
+PRESETS = {'setups': 'donchian-adx-setups', 'baskets': 'donchian-basket3'}
+
+
 def calendar_periods(curve, start, end, capital):
     first = start.replace(month=1 if start.month<=6 else 7,day=1,hour=0,minute=0,second=0,microsecond=0)
     boundaries = [start]
@@ -130,9 +133,8 @@ def verify_three_coin(comparison_path, output_root, *, progress=print, universe=
 
 
 def run_study(inputs_path, report_root, *, resume=False, progress=print, universe='three'):
-    model=config_type(universe)
     source=Path(inputs_path).expanduser().resolve();before=file_hash(source)
-    if universe in ('five', 'setups'):
+    if universe in ('five', 'setups', 'baskets'):
         from intraday.replay_v2.donchian_five_data import read_manifest
         raw=read_manifest(source)
     else:
@@ -150,7 +152,7 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
         root.mkdir(parents=True,mode=0o700)
         _write(root/'binding.json',encoded(binding))
     progress('Preparing shared causal H4 features and native M15 volume profiles')
-    preparation_config = (config_type('five')(start=start,end=end) if universe=='setups' else variants[0][1])
+    preparation_config = (config_type('five')(start=start,end=end) if universe in ('setups','baskets') else variants[0][1])
     data,funding=decode_bundle(preparation_config,raw)
     prepared=prepare(preparation_config,data,funding,native_boundary_policy=raw.get('native_boundary_policy'))
     del data,funding,raw
@@ -167,7 +169,9 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
         else:
             progress('Replay '+name)
             report=enriched(config,prepared)
-            restored=model.model_validate({k:v for k,v in report['config'].items() if k in model.model_fields})
+            # Basket studies mix the Setup-2 control and cost-stress classes; restore each as its own type.
+            kind=type(config)
+            restored=kind.model_validate({k:v for k,v in report['config'].items() if k in kind.model_fields})
             repeated=enriched(restored,prepared)
             if (report['result_id']!=repeated['result_id'] or report['summary']!=repeated['summary'] or
                     report['methodology']!=repeated['methodology'] or
@@ -190,7 +194,7 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
     verify_files(lineage)
     if file_hash(source)!=before or runtime_hashes()!=binding['sources']:
         raise ValueError('research evidence/source changed')
-    receipt=dict(preset='donchian-adx-setups' if universe=='setups' else 'donchian-adx-exploration',window={'start':start.isoformat(),'end':end.isoformat()},
+    receipt=dict(preset=PRESETS.get(universe,'donchian-adx-exploration'),window={'start':start.isoformat(),'end':end.isoformat()},
                  research_only=True,research_on_seen_data=True,activation_allowed=False,official_gate_eligible=False,
                  source_unchanged=True,inputs_path=str(source),inputs_sha256=before,
                  source_files_sha256=lineage,binding_checksum=fingerprint(binding),results=results)
@@ -211,6 +215,11 @@ def markdown(receipt):
         s=item['summary'];net=s['net_pnl'];ret=s['net_return_pct']
         lines.append(f"| {item['variant']} | {s['final_equity_known']:.2f} | {net if net is not None else 'UNKNOWN'} | "
                      f"{ret if ret is not None else 'UNKNOWN'} | {s['max_drawdown_known_pct']:.2f} | {s['closed_trades']} |")
+    if receipt['preset']=='donchian-basket3':
+        lines += ['', 'Setup-2 rules on equal thirds of each three-coin basket; Spot60/Short40, Short1x, ADX20 both markets.',
+                  'cost2x doubles every fill fee and slippage; funding unchanged. Setup-2 (NEAR30/SOL40/ZEC30) is the control.',
+                  'Choosing one basket of ten on seen data is selection; it is not out-of-sample evidence.']
+        return '\n'.join(lines)+'\n'
     if receipt['preset']=='donchian-adx-setups':
         from intraday.replay_v2.donchian_adx_setups import ADXSetupConfig, allocation_text
         lines += ['', 'Initial1000USDT; Short-only1x; realized-only reinvestment separately within Spot/Perp.',
@@ -239,14 +248,14 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description='Local five-case A4 ADX exploration; no models or trading')
     parser.add_argument('--report-root',required=True)
     parser.add_argument('--inputs')
-    parser.add_argument('--universe',choices=('three','five','setups'),default='three')
+    parser.add_argument('--universe',choices=('three','five','setups','baskets'),default='three')
     parser.add_argument('--early-inputs');parser.add_argument('--late-inputs')
     parser.add_argument('--resume',action='store_true')
     args=parser.parse_args(argv)
     root=Path(args.report_root).expanduser().resolve()
     source=args.inputs
-    if args.universe in ('five','setups') and source is None:
-        parser.error('--universe five/setups requires a validated --inputs manifest')
+    if args.universe in ('five','setups','baskets') and source is None:
+        parser.error('--universe five/setups/baskets requires a validated --inputs manifest')
     if source is None:
         if not args.early_inputs or not args.late_inputs:parser.error('supply --inputs or both parent inputs')
         source=root/'data'/'inputs.json'

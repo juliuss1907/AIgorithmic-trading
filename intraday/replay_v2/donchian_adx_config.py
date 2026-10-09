@@ -32,6 +32,9 @@ class FiveCoinADXConfig(ADXStudyConfig):
 
 
 def config_type(universe='three'):
+    if universe == 'baskets':
+        from intraday.replay_v2.donchian_adx_setups import BasketConfig
+        return BasketConfig
     if universe == 'setups':
         from intraday.replay_v2.donchian_adx_setups import ADXSetupConfig
         return ADXSetupConfig
@@ -41,6 +44,9 @@ def config_type(universe='three'):
 
 
 def cases(start=START, end=END, *, universe='three'):
+    if universe == 'baskets':
+        from intraday.replay_v2.donchian_adx_setups import basket_cases
+        return basket_cases(start, end)
     if universe == 'setups':
         from intraday.replay_v2.donchian_adx_setups import setup_cases
         return setup_cases(start, end)
