@@ -4,6 +4,7 @@ No indicator is reimplemented here. Signals reuse `replay_v2.donchian_filters` a
 reuses `ATRTrail`, so a live decision equals the research decision on the same bars.
 """
 
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -88,18 +89,13 @@ def anchored(h4, anchor):
     return series
 
 
-def evaluate_setup2(h4, m15, *, side, anchor):
-    """Signal on the last closed H4 bar. Missing data blocks entries but never exits."""
-    if side not in (1, -1):
-        raise ValueError('side must be +1 (Spot long) or -1 (Perp short)')
-    series = anchored(h4, anchor)
-    if series is None or len(series) < WARMUP_BARS:
-        return Setup2Observation(side, None, None, False, False, False, blockers=('history_not_ready',))
-    trigger, i = series[-1], len(series)-1
-    f = indicator_series(series)[-1].copy()
+def _observe(series, indicators, i, m15, times, side):
+    """Observation for closed bar `i` of an anchored series; `indicators` is its causal pass."""
+    trigger = series[i]
+    f = indicators[i].copy()
     obs = observation(series[max(0, i-ENTRY):i+1], ENTRY, EXIT)
     # Profile ends at the trigger OPEN: (open-480h, open] by availability, as in research.
-    window = [b for b in m15 if trigger.opened_at-PROFILE_WINDOW < b.available_at <= trigger.opened_at]
+    window = m15[bisect_right(times, trigger.opened_at-PROFILE_WINDOW):bisect_right(times, trigger.opened_at)]
     blockers = []
     if len(window) != PROFILE_BARS or not contiguous(window, M15):
         blockers.append('profile_incomplete')
@@ -119,6 +115,30 @@ def evaluate_setup2(h4, m15, *, side, anchor):
         entry=donchian and not failed and not blockers, exit=obs['long_exit' if side > 0 else 'short_exit'],
         donchian_entry=donchian, failed_filters=failed, blockers=tuple(blockers), close=trigger.close,
         atr=atr, size_multiplier=size, profile=f['profile'], features=features)
+
+
+def _not_ready(side):
+    return Setup2Observation(side, None, None, False, False, False, blockers=('history_not_ready',))
+
+
+def evaluate_setup2(h4, m15, *, side, anchor):
+    """Signal on the last closed H4 bar. Missing data blocks entries but never exits."""
+    if side not in (1, -1):
+        raise ValueError('side must be +1 (Spot long) or -1 (Perp short)')
+    series = anchored(h4, anchor)
+    if series is None or len(series) < WARMUP_BARS:
+        return _not_ready(side)
+    return _observe(series, indicator_series(series), len(series)-1, m15, [b.available_at for b in m15], side)
+
+
+def series_observations(h4, m15, *, side, anchor):
+    """Every warmed-up bar of one anchored series with a single causal indicator pass (replay)."""
+    series = anchored(h4, anchor)
+    if series is None:
+        return series, []
+    indicators, times = indicator_series(series), [b.available_at for b in m15]
+    return series, [_observe(series, indicators, i, m15, times, side) if i >= WARMUP_BARS-1 else None
+                    for i in range(len(series))]
 
 
 def trail_stop(side, entry_price, signal_atr, h4, *, entered_at, anchor, cap=STOP_CAP):

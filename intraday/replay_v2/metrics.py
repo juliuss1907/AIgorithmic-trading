@@ -27,7 +27,10 @@ def journal_hash(rows):
 
 
 def dataset_fingerprint(data):
-    return fingerprint({"rule": data.rule.model_dump(mode="json"),
+    setup2 = ({"profile_candles": [[b.opened_at.isoformat(), str(b.open), str(b.high), str(b.low), str(b.close),
+                                    str(b.volume)] for b in data.profile_candles],
+               "indicator_anchor": data.indicator_anchor.isoformat()} if data.indicator_anchor else {})
+    return fingerprint({**setup2, "rule": data.rule.model_dump(mode="json"),
         "candles": [c.model_dump(mode="json") for c in data.candles],
         "quotes": [q.model_dump(mode="json") for q in data.quotes],
         "decisions": [{"decision": d.decision.model_dump(mode="json"),
@@ -80,7 +83,10 @@ def build_result(config, data, book, limitations):
         "methodology": {"window": "continuous, flat start; terminal window_end close at last valid price",
             "costs": "assumed combined fees/slippage per fill; recorded quote spread is additional",
             "funding": "declared offline settlement coverage, never inferred from current funding rate",
-            "risk_limits": {"daily_loss_pct": 1.5, "max_drawdown_pct": 8, "spot_stop_pct": 10},
+            "risk_limits": ({"daily_loss_pct": 1.5, "max_drawdown_pct": 8, "spot_stop_pct": 10} if book.policy is None
+                            else {"daily_loss_pct": float(book.daily_loss*100), "max_drawdown_pct": float(book.max_dd*100),
+                                  "stop": "ATR14x3 trailing, capped 10% from entry",
+                                  "entry_fraction_pct": float(book.entry_fraction*100)}),
             "unsupported": ["order_book_replay", "partial_fills", "API_failures", "exact_liquidation",
                             "multi_coin_portfolio", "activation_gate"]},
         "v1_reference": {"evaluation": data.v1_reference,

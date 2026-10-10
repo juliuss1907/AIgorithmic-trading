@@ -19,6 +19,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from intraday.active_set_cli import add_active_set_parser, dispatch_active_set
+from intraday.setup2_cli import add_setup2_parser, dispatch_setup2
 from intraday.active_set import (allows as active_set_allows, is_active as active_set_is_active,
                                  record_skip as active_set_skip)
 from intraday.assets import ASSET_REGISTRY, asset_spec
@@ -189,6 +190,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     commands.choices["cross-venue-evaluate"].add_argument("--evidence", required=True)
     add_active_set_parser(commands)
+    add_setup2_parser(commands)
     serve = commands.add_parser("serve")
     serve.add_argument("--database", default=None)
     serve.add_argument("--execution-database", type=Path, default=None, help="opt-in Perp controller journal; never exchange credentials")
@@ -1676,23 +1678,28 @@ def _run_registered_asset_cycles(
                 continue
             try:
                 snapshot = markets[symbol].snapshot(symbol, now=now)
-                spot_candles = None
+                spot_candles = spot_rule = None
                 if scope is DecisionScope.SPOT_4H:
                     for candle_interval in ("4h", "8h", "1d"):
                         rows = markets[symbol].closed_candles(candle_interval)
                         if rows:
                             store.record_asset_candles(symbol, candle_interval, rows)
                     spot_candles = markets[symbol].closed_candles("4h")
+                    spot_rule = (
+                        store.load_scoped_challenger(scope, symbol=symbol)
+                        or store.load_active_scoped_rule(scope, symbol=symbol)
+                    )
+                    if (spot_rule is not None and active_set_allows(store, symbol, scope)
+                            and getattr(spot_rule.parameters, "entry_profile", "donchian_v1") == "setup2_v1"):
+                        from intraday.setup2_store import coin_anchor, sync as setup2_sync
+                        setup2_sync(store, symbol, "spot", anchor=coin_anchor(store, symbol), now=now)
                 result = run_asset_lifecycle_observation(
                     store,
                     provider,
                     snapshot,
                     scope=scope,
                     now=now,
-                    spot_rule=(
-                        store.load_scoped_challenger(scope, symbol=symbol)
-                        or store.load_active_scoped_rule(scope, symbol=symbol)
-                    ) if scope is DecisionScope.SPOT_4H else None,
+                    spot_rule=spot_rule,
                     spot_candles=spot_candles,
                 )
             except Exception as error:
@@ -2046,7 +2053,7 @@ def main() -> None:
                 raise SystemExit(code)
             return
     if (arguments.command == "assets" and arguments.database is None and getattr(arguments,"report_dir",None) is None
-            or arguments.command == "active-set" and arguments.database is None):
+            or arguments.command in {"active-set", "setup2"} and arguments.database is None):
         deployment = deployment_cli.load_deployment()
         if deployment is not None:
             code = deployment_cli.execute(
@@ -2135,6 +2142,9 @@ def main() -> None:
         return
     if arguments.command == "active-set":
         dispatch_active_set(arguments)
+        return
+    if arguments.command == "setup2":
+        dispatch_setup2(arguments)
         return
     if arguments.command == "provider":
         _provider_cli(arguments)

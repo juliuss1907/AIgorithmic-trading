@@ -17,13 +17,29 @@ MAX_DRAWDOWN = Decimal(".08")
 
 
 class Ledger:
-    def __init__(self, config: ReplayConfig):
+    def __init__(self, config: ReplayConfig, *, policy=None, slot_weight=None):
+        """Legacy caps by default; a Setup-2 `policy` with its coin `slot_weight` follows the split."""
         self.config = config
+        self.policy = policy
+        spot = config.market == "spot"
+        if policy is None:
+            self.daily_loss, self.max_dd = DAILY_LOSS, MAX_DRAWDOWN
+            self.entry_fraction = Decimal(".30") if spot else Decimal(".20")
+            self.margin_fraction = Decimal(".10")
+        else:
+            if slot_weight is None or not ZERO < slot_weight <= ONE:
+                raise ValueError("split policy requires a coin weight in (0, 1]")
+            self.daily_loss = Decimal(str(policy.daily_loss_limit_pct))
+            self.max_dd = Decimal(str(policy.max_drawdown_pct))
+            budget = policy.spot_budget_pct if spot else policy.perp_budget_pct
+            self.entry_fraction = Decimal(str(budget))*slot_weight
+            self.margin_fraction = Decimal(str(policy.max_isolated_margin_pct))*slot_weight
         self.cash = config.capital
         self.quantity = ZERO
         self.entry_price = None
         self.entered_at = None
         self.stop = None
+        self.stop_reason = "emergency_stop"
         self.realized = self.costs = self.funding = ZERO
         self.exchange_fees = self.slippage_costs = ZERO
         self.entry_fee = self.entry_slippage = ZERO
@@ -96,8 +112,9 @@ class Ledger:
         if self.config.market == "spot" and side != 1:
             return self.deny(at, price, "spot_long_only")
         equity = self.equity(price)
-        cap = self.allocation.target_cap(self.config.symbol, self.config.market)
-        fraction = Decimal(".30") if self.config.market == "spot" else Decimal(".20")
+        cap = (self.allocation.target_cap(self.config.symbol, self.config.market) if self.policy is None
+               else self.config.capital * self.entry_fraction)
+        fraction = self.entry_fraction
         if not ZERO < notional <= min(cap, equity * fraction):
             return self.deny(at, price, "allocation_limit")
         rules = self.config.profile.instrument
@@ -118,7 +135,7 @@ class Ledger:
             return self.deny(at, price, "invalid_protection_or_quantity")
         notional = quantity * price
         cost = notional * self.config.profile.cost_bps(self.config.market) / 10000
-        if self.config.market == "perp" and notional / self.config.leverage > equity * Decimal(".10"):
+        if self.config.market == "perp" and notional / self.config.leverage > equity * self.margin_fraction:
             return self.deny(at, price, "isolated_margin_limit")
         debit = notional + cost if self.config.market == "spot" else cost
         if debit > self.cash:
@@ -171,9 +188,9 @@ class Ledger:
 
     def guard_reason(self, mark):
         equity = self.equity(mark)
-        if equity <= self.peak * (ONE - MAX_DRAWDOWN):
+        if equity <= self.peak * (ONE - self.max_dd):
             return "max_drawdown"
-        if equity <= self.day_start * (ONE - DAILY_LOSS):
+        if equity <= self.day_start * (ONE - self.daily_loss):
             return "daily_loss_limit"
         return None
 

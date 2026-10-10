@@ -119,6 +119,11 @@ def run_spot_soak_observation(
     """Record a Spot heartbeat and call Jev only for a valid 1d/4h setup."""
     if scope not in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}:
         raise ValueError("spot soak requires a Spot scope")
+    if rule is not None and getattr(rule.parameters, "entry_profile", "donchian_v1") == "setup2_v1":
+        if scope is not DecisionScope.SPOT_4H:
+            raise ValueError("setup2 rules run only on spot_4h")
+        from intraday.setup2_store import run_setup2_observation
+        return run_setup2_observation(store, provider, snapshot, rule=rule, market="spot", now=now)
     if rule is None or not candles:
         store.record_portfolio_soak_tick(
             symbol=snapshot.symbol,

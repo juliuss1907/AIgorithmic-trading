@@ -35,6 +35,8 @@ class DonchianObservation:
 def evaluate_donchian(
     candles: list[list], rule: SpotRuleParameters
 ) -> DonchianObservation:
+    if getattr(rule, "entry_profile", "donchian_v1") != "donchian_v1":
+        raise ValueError("setup2 rules are evaluated by intraday.setup2, never the legacy Donchian path")
     required = max(rule.entry_window, rule.exit_window, rule.atr_period) + 1
     if len(candles) < required:
         raise ValueError(f"Donchian signal requires at least {required} closed candles")

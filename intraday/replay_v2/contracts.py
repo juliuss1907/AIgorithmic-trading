@@ -236,3 +236,6 @@ class ReplayDataset:
     decisions: tuple[RecordedDecision, ...] = ()
     limitations: tuple[str, ...] = ()
     v1_reference: dict | None = None
+    # Setup-2 volume-profile M15 bars and the indicator anchor; empty for every legacy rule.
+    profile_candles: tuple = ()
+    indicator_anchor: datetime | None = None

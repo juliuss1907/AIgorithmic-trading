@@ -16,6 +16,7 @@ from pydantic import (
     Field,
     StringConstraints,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -839,6 +840,16 @@ class SpotRuleParameters(StrictContract):
         Regime.TRENDING_UP,
         Regime.SIDEWAYS,
     )
+    # Setup-2 (ADR-006): closed-H4 30/10 with A4 filters and ADX20; fixed, never model-tuned.
+    entry_profile: Literal["donchian_v1", "setup2_v1"] = "donchian_v1"
+
+    @model_serializer(mode="wrap")
+    def omit_default_profile(self, handler):
+        # Legacy dumps, content hashes and dataset fingerprints stay byte-identical.
+        payload = handler(self)
+        if self.entry_profile == "donchian_v1":
+            payload.pop("entry_profile", None)
+        return payload
 
     @field_validator("allowed_regimes")
     @classmethod
@@ -851,6 +862,9 @@ class SpotRuleParameters(StrictContract):
     def exit_window_is_shorter(self):
         if self.exit_window >= self.entry_window:
             raise ValueError("exit_window must be shorter than entry_window")
+        if self.entry_profile == "setup2_v1" and (
+                self.entry_window, self.exit_window, self.atr_period) != (30, 10, 14):
+            raise ValueError("setup2_v1 is locked to Donchian 30/10 and ATR14")
         return self
 
 
@@ -862,6 +876,12 @@ class PerpRuleProposal(StrictContract):
 class SpotRuleProposal(StrictContract):
     parameters: SpotRuleParameters
     rationale: str = Field(min_length=20, max_length=2000)
+
+    @model_validator(mode="after")
+    def models_never_select_setup2(self):
+        if self.parameters.entry_profile != "donchian_v1":
+            raise ValueError("model proposals may only tune legacy Donchian rules")
+        return self
 
 
 class RuleProposal(StrictContract):

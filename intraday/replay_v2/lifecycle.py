@@ -9,7 +9,7 @@ from intraday.spot_4h_lifecycle import spot_4h_history_progress, preview_spot_4h
 from intraday.replay_v2.artifacts import publish_report, read_report, read_series, resolve_report_dir
 from intraday.replay_v2.contracts import ReplayConfig, binance_gate_profile, utc
 from intraday.replay_v2.data import load_dataset
-from intraday.replay_v2.engine import simulate
+from intraday.replay_v2.engine import is_setup2, simulate
 from intraday.replay_v2.funding import read_funding_snapshot
 from intraday.replay_v2.gate_repository import GateRepository
 from intraday.replay_v2.gates import GateEvaluation, GateEvidence, GateOutcome, evaluate_report_gate, profile_fingerprint
@@ -53,6 +53,28 @@ def perp_evidence(reader, rule, start, end, data=None):
         quote_coverage=min(1,len(slots)/expected),verified_decisions=len(data.decisions) if data else 0)
 
 
+def _setup2_inputs(reader, rule, market, now, *, campaign=None):
+    """Anchored Setup-2 history: replay starts once 600 bars warm the indicators up."""
+    from intraday import setup2
+    from intraday.setup2_store import coin_anchor, heartbeat, list_bars
+    anchor = coin_anchor(reader, rule.symbol)
+    bars = list_bars(reader, rule.symbol, market, "4h", since=anchor, until=now)
+    expected = int((setup2.floor_h4(now)-anchor)/setup2.H4)
+    contiguous = setup2.anchored(bars, anchor) is not None
+    end = bars[-1].available_at if bars else now
+    start = anchor+setup2.WARMUP_BARS*setup2.H4
+    if start >= end:
+        start = end-setup2.H4
+    values = dict(history_bars=len(bars) if contiguous else 0,
+                  history_coverage=min(1.0, len(bars)/expected) if expected and contiguous else 0.0,
+                  latest_candle_age_seconds=(now-bars[-1].available_at).total_seconds() if bars else None)
+    if campaign:
+        started = datetime.fromisoformat(campaign["started_at"])
+        values.update(elapsed_days=max(0, (now-started).total_seconds()/86400),
+                      heartbeat_coverage=heartbeat(reader, rule.symbol, market, rule.rule_id, start=started, end=now))
+    return start, end, GateEvidence(**values)
+
+
 def _replay_inputs(reader, rule, registry, now, *, root, funding_id, campaign=None):
     from intraday.replay_v2.selection import read_selection, verify_selection
     selection = read_selection(reader, rule.rule_id)
@@ -60,7 +82,9 @@ def _replay_inputs(reader, rule, registry, now, *, root, funding_id, campaign=No
         verify_selection(reader, rule, selection, now=now, audit_prefix=campaign is None)
     market = "spot" if rule.scope is DecisionScope.SPOT_4H else "perp"
     collection = None
-    if market == "spot":
+    if market == "spot" and is_setup2(rule):
+        start, end, evidence = _setup2_inputs(reader, rule, market, now, campaign=campaign)
+    elif market == "spot":
         rows = reader.list_asset_candles(rule.symbol,"4h",as_of=now)
         history = spot_4h_history_progress(rows,now=now)
         end = datetime.fromtimestamp((int(rows[-1][6])+1)/1000,now.tzinfo) if rows else now
@@ -118,7 +142,8 @@ def replay_gate(store, rule_id, *, now, report_dir=None, funding_id=None, campai
             if collection:
                 report["methodology"]["collection_inheritance"] = collection.model_dump(mode="json")
         champion_report = None
-        if registry.get("champion_id"):
+        champion = reader.load_scoped_rule(registry["champion_id"]) if registry.get("champion_id") else None
+        if champion is not None and is_setup2(champion) == is_setup2(rule):
             champion_config = config.model_copy(update={"rule_id":registry["champion_id"]})
             champion_report = simulate(champion_config,load_dataset(reader.database,champion_config,reader=reader))
         outcome = evaluate_report_gate(report,evidence,champion=champion_report,kind="soak" if campaign else "replay")
@@ -175,7 +200,7 @@ def evaluate_gate_soak(store, rule_id, *, now, report_dir=None, funding_id=None)
         raise ValueError("candidate has no active v2 validation campaign")
     if rule.content_hash != campaign["rule_content_hash"]:
         raise ValueError("validation rule content changed")
-    if rule.scope is DecisionScope.PERP_INTRADAY:
+    if rule.scope is DecisionScope.PERP_INTRADAY or is_setup2(rule):
         evaluation = replay_gate(store,rule_id,now=now,report_dir=report_dir,funding_id=funding_id,campaign=campaign)
     else:
         reader = IntradayStore(store.database,read_only=True)

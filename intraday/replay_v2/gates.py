@@ -87,9 +87,18 @@ class GateEvaluation(FrozenModel):
         return cls(evaluation_id=fingerprint(payload)[:32], **values)
 
 
+# Setup-2 replays size one coin at a third of its 60/40 sleeve, Isolated 1x (ADR-006).
+SETUP2_FRACTIONS = {"spot": Decimal(".6")/3, "perp": Decimal(".4")/3}
+
+
+def is_setup2_report(report):
+    return report.get("inputs", {}).get("rule_parameters", {}).get("entry_profile") == "setup2_v1"
+
+
 def _audit_entries(report):
     violations = 0
     config = ReplayConfig.model_validate(report["config"])
+    setup2 = is_setup2_report(report)
     for event in report.get("events", ()):
         if event["kind"] != "entry":
             continue
@@ -97,10 +106,12 @@ def _audit_entries(report):
         if audit is None:
             raise ValueError("gate replay requires fill risk audit evidence")
         equity, notional = Decimal(audit["pre_fill_equity"]), Decimal(audit["notional"])
-        cap = Decimal(".30") if config.market == "spot" else Decimal(".20")
+        cap = (SETUP2_FRACTIONS[config.market] if setup2 else
+               Decimal(".30") if config.market == "spot" else Decimal(".20"))
         safe = 0 < notional <= min(config.capital, equity)*cap
         if config.market == "perp":
-            safe = safe and notional/config.leverage <= equity*Decimal(".10")
+            margin = SETUP2_FRACTIONS["perp"] if setup2 else Decimal(".10")
+            safe = safe and notional/config.leverage <= equity*margin
         safe = safe and not audit["entries_paused"] and (config.market != "spot" or event["side"] == 1)
         violations += not safe
     return violations
@@ -121,7 +132,23 @@ def evaluate_report_gate(report, evidence: GateEvidence, *, champion=None, kind=
     metrics["hard_risk_violations"] = violations
     if violations:
         rejected.append("hard_risk_violation")
-    if config.market == "spot":
+    setup2 = is_setup2_report(report)
+    if setup2:
+        if evidence.history_bars < 600:
+            waiting.append("minimum_600_anchored_h4_bars")
+        if evidence.history_coverage < .99:
+            waiting.append("4h_candle_coverage_below_99pct")
+        if evidence.latest_candle_age_seconds is None or evidence.latest_candle_age_seconds > 14700:
+            waiting.append("latest_4h_candle_stale")
+        if kind == "soak":
+            # Rare signals: the soak proves stable operation, not six matured setups (ADR-006).
+            if evidence.elapsed_days < 14:
+                waiting.append("minimum_14_days_post_gate")
+            if evidence.heartbeat_coverage < .95:
+                waiting.append("heartbeat_coverage_below_95pct")
+        if config.market == "perp" and (not summary.get("funding_complete") or summary.get("net_return_pct") is None):
+            waiting.append("funding_coverage_incomplete")
+    elif config.market == "spot":
         if evidence.history_bars < 2190:
             waiting.append("minimum_365_day_history")
         if evidence.history_coverage < .99:
@@ -144,7 +171,8 @@ def evaluate_report_gate(report, evidence: GateEvidence, *, champion=None, kind=
             waiting.append("recorded_provenance_incomplete")
     if report["status"] == "insufficient_data" or any(code in report["limitations"] for code in (
         "spot_warmup_or_history_gap", "price_history_starts_after_window", "price_history_ends_before_window",
-        "no_valid_perp_quotes", "no_verified_recorded_decisions")):
+        "no_valid_perp_quotes", "no_verified_recorded_decisions", "setup2_warmup_inside_window",
+        "setup2_history_not_anchored")):
         waiting.append("replay_price_or_decision_history_incomplete")
     if summary.get("closed_trades", 0) < 6:
         waiting.append("minimum_6_closed_trades")
@@ -153,9 +181,13 @@ def evaluate_report_gate(report, evidence: GateEvidence, *, champion=None, kind=
         rejected.append("nonpositive_net_return")
     if drawdown is None:
         waiting.append("drawdown_unknown")
-    elif drawdown >= 8:
+    elif setup2 and drawdown >= 15:
+        rejected.append("max_drawdown_at_least_15pct")
+    elif not setup2 and drawdown >= 8:
         rejected.append("max_drawdown_at_least_8pct")
     metrics["risk_score"] = net-drawdown if net is not None and drawdown is not None else None
+    if champion and is_setup2_report(champion) != setup2:
+        champion = None  # A profile switch is an operator policy decision, not tuning (ADR-006).
     if champion:
         other = ReplayConfig.model_validate(champion["config"])
         if config.model_dump(exclude={"rule_id"}) != other.model_dump(exclude={"rule_id"}):
