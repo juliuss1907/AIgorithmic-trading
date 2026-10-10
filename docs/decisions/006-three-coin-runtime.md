@@ -43,6 +43,22 @@ and caps Demo sleeves at 30%/20% of capital with a 50% gross and 10% margin limi
   rule fires about once per 25 days per coin and market); replay gates need at least six trades,
   net profit and drawdown below 15%; the Perp short requires Jev SELL or STRONG_SELL.
 
+## Implementation note (stage C, 2026-10-10)
+
+The plan called for a new `perp_4h` decision scope and a v24 rebuild of twelve CHECK-constrained
+tables. The build instead keeps Setup-2 Perp rules in the existing `perp_intraday` database scope,
+marked `entry_profile=setup2_v1` exactly as Spot does, so **no schema migration is needed** and
+every container keeps reading v23. The active set still gates them through its logical `perp_4h`
+scope, so the 30 s Jev cycle stays off. Consequences:
+
+- Jev confirms the short with the existing Perp intraday question and 1 h snapshot, not a 4 h
+  question; it can only veto, never pick the side (SELL or STRONG_SELL required).
+- Setup-2 Perp candidates replace that coin's open `perp_intraday` candidate
+  (`aigt setup2 candidate --market perp --retire-open`).
+- Weekly gate automation does not schedule Setup-2 routes; the operator runs the v2 replay,
+  soak start and evaluation explicitly.
+- Perp replays mark equity at trade prices and settle funding at bar level.
+
 ## Alternatives considered
 
 - Wait for the ADR-005 verdict: months without a runtime path for the chosen system.
@@ -54,5 +70,4 @@ and caps Demo sleeves at 30%/20% of capital with a 50% gross and 10% margin limi
 Live results will differ from the prospective test even when signals match: Jev removes some
 entries, fills follow the Jev answer, stops are capped at 10% and sizing does not compound.
 Deploying stage A ends all Jev-driven Perp soaks; positions in BTC paper and `perp_intraday`
-must be flat first. Stage C needs a source schema rebuild to v24, deployed to all containers
-together.
+must be flat first. No stage needs a source schema change; new state lives in extension tables.

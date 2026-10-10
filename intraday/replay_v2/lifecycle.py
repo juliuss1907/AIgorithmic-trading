@@ -82,7 +82,7 @@ def _replay_inputs(reader, rule, registry, now, *, root, funding_id, campaign=No
         verify_selection(reader, rule, selection, now=now, audit_prefix=campaign is None)
     market = "spot" if rule.scope is DecisionScope.SPOT_4H else "perp"
     collection = None
-    if market == "spot" and is_setup2(rule):
+    if is_setup2(rule):
         start, end, evidence = _setup2_inputs(reader, rule, market, now, campaign=campaign)
     elif market == "spot":
         rows = reader.list_asset_candles(rule.symbol,"4h",as_of=now)
@@ -112,14 +112,14 @@ def _replay_inputs(reader, rule, registry, now, *, root, funding_id, campaign=No
         end = now
         evidence = None
     profile = _funding_profile(root,funding_id,market=market,symbol=rule.symbol,start=start,end=end)
-    leverage = 3
+    leverage = 1 if is_setup2(rule) else 3  # Setup-2 Perp is Isolated 1x (ADR-006).
     if campaign:
         replay = GateRepository(reader).get(campaign["replay_evaluation_id"])
         leverage = replay.replay_config.leverage
     config = ReplayConfig(symbol=rule.symbol,market=market,rule_id=rule.rule_id,
                           start=start,end=end,capital=1000,leverage=leverage,profile=profile)
     data = load_dataset(reader.database,config,reader=reader)
-    if evidence is None:
+    if evidence is None and not is_setup2(rule):
         evidence = perp_evidence(reader,rule,start,end,data)
         if not campaign and not collection and registry.get("challenger_id") != rule.rule_id:
             evidence = evidence.model_copy(update={"elapsed_days":0,"heartbeat_coverage":0})

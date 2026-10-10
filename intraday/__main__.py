@@ -1720,6 +1720,37 @@ def _run_registered_asset_cycles(
                     status="success",
                     finished_at=datetime.now(timezone.utc),
                 )
+    results.update(_run_perp_setup2_cycles(store, provider, perp_markets=perp_markets, now=now))
+    return results
+
+
+def _run_perp_setup2_cycles(store, provider, *, perp_markets, now):
+    """Setup-2 short (ADR-006): one evaluation per closed H4 bar, Jev only on an active setup."""
+    from intraday.setup2_store import coin_anchor, run_setup2_observation, sync as setup2_sync
+    results = {}
+    for symbol in sorted(perp_markets):
+        if not (active_set_is_active(store, symbol, "perp_4h") is True or active_set_watched(store, symbol)):
+            continue
+        rule = (store.load_scoped_challenger(DecisionScope.PERP_INTRADAY, symbol=symbol)
+                or store.load_active_scoped_rule(DecisionScope.PERP_INTRADAY, symbol=symbol))
+        if rule is None or getattr(rule.parameters, "entry_profile", None) != "setup2_v1":
+            continue
+        job = f"asset_perp_setup2_{symbol.lower()}"
+        slot = claim_cadence(store, job, now, 14_400)
+        if slot is None:
+            continue
+        try:
+            snapshot = perp_markets[symbol].snapshot(symbol, now=now)
+            store.record_snapshot(snapshot)
+            setup2_sync(store, symbol, "perp", anchor=coin_anchor(store, symbol), now=now)
+            results[f"{symbol}:perp_4h"] = run_setup2_observation(
+                store, provider, snapshot, rule=rule, market="perp", now=now)
+        except Exception as error:
+            results[f"{symbol}:perp_4h"] = f"error:{type(error).__name__}"
+            store.finish_scheduler_run(job, slot, status="error", error_code=type(error).__name__,
+                                       finished_at=datetime.now(timezone.utc))
+        else:
+            store.finish_scheduler_run(job, slot, status="success", finished_at=datetime.now(timezone.utc))
     return results
 
 

@@ -121,13 +121,14 @@ def load_dataset(database: str | Path, config: ReplayConfig, *, reader=None) -> 
             raise ValueError("market scope is not enabled for this registered coin")
         evaluation = store.latest_scoped_rule_evaluation(rule.rule_id, kind="replay")
         reference = evaluation.model_dump(mode="json") if evaluation else None
-        if config.market == "spot" and getattr(rule.parameters, "entry_profile", "donchian_v1") == "setup2_v1":
+        if getattr(rule.parameters, "entry_profile", None) == "setup2_v1":
             from intraday.setup2_store import coin_anchor, list_bars, profile_start
             anchor = coin_anchor(store, config.symbol)
             candles = tuple(Candle(opened_at=b.opened_at, available_at=b.available_at, open=b.open, high=b.high,
                                    low=b.low, close=b.close, volume=b.volume)
-                            for b in list_bars(store, config.symbol, "spot", "4h", since=anchor, until=config.end))
-            profile = tuple(list_bars(store, config.symbol, "spot", "15m", since=profile_start(anchor),
+                            for b in list_bars(store, config.symbol, config.market, "4h", since=anchor,
+                                               until=config.end))
+            profile = tuple(list_bars(store, config.symbol, config.market, "15m", since=profile_start(anchor),
                                       until=config.end))
             return ReplayDataset(rule=rule, candles=candles, profile_candles=profile, indicator_anchor=anchor,
                                  v1_reference=reference)

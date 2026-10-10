@@ -229,11 +229,10 @@ def history_bars(store, symbol, anchor, now):
 
 def setup2_soak_passed(store, symbol, market):
     """A passing v2 soak evaluation for a Setup-2 rule of this coin and market."""
-    if market != 'spot':
-        return False  # The rule-driven Perp scope arrives with ADR-006 stage C.
     from intraday.replay_v2.gate_repository import GateRepository
     repository = GateRepository(store)
-    for row in store.list_scoped_rules(DecisionScope.SPOT_4H, symbol=symbol):
+    scope = DecisionScope.SPOT_4H if market == 'spot' else DecisionScope.PERP_INTRADAY
+    for row in store.list_scoped_rules(scope, symbol=symbol):
         rule = store.load_scoped_rule(row['id'])
         if getattr(rule.parameters, 'entry_profile', None) == 'setup2_v1':
             latest = repository.latest(rule.rule_id, kind='soak')

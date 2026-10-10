@@ -45,6 +45,30 @@ def _spot_intrabar(book, candle):
         book.observe(at, candle.high)
 
 
+def _short_intrabar(book, candle):
+    """Perp short: assume open -> adverse high -> favourable low -> close (bar-level times)."""
+    if not book.quantity:
+        return
+    at = candle.available_at - timedelta(milliseconds=1)
+    threshold = max(book.day_start*(ONE-book.daily_loss), book.peak*(ONE-book.max_dd))
+    # Perp equity = cash + quantity*(mark-entry); quantity < 0, so losses grow with the mark.
+    guard_price = book.entry_price+(threshold-book.cash)/book.quantity
+    barrier = min(book.stop, guard_price)
+    if candle.high >= barrier:
+        price = max(candle.open, barrier)
+        if guard_price <= book.stop:
+            reason = "max_drawdown" if threshold == book.peak*(ONE-book.max_dd) else "daily_loss_limit"
+            book.observe(at, price)
+            book.halt(at, price, reason)
+        else:
+            reason = book.stop_reason
+        book.close(at, price, reason)
+        book.observe(at, price)
+    else:
+        book.observe(at, candle.high)
+        book.observe(at, candle.low)
+
+
 def _spot(config, data, book, limitations):
     rule = data.rule.parameters
     needed = max(rule.entry_window, rule.exit_window, rule.atr_period)+1
@@ -114,6 +138,8 @@ def _setup2(config, data, book, limitations, side=1):
         limitations.add("setup2_history_not_anchored")
         return
     book.stop_reason = "trailing_stop"
+    funding = config.profile.funding
+    settlements = funding.settlements if side < 0 and funding else ()
     trail, last = None, None
     for i, candle in enumerate(series):
         if not config.start <= candle.opened_at < config.end or candle.available_at > config.end:
@@ -122,7 +148,7 @@ def _setup2(config, data, book, limitations, side=1):
         book.advance_day(candle.opened_at)
         book.observe(candle.opened_at, candle.open)
         closed = _risk_exit(book, candle.opened_at, candle.open, candle.open)
-        if not closed and book.quantity and candle.open <= book.stop:
+        if not closed and book.quantity and (candle.open <= book.stop if side > 0 else candle.open >= book.stop):
             book.close(candle.opened_at, candle.open, "trailing_stop_gap")
             closed = True
         signal = observations[i-1] if i else None
@@ -143,7 +169,10 @@ def _setup2(config, data, book, limitations, side=1):
             elif not book.quantity and signal.donchian_entry:
                 book.deny(candle.opened_at, candle.open, "setup2_filters",
                           failed_filters=list(signal.failed_filters), blockers=list(signal.blockers))
-        _spot_intrabar(book, candle)
+        for settlement in settlements:
+            if book.quantity and candle.opened_at <= settlement.at < candle.available_at:
+                book.settle_funding(settlement.at, settlement.rate, settlement.mark)
+        (_spot_intrabar if side > 0 else _short_intrabar)(book, candle)
         at = candle.available_at-timedelta(milliseconds=1)
         _risk_exit(book, at, candle.close, candle.close)
         book.observe(at, candle.close)
@@ -177,13 +206,17 @@ def simulate(config: ReplayConfig, data: ReplayDataset) -> dict:
         limitations.add("instrument_rules_are_a_timestamped_snapshot_not_historical_tiers")
     with localcontext() as context:
         context.prec = 28
-        if config.market == "spot" and is_setup2(data.rule):
+        if is_setup2(data.rule):
             book = Ledger(config, policy=ParentPortfolioPolicy.from_split(Decimal(".6"), Decimal(".4"), 1),
                           slot_weight=SETUP2_SLOT)
-            limitations.update({"setup2_jev_filter_not_replayed", "spot_ohlc_path_assumed_adverse_first",
-                                "spot_intrabar_timestamps_estimated", "setup2_m15_profile_uniform_volume",
+            limitations.update({"setup2_jev_filter_not_replayed", "setup2_ohlc_path_assumed_adverse_first",
+                                "setup2_intrabar_timestamps_estimated", "setup2_m15_profile_uniform_volume",
                                 "setup2_bar_level_fills"})
-            _setup2(config, data, book, limitations)
+            if config.market == "perp":
+                limitations.update({"setup2_perp_marked_at_trade_prices", "setup2_bar_level_funding"})
+                if config.leverage != 1:
+                    raise ValueError("Setup-2 Perp replays at Isolated 1x")
+            _setup2(config, data, book, limitations, side=1 if config.market == "spot" else -1)
             return build_result(config, data, book, limitations)
         book = Ledger(config)
         if config.market == "spot":

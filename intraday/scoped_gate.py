@@ -136,6 +136,42 @@ class ScopedEntryGate:
             state, scope=scope, target_notional=target, projected_isolated_margin_pct=projected_isolated_margin_pct
         )
 
+    def perp_setup2_entry(
+        self,
+        state: ParentPortfolioState,
+        decision: JevDecision,
+        rule: PerpRuleParameters,
+        *,
+        setup_entry: bool,
+        size_multiplier: float,
+        projected_isolated_margin_pct: float | None = None,
+    ) -> PortfolioAuthorization:
+        """Setup-2 short (ADR-006): the rule picks the side; Jev must confirm SELL or STRONG_SELL."""
+        scope = DecisionScope.PERP_INTRADAY
+        if not setup_entry:
+            return self._deny(state, scope, ("no_setup2_short_setup",))
+        if decision.direction not in {Direction.SELL, Direction.STRONG_SELL}:
+            return self._deny(state, scope, ("setup2_requires_jev_sell",))
+        reasons = []
+        if decision.direction_confidence < rule.confidence_threshold:
+            reasons.append("low_confidence")
+        if decision.entry_quality < rule.entry_quality_min:
+            reasons.append("low_entry_quality")
+        if decision.toxic_flow > rule.toxic_flow_max:
+            reasons.append("toxic_flow")
+        if decision.regime not in rule.allowed_regimes:
+            reasons.append("regime_not_allowed")
+        if decision.risk_level in {RiskLevel.HIGH, RiskLevel.CRITICAL}:
+            reasons.append("model_risk_high")
+        if reasons:
+            return self._deny(state, scope, tuple(reasons))
+        policy = self.coordinator.policy
+        sleeve_target = state.equity*policy.perp_budget_pct*policy.perp_sleeve_notional_pct*size_multiplier
+        gross_room = max(0, state.equity*policy.max_gross_exposure_pct-state.spot_notional)
+        return self.coordinator.authorize_target(
+            state, scope=scope, target_notional=-min(sleeve_target, gross_room),
+            projected_isolated_margin_pct=projected_isolated_margin_pct)
+
     def deterministic_exit(
         self,
         state: ParentPortfolioState,

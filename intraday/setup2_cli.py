@@ -6,9 +6,9 @@ import json
 from intraday import setup2_store
 from intraday.assets import ticker_symbol
 from intraday.config import resolve_database_path
-from intraday.contracts import ScopedRuleCandidate, SpotRuleParameters
+from intraday.contracts import PerpRuleParameters, Regime, ScopedRuleCandidate, SpotRuleParameters
 
-MARKETS = ('spot',)  # perp joins with stage C.
+MARKETS = ('spot', 'perp')
 
 
 def add_setup2_parser(commands):
@@ -45,7 +45,10 @@ def candidate_rule(store, symbol, market, *, actor, reason, now, retire_open=Fal
         rule_id=f"{symbol.lower()}-{scope.value.replace('_', '-')}-setup2-v1-{int(now.timestamp())}",
         parent_rule_id=champion.rule_id if champion else "bootstrap", thesis_id="adr-006",
         symbol=symbol, scope=scope,
-        parameters=SpotRuleParameters(entry_profile="setup2_v1", entry_window=30, exit_window=10),
+        parameters=(SpotRuleParameters(entry_profile="setup2_v1", entry_window=30, exit_window=10)
+                    if market == "spot" else
+                    PerpRuleParameters(entry_profile="setup2_v1",
+                                       allowed_regimes=(Regime.TRENDING_DOWN, Regime.SIDEWAYS))),
         created_at=now, model_ref="operator/"+actor.strip(), prompt_version="setup2-v1",
         rationale=reason.strip())
     store.register_scoped_rule(candidate)

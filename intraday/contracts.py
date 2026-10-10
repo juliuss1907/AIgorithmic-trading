@@ -827,6 +827,16 @@ class PerpRuleParameters(RuleParameters):
     """Bounded model-tunable filters for the isolated 3x perpetual sleeve."""
 
     confidence_threshold: float = Field(default=0.85, ge=0.69, le=1.0, allow_inf_nan=False)
+    # Setup-2 short (ADR-006): closed-H4 rule signal, Jev may only confirm SELL; never model-tuned.
+    entry_profile: Literal["jev_intraday_v1", "setup2_v1"] = "jev_intraday_v1"
+
+    @model_serializer(mode="wrap")
+    def omit_default_profile(self, handler):
+        # Legacy dumps, content hashes and dataset fingerprints stay byte-identical.
+        payload = handler(self)
+        if self.entry_profile == "jev_intraday_v1":
+            payload.pop("entry_profile", None)
+        return payload
 
 
 class SpotRuleParameters(StrictContract):
@@ -871,6 +881,12 @@ class SpotRuleParameters(StrictContract):
 class PerpRuleProposal(StrictContract):
     parameters: PerpRuleParameters
     rationale: str = Field(min_length=20, max_length=2000)
+
+    @model_validator(mode="after")
+    def models_never_select_setup2(self):
+        if self.parameters.entry_profile != "jev_intraday_v1":
+            raise ValueError("model proposals may only tune legacy Jev intraday rules")
+        return self
 
 
 class SpotRuleProposal(StrictContract):

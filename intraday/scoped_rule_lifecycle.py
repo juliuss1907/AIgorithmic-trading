@@ -64,6 +64,9 @@ def rule_allows_answers(rule, answers: dict) -> bool:
             and toxic <= 0.30
         )
     quality = float(answers["entry_quality"]["score"]) + 1
+    if getattr(rule.parameters, "entry_profile", None) == "setup2_v1" and direction not in {
+            Direction.SELL, Direction.STRONG_SELL}:
+        return False  # The Setup-2 short is rule-generated; Jev may only confirm its side.
     return (
         confidence >= rule.parameters.confidence_threshold
         and quality >= rule.parameters.entry_quality_min

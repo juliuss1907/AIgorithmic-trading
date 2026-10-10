@@ -4,6 +4,22 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-10 — Runtime 3 coin, đợt C: Perp short theo Setup-2
+
+Nhánh: `feature/three-coin-runtime`. Đã làm xong, chưa deploy.
+
+- **Đổi so với kế hoạch: không nâng schema lên v24.**
+  - Rule Perp Setup-2 nằm trong scope `perp_intraday` có sẵn, với `entry_profile=setup2_v1`, giống cách làm cho Spot.
+  - Tập coin vẫn kiểm soát qua scope logic `perp_4h`, nên vòng Jev 30 giây vẫn tắt.
+  - Không cần rebuild bảng nào, mọi container vẫn đọc v23. Lý do và các đánh đổi ghi trong ADR-006.
+- **Gate:** `perp_setup2_entry` chỉ mở short khi rule bắn tín hiệu và Jev trả lời SELL hoặc STRONG_SELL. `rule_allows_answers` cũng yêu cầu SELL. LLM không được chọn profile này.
+- **Worker:** job `asset_perp_setup2_<coin>` chạy mỗi 4 giờ, chỉ cho coin đang hoạt động hoặc coin trong watch. Mỗi lần đồng bộ nến Perp, đánh giá một nến, và chỉ gọi Jev khi coin đang hoạt động và setup đạt đủ filter.
+- **Replay:** nhánh short có trailing stop tối đa 10% phía trên giá vào, tính funding ở mức nến, bắt buộc Isolated 1x, dừng ở 3% hoặc 15%.
+- **Demo:**
+  - Short Setup-2 cần Isolated 1x và thoát theo Donchian, không dùng tín hiệu Take Profit của Jev.
+  - Trailing stop trên sàn được thay theo thứ tự **đặt stop mới rồi mới hủy stop cũ**, và chỉ được siết lại.
+- **Kiểm thử:** 6 test mới. 1415 pass, 1 fail có sẵn từ trước.
+
 ## 2026-10-10 — Runtime 3 coin, đợt B: Spot chạy theo Setup-2
 
 Nhánh: `feature/three-coin-runtime`. Đã làm xong, chưa deploy. Theo [ADR-006](docs/decisions/006-three-coin-runtime.md).

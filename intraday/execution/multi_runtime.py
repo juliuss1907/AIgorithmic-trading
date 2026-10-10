@@ -243,9 +243,12 @@ class MultiDemoRuntime:
             if self._quantity(venue,market):
                 raise ValueError("route must be flat before explicit activation")
             # Allocated risk history is never reset by reactivation.
+            setup2 = getattr(source.rule().parameters,"entry_profile",None) == "setup2_v1"
+            if setup2 and market == "perp" and self._leverage(symbol) != 1:
+                raise ValueError("Setup-2 Perp requires Isolated 1x for this pair")
             route = {"symbol":symbol,"market":market,"active":True,"evaluation_id":evaluation_id,
                      "rule_id":report["rule_id"],"stop_distance":float(DemoAllocation.model_validate(p["allocation"]).spot_emergency_stop_pct)
-                     if market=="spot" else source.rule().parameters.stop_distance_pct,
+                     if market=="spot" else .10 if setup2 else source.rule().parameters.stop_distance_pct,
                      "entry_id":None,"consumed_bar":None}
             previous = p["routes"].get(market+":"+symbol)
             if previous:
@@ -323,10 +326,10 @@ class MultiDemoRuntime:
                     total += max(Decimal(0),intent.quantity-update.executed_quantity)*quote.ask/snapshot.leverage
         return total
 
-    def _clean_stops(self,venue):
+    def _clean_stops(self,venue,*,keep=None):
         coordinator = OrderCoordinator(self.journal,venue)
         for intent,update in self._orders(venue):
-            if intent.order_type != "MARKET" and not update.terminal:
+            if intent.order_type != "MARKET" and not update.terminal and intent.intent_id != keep:
                 if not coordinator.cancel(intent).terminal:
                     raise ExecutionUnavailable("protective cancellation not confirmed")
 
@@ -359,6 +362,15 @@ class MultiDemoRuntime:
         coordinator = OrderCoordinator(self.journal,venue)
         if order:
             update = coordinator.reconcile(order[0])
+        elif market == "perp" and route.get("signal_atr"):
+            # Reduce-only Perp stops can coexist: place the tighter stop, then cancel the old one,
+            # so a Setup-2 short is never unprotected while its trail moves.
+            intent = OrderIntent(intent_id=stop_id,account=venue.account_ref,symbol=symbol,market=market,
+                                 side="SELL" if qty>0 else "BUY",quantity=amount,order_type="STOP_MARKET",
+                                 reduce_only=True,stop_price=trigger,created_at=now)
+            update = coordinator.submit(intent)
+            if update.status == "NEW":
+                self._clean_stops(venue,keep=stop_id)
         else:
             self._clean_stops(venue)
             # Cancelling an old stop can race a fill; recompute before replacing.
@@ -523,8 +535,10 @@ class MultiDemoRuntime:
                 if rule.rule_id != route["rule_id"]:
                     raise ExecutionUnavailable("champion_changed_requires_reactivation")
                 source.evaluation(route["evaluation_id"],now=now)
-                observation,bar = source.spot_setup(now=now,rule=rule) if market=="spot" else (None,None)
-                if market=="spot" and observation.exit and self._quantity(venue,market):
+                setup2 = getattr(rule.parameters,"entry_profile",None) == "setup2_v1"
+                observation,bar = (source.spot_setup(now=now,rule=rule) if market=="spot" else
+                                   source.setup2_signal(now=now) if setup2 else (None,None))
+                if (market=="spot" or setup2) and observation.exit and self._quantity(venue,market):
                     self._close(p,route,venue,now=now,reason="donchian_exit")
                     results.append({"symbol":symbol,"market":market,"status":"exit"});continue
                 research,decision,rule_id = source.latest_decision(now=self.clock())
@@ -534,19 +548,19 @@ class MultiDemoRuntime:
                 continue
             qty = self._quantity(venue,market)
             if qty:
-                if market=="perp" and decision.direction.value=="Take Profit":
+                if market=="perp" and not setup2 and decision.direction.value=="Take Profit":
                     self._close(p,route,venue,now=now,reason="signal_exit")
                 continue  # Never pyramid, flip or re-enter in an exit tick.
             # Long public/account scans must not leave a stale quote authorizing entry.
             quote = venue.quote(symbol,now=self.clock())
             snapshot = venue.account_snapshot(now=self.clock())
             self._account_check(venue,market,snapshot)
-            if (self.clock()-decision.created_at).total_seconds() > (14400 if market=="spot" else 45):
+            if (self.clock()-decision.created_at).total_seconds() > (14400 if market=="spot" or setup2 else 45):
                 continue
             price = Decimal(str(research.features["reference_price" if market=="spot" else "mark_price"]))
             if abs(quote.mark/price-1)>Decimal(".01") or quote.ask/quote.bid-1>Decimal(".001"):
                 continue
-            if market=="spot" and (route.get("consumed_bar")==bar or int(decision.created_at.timestamp()*1000)<bar):
+            if (market=="spot" or setup2) and (route.get("consumed_bar")==bar or int(decision.created_at.timestamp()*1000)<bar):
                 continue
             # Gross aggregate projection deliberately does not net opposing Perp coins.
             state = ParentPortfolioState(initial_equity=float(plan.capital),realized_pnl=float(equity-plan.capital),
@@ -555,7 +569,7 @@ class MultiDemoRuntime:
                 mark_price=1,spot_price=1,perp_mark_price=1,day_start_equity=float(p["day_start_equity"]),
                 high_water_mark=float(p["high_water_mark"]),entries_paused=False,paper_active=True,updated_at=now)
             cap = plan.target_cap(symbol,market)
-            if market=="spot":
+            if market=="spot" or setup2:
                 cap *= Decimal(str(observation.size_multiplier))
             gross_cap,perp_cap,margin_cap = self._envelope(plan)
             cap = min(cap, max(Decimal(0),equity*gross_cap-spot_gross-perp_gross))
@@ -568,6 +582,9 @@ class MultiDemoRuntime:
             auth = (gate.spot_entry(state,decision,rule.parameters,donchian_entry=observation.entry,
                                        size_multiplier=observation.size_multiplier,scope=DecisionScope.SPOT_4H,
                                        projected_isolated_margin_pct=projected_margin) if market=="spot"
+                    else gate.perp_setup2_entry(state,decision,rule.parameters,setup_entry=observation.entry,
+                                                size_multiplier=float(observation.size_multiplier),
+                                                projected_isolated_margin_pct=projected_margin) if setup2
                     else gate.perp_entry(state,decision,rule.parameters,projected_isolated_margin_pct=projected_margin))
             if not auth.allowed or not auth.target_notional:
                 continue

@@ -13,7 +13,9 @@ from intraday.contracts import DecisionScope
 
 EXTENSION_VERSION = '1'
 WIDTHS = {'4h': setup2.H4, '15m': setup2.M15}
-SCOPES = {'spot': DecisionScope.SPOT_4H}  # perp_4h joins in stage C.
+# Database scope per market. Perp Setup-2 rules live under perp_intraday with entry_profile
+# setup2_v1 (no schema rebuild); the active set gates them through its logical 'perp_4h' scope.
+SCOPES = {'spot': DecisionScope.SPOT_4H, 'perp': DecisionScope.PERP_INTRADAY}
 
 
 def installed(connection):
@@ -159,7 +161,7 @@ def run_setup2_observation(store, provider, snapshot, *, rule, market, now):
     symbol = snapshot.symbol
     anchor = coin_anchor(store, symbol)
     observation = evaluate(store, symbol, market, anchor=anchor, now=now)
-    active = active_set.is_active(store, symbol, scope) is True
+    active = active_set.is_active(store, symbol, active_set.RULE_SCOPES[market]) is True
     if not observation.entry or not active:
         status = 'skipped_no_setup' if active else 'skipped_inactive'
         record_observation(store, symbol, market, rule.rule_id, observation, active=active, jev_status=status, now=now)
