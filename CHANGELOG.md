@@ -4,6 +4,20 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-10 — Công cụ A/B offline: Jev nhận số hay nhận ký tự
+
+Nhánh: `feature/three-coin-runtime`. Câu hỏi của Julius sau khi đọc bài của alex saint: có nên đổi trạng thái Jev từ số sang ký tự. Chi tiết: [compact-state-ab](docs/compact-state-ab.md).
+
+- **Phát hiện:** hệ thống đã có `compact_v1` (12 token danh mục) và A/B shadow, nhưng **VPS chưa từng chạy một lần gọi compact nào** (115.141 lần numeric, 0 lần compact), vì nhánh shadow nằm ở paper worker còn VPS chạy chế độ soak.
+- **Vì sao không chờ A/B trực tiếp:** với Setup-2, Jev chỉ được gọi vài lần mỗi tuần, nên 1.000 cặp sẽ mất hàng chục năm. Chi phí cũng không còn là lý do để đổi.
+- **Công cụ mới `intraday/replay_v2/compact_ab.py`:**
+  - Chạy lại compact và numeric trên snapshot đã lưu, cùng model, cùng thời điểm, rồi chấm bằng kết quả giá 15 phút đã trưởng thành.
+  - Mở source ở chế độ chỉ đọc; cuộc gọi ghi vào scratch store riêng.
+  - Có `--dry-run`, `--max-calls`, `--max-usd`.
+  - Dùng đúng tiêu chí sẵn có (độ chính xác không kém quá 2pp, Brier không kém quá 0,02, giảm ≥15% token, ≥1.000 cặp), bỏ tiêu chí 14 ngày vì chỉ áp cho lúc thu thập; thêm điều kiện khoảng tin cậy bootstrap.
+- **Chưa chạy thật:** cần nạp credit OpenRouter và chạy trong container admin của VPS (có secrets); tốn khoảng $0,2–0,3. Chạy thật chờ Julius duyệt.
+- **Kiểm thử:** 7 test mới.
+
 ## 2026-10-10 — Runtime 3 coin, đợt C: Perp short theo Setup-2
 
 Nhánh: `feature/three-coin-runtime`. Đã làm xong, chưa deploy.
