@@ -26,6 +26,8 @@ def add_active_set_parser(commands):
         command.add_argument("--coin", action="append", default=[], metavar="COIN:MODE:SPOT_WEIGHT:PERP_WEIGHT",
                              help="explicit per-coin mode and weights; repeat per coin")
         command.add_argument("--split", default="60/40", metavar="SPOT/PERP", help="capital split in percent")
+        command.add_argument("--watch", action="append", default=[], metavar="COIN",
+                             help="rotation candidate: rule-only Setup-2 soak, no Jev and no trading")
         command.add_argument("--execution-database", type=Path,
                              default=Path("/app/state/execution/binance-demo.sqlite3"))
         command.add_argument("--no-demo-portfolio", action="store_true",
@@ -35,8 +37,8 @@ def add_active_set_parser(commands):
 
 
 def _anchor(previous, symbol, now):
-    if previous and symbol in previous.plan.coins:
-        return previous.plan.coins[symbol].indicator_anchor
+    if previous and previous.plan.anchor(symbol):
+        return previous.plan.anchor(symbol)
     if previous is None:
         return INITIAL_ANCHOR
     epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -48,6 +50,7 @@ def build_plan(arguments, previous, now):
     if not slash:
         raise ValueError("--split requires SPOT/PERP percentages")
     splits = dict(spot_split=Decimal(spot)/100, perp_split=Decimal(perp)/100)
+    watch = {ticker_symbol(s): _anchor(previous, ticker_symbol(s), now) for s in getattr(arguments, "watch", [])}
     if bool(arguments.coins) == bool(arguments.coin):
         raise ValueError("use either --coins for equal weights or one --coin per coin")
     if arguments.coins:
@@ -55,8 +58,9 @@ def build_plan(arguments, previous, now):
         anchors = {_anchor(previous, s, now) for s in symbols}
         if len(anchors) != 1:
             raise ValueError("equal-weight switches need one anchor; use --coin per coin")
-        return active_set.equal_plan(symbols, mode=arguments.mode, anchor=anchors.pop(), **{
+        plan = active_set.equal_plan(symbols, mode=arguments.mode, anchor=anchors.pop(), **{
             k: str(v) for k, v in splits.items()})
+        return active_set.ActiveSetPlan.model_validate({**plan.model_dump(), "watch": watch})
     coins = {}
     for item in arguments.coin:
         parts = item.split(":")
@@ -68,7 +72,7 @@ def build_plan(arguments, previous, now):
         coins[symbol] = active_set.CoinPlan(mode=parts[1], spot_weight=Decimal(parts[2]),
                                             perp_weight=Decimal(parts[3]),
                                             indicator_anchor=_anchor(previous, symbol, now))
-    return active_set.ActiveSetPlan(coins=coins, **splits)
+    return active_set.ActiveSetPlan(coins=coins, watch=watch, **splits)
 
 
 def _execution_check(arguments):

@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from intraday.active_set_cli import add_active_set_parser, dispatch_active_set
 from intraday.setup2_cli import add_setup2_parser, dispatch_setup2
 from intraday.active_set import (allows as active_set_allows, is_active as active_set_is_active,
-                                 record_skip as active_set_skip)
+                                 record_skip as active_set_skip, watched as active_set_watched)
 from intraday.assets import ASSET_REGISTRY, asset_spec
 from intraday.asset_readiness import build_asset_readiness, format_asset_readiness
 from intraday.replay_v2.cli import add_replay_parser, dispatch_replay, docker_replay_command, dispatch_gate_command
@@ -1689,7 +1689,8 @@ def _run_registered_asset_cycles(
                         store.load_scoped_challenger(scope, symbol=symbol)
                         or store.load_active_scoped_rule(scope, symbol=symbol)
                     )
-                    if (spot_rule is not None and active_set_allows(store, symbol, scope)
+                    if (spot_rule is not None
+                            and (active_set_allows(store, symbol, scope) or active_set_watched(store, symbol))
                             and getattr(spot_rule.parameters, "entry_profile", "donchian_v1") == "setup2_v1"):
                         from intraday.setup2_store import coin_anchor, sync as setup2_sync
                         setup2_sync(store, symbol, "spot", anchor=coin_anchor(store, symbol), now=now)

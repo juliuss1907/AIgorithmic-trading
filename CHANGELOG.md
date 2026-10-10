@@ -4,6 +4,32 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-10 — Runtime 3 coin, đợt B: Spot chạy theo Setup-2
+
+Nhánh: `feature/three-coin-runtime`. Đã làm xong, chưa deploy. Theo [ADR-006](docs/decisions/006-three-coin-runtime.md).
+
+- **Evaluator live `intraday/setup2.py`:**
+  - Dùng lại nguyên các hàm chỉ báo, Donchian, bộ lọc và volume profile của phần research, cùng `ATRTrail`.
+  - Chỉ báo tính trên chuỗi H4 bắt đầu từ một mốc cố định (anchor).
+  - Trailing stop tính lại hoàn toàn từ nến đã lưu, giới hạn 10% so với giá vào, nên khởi động lại không làm mất trạng thái.
+  - Test parity trên dữ liệu ngẫu nhiên: live trùng research ở mọi chỉ báo, profile, cờ, bộ lọc, hệ số size và mọi lần cập nhật trailing stop, cho cả long lẫn short.
+- **Profile rule `setup2_v1`:**
+  - Thêm vào `SpotRuleParameters`. Mặc định không ghi ra JSON, nên hash của rule cũ không đổi.
+  - Khóa ở 30/10 và ATR14. LLM không được chọn profile này; đường Donchian cũ từ chối chạy rule Setup-2.
+- **Dữ liệu và soak:**
+  - `setup2_store`: lưu nến Spot/Perp H4/M15 (không cho sửa), mỗi nến H4 có một dòng observation làm heartbeat.
+  - Jev chỉ được gọi khi coin đang hoạt động và setup đạt đủ filter.
+  - Lệnh `aigt setup2 backfill|evaluate|candidate`.
+- **Replay và gate v2:**
+  - Engine có nhánh Setup-2: một lượt tính chỉ báo, quy mô 1/3 của phần 60/40, trailing stop giới hạn 10%, dừng ở 3% hoặc 15%.
+  - Gate: cần 600 nến từ anchor và DD < 15%; soak cần 14 ngày và heartbeat ≥95%, không cần 6 setup; không so champion khi khác profile.
+  - Không đổi pin version.
+- **Thực thi Demo:**
+  - Tín hiệu Spot đọc từ nến đã lưu.
+  - Stop gốc trên sàn là trailing stop, chỉ siết lại. Thiếu dữ liệu thì giữ stop cũ, hoặc stop 10%.
+- **Danh sách `watch`:** tối đa 3 coin ứng viên chạy soak theo rule, không gọi Jev và không trade, để có bằng chứng khi đổi coin. Thêm bằng `aigt active-set switch --watch COIN`.
+- **Kiểm thử:** 1409 pass, 1 fail có sẵn từ trước.
+
 ## 2026-10-10 — Runtime 3 coin, đợt A: tập coin hoạt động và giới hạn theo tỷ lệ chia vốn
 
 Nhánh: `feature/three-coin-runtime`. Quyết định ghi tại [ADR-006](docs/decisions/006-three-coin-runtime.md): xây runtime trước khi paper-test ADR-005 có kết quả. Làm 3 đợt A → B → C, mỗi đợt chỉ deploy khi Julius duyệt riêng.

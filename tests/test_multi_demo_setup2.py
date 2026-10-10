@@ -26,6 +26,14 @@ def setup2_source(current):
         def active_set(self):
             return current['version']
 
+        def spot_setup(self, *, now, rule):
+            observation, bar = super().spot_setup(now=now, rule=rule)
+            return SimpleNamespace(**observation.__dict__, atr=Decimal(2)), bar
+
+        def setup2_trail(self, *, side, entry_price, signal_atr, entered_at, now):
+            current['trail_calls'] = current.get('trail_calls', 0)+1
+            return entry_price*current.get('trail_ratio', Decimal('.95'))
+
         def rule(self):
             legacy = SpotRuleParameters()
             parameters = SimpleNamespace(**legacy.model_dump(), entry_profile=current['profile'])
@@ -72,6 +80,13 @@ def test_setup2_spot_sleeve_follows_the_split_and_a_new_version_pauses_entries(t
     assert result['status'] == 'running', result
     # Legacy caps stop at 30% of capital; the 60/40 split lets one full-weight coin reach 60%.
     assert Decimal('300') < Decimal(result['spot_gross']) <= Decimal('600')
+    stops = [i for i, u in exchange.orders.values() if i.symbol == 'ETHUSDT' and i.order_type == 'STOP_LOSS']
+    assert stops and stops[-1].stop_price > Decimal(90)  # ATR trail (5%) instead of the 10% emergency stop.
+    first = stops[-1].stop_price
+    current['trail_ratio'] = Decimal('.80')  # A looser trail must never move the stop down.
+    run.cycle(now=NOW)
+    stops = [i for i, u in exchange.orders.values() if i.symbol == 'ETHUSDT' and i.order_type == 'STOP_LOSS']
+    assert stops[-1].stop_price == first and current['trail_calls'] >= 2
     current['version'] = version('v2')
     paused = run.cycle(now=NOW)
     assert paused == {'status': 'paused', 'reason': 'active_set_changed_reconfigure'}

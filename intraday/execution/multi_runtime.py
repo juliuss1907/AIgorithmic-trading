@@ -347,6 +347,8 @@ class MultiDemoRuntime:
         if market=="perp" and amount != abs(qty) or amount<=0:
             raise ExecutionUnavailable("protective quantity cannot match managed position")
         trigger = entry*(1-Decimal(str(route["stop_distance"]))*(1 if qty>0 else -1))
+        if route.get("signal_atr"):
+            trigger = self._setup2_trigger(route,entry,1 if qty>0 else -1,now=now,fallback=trigger)
         trigger = (trigger/rules.price_tick).to_integral_value(rounding=ROUND_CEILING if qty>0 else ROUND_DOWN)*rules.price_tick
         rules.validate_price(trigger)
         rules.validate_quantity(amount,trigger,reducing=market=="perp")
@@ -369,6 +371,19 @@ class MultiDemoRuntime:
         confirmed = venue.account_snapshot(now=now)
         if update.status != "NEW" or not any(o.client_id==stop_id and o.symbol==symbol for o in confirmed.open_orders):
             raise ExecutionUnavailable("native protection unconfirmed")
+
+    def _setup2_trigger(self,route,entry,side,*,now,fallback):
+        """Capped ATR trail that only tightens; missing data keeps the last (or 10%) stop."""
+        previous = Decimal(route["trail_stop"]) if route.get("trail_stop") else fallback
+        try:
+            trail = self.source_factory(route["symbol"],route["market"]).setup2_trail(
+                side=side,entry_price=entry,signal_atr=Decimal(route["signal_atr"]),
+                entered_at=datetime.fromisoformat(route["entered_at"]),now=now)
+        except (ValueError,KeyError,TypeError,ArithmeticError):
+            trail = previous
+        stop = max(previous,trail) if side > 0 else min(previous,trail)
+        route["trail_stop"] = str(stop)
+        return stop
 
     def _close(self,p,route,venue,*,now,reason):
         self._reconcile(venue)
@@ -578,6 +593,11 @@ class MultiDemoRuntime:
             if (self.clock()-quote.observed_at).total_seconds()>20:
                 continue
             route.update(entry_id=entry_id,consumed_bar=bar)
+            if getattr(rule.parameters,"entry_profile","donchian_v1") == "setup2_v1":
+                # Trail inputs: recomputed statelessly from stored bars at every protection pass.
+                route.update(signal_atr=str(observation.atr),entered_at=self.clock().isoformat(),trail_stop=None)
+            else:
+                route.update(signal_atr=None,entered_at=None,trail_stop=None)
             self._save(p,"portfolio_entry_reserved")
             intent = OrderIntent(intent_id=entry_id,account=venue.account_ref,symbol=symbol,market=market,
                                  side="BUY" if market=="spot" or auth.target_notional>0 else "SELL",quantity=amount,

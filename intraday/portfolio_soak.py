@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from intraday.active_set import allows, record_skip
+from intraday.active_set import allows, record_skip, watched
 from intraday.assets import AssetStage
 from intraday.contracts import DecisionScope, FeatureSnapshot
 from intraday.journal import _fallback_trace, record_scoped_signal
@@ -201,6 +201,11 @@ def run_asset_lifecycle_observation(
     store.record_snapshot(snapshot)
     if not allows(store, snapshot.symbol, scope):
         # Outside the operator active set (ADR-004): data only, never the model boundary.
+        if (watched(store, snapshot.symbol) and spot_rule is not None and scope is DecisionScope.SPOT_4H
+                and getattr(spot_rule.parameters, "entry_profile", "donchian_v1") == "setup2_v1"):
+            from intraday.setup2_store import run_setup2_observation
+            # Rotation candidate: rule-only soak evidence; run_setup2_observation never calls Jev here.
+            return run_setup2_observation(store, provider, snapshot, rule=spot_rule, market="spot", now=now)
         return record_skip(store, snapshot.symbol, scope, now=now)
     if lifecycle.stage is AssetStage.DISABLED:
         return "disabled"

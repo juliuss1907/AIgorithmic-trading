@@ -55,6 +55,19 @@ class ActiveSetPlan(BaseModel):
     perp_leverage: Literal[1] = 1
     rule_profile: Literal['setup2_v1'] = 'setup2_v1'
     perp_intraday_enabled: Literal[False] = False
+    # Rotation candidates (ADR-004): rule-only Setup-2 soak, no Jev and no trading.
+    watch: dict[str, datetime] = Field(default_factory=dict)
+
+    @field_validator('watch')
+    @classmethod
+    def canonical_watch(cls, watch):
+        if len(watch) > MAX_COINS or any(normalize_symbol(s) != s for s in watch):
+            raise ValueError(f'watch at most {MAX_COINS} canonical USDT symbols')
+        for anchor in watch.values():
+            if anchor.tzinfo is None or anchor.utcoffset() != timedelta(0) or (
+                    anchor-datetime(1970, 1, 1, tzinfo=timezone.utc)) % H4:
+                raise ValueError('watch anchors must be UTC H4 boundaries')
+        return dict(sorted(watch.items()))
 
     @field_validator('coins')
     @classmethod
@@ -75,7 +88,13 @@ class ActiveSetPlan(BaseModel):
                 raise ValueError(f'{market} weights must total at most one')
             if total > 0 and getattr(self, market+'_split') <= 0:
                 raise ValueError(f'{market} coins need a positive {market} split')
+        if set(self.watch) & set(self.coins):
+            raise ValueError('a coin is either active or watched, not both')
         return self
+
+    def anchor(self, symbol):
+        coin = self.coins.get(symbol)
+        return coin.indicator_anchor if coin else self.watch.get(symbol)
 
     def scopes(self, symbol):
         coin = self.coins.get(symbol)
@@ -177,6 +196,11 @@ def allows(store, symbol, scope):
     return is_active(store, symbol, scope) is not False
 
 
+def watched(store, symbol, *, version=None):
+    version = version or current(store)
+    return bool(version and normalize_symbol(symbol) in version.plan.watch)
+
+
 def record_skip(store, symbol, scope, *, now):
     """Audit row per coin, scope and H4 slot proving inactive ticks skipped the model boundary."""
     if store.read_only:
@@ -203,13 +227,27 @@ def history_bars(store, symbol, anchor, now):
     return count
 
 
+def setup2_soak_passed(store, symbol, market):
+    """A passing v2 soak evaluation for a Setup-2 rule of this coin and market."""
+    if market != 'spot':
+        return False  # The rule-driven Perp scope arrives with ADR-006 stage C.
+    from intraday.replay_v2.gate_repository import GateRepository
+    repository = GateRepository(store)
+    for row in store.list_scoped_rules(DecisionScope.SPOT_4H, symbol=symbol):
+        rule = store.load_scoped_rule(row['id'])
+        if getattr(rule.parameters, 'entry_profile', None) == 'setup2_v1':
+            latest = repository.latest(rule.rule_id, kind='soak')
+            if latest is not None and latest.status == 'pass':
+                return True
+    return False
+
+
 def rotation_blockers(store, symbol, coin, now):
-    """Fast rotation (ADR-004): history and per-market rule evidence; no backtest needed."""
+    """Fast rotation (ADR-004): history and a passing Setup-2 soak per market; no backtest."""
     blockers = []
     if 'spot' in coin.markets and history_bars(store, symbol, coin.indicator_anchor, now) < WARMUP_BARS:
         blockers.append('history_not_ready')
-    # Setup-2 soak/gate evidence lands with the rule-driven scopes (ADR-006 stages B and C).
-    blockers += [f'{m}_setup2_gate_required' for m in sorted(coin.markets)]
+    blockers += [f'{m}_setup2_gate_required' for m in sorted(coin.markets) if not setup2_soak_passed(store, symbol, m)]
     return blockers
 
 

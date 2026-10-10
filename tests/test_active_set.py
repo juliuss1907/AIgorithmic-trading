@@ -164,7 +164,7 @@ def test_execution_check_reads_the_journal_without_writing(tmp_path):
 
 
 def args(**kw):
-    base = dict(coins=None, coin=[], mode='both', split='60/40')
+    base = dict(coins=None, coin=[], mode='both', split='60/40', watch=[])
     return argparse.Namespace(**{**base, **kw})
 
 
@@ -179,3 +179,19 @@ def test_cli_plans_equal_or_explicit_weights_with_anchors():
     assert (custom.spot_split, custom.perp_split) == (D('.5'), D('.5'))
     with pytest.raises(ValueError, match='either --coins'):
         build_plan(args(coins='ETH', coin=['ETH:both:1:1']), None, NOW)
+
+
+def test_watched_coins_soak_rule_only_and_never_overlap_active_coins(tmp_path):
+    raw = plan().model_dump(mode='json')
+    with pytest.raises(ValueError, match='either active or watched'):
+        active_set.ActiveSetPlan.model_validate({**raw, 'watch': {'ETHUSDT': ANCHOR}})
+    version = active_set.ActiveSetVersion(version_id='v', seq=1, previous_version_id=None, created_at=NOW,
+                                          actor='j', reason='r', plan=plan())
+    watched = build_plan(args(coins='ETH,NEAR,SOL', watch=['HYPE']), version, NOW)
+    assert watched.watch == {'HYPEUSDT': NOW-600*active_set.H4} and watched.anchor('HYPEUSDT') == NOW-600*active_set.H4
+    store = IntradayStore(tmp_path/'intraday.sqlite')
+    active_set.switch(store, watched, actor='j', reason='watch HYPE', now=NOW, execution_check=lambda: None, initial=True)
+    assert active_set.watched(store, 'HYPEUSDT') and not active_set.allows(store, 'HYPEUSDT', DecisionScope.SPOT_4H)
+    blockers = active_set.rotation_blockers(store, 'HYPEUSDT', watched.coins['ETHUSDT'].model_copy(
+        update={'indicator_anchor': watched.watch['HYPEUSDT']}), NOW)
+    assert blockers == ['history_not_ready', 'perp_setup2_gate_required', 'spot_setup2_gate_required']

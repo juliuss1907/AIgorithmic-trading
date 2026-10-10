@@ -113,9 +113,33 @@ class ScopedEvidenceSource(EvidenceSource):
                                toxic_flow=parsed[3],entry_quality=parsed[4],risk_level=parsed[5],model_ref=model_ref,created_at=at)
         return snapshot,decision,row["rules_version"]
 
+    def _reader(self):
+        from intraday.store import IntradayStore
+        return IntradayStore(self.path, read_only=True)
+
+    def setup2_signal(self, *, now):
+        """Setup-2 observation of the last closed H4 bar from stored anchored bars (ADR-006)."""
+        from intraday.setup2_store import coin_anchor, evaluate
+        reader = self._reader()
+        observation = evaluate(reader, self.symbol, self.market, anchor=coin_anchor(reader, self.symbol), now=now)
+        if observation.bar_close is None or not 0 <= (now-observation.bar_close).total_seconds() <= 14700:
+            raise ValueError("Setup-2 closed 4h bars are stale or not warmed up")
+        return observation, int(observation.bar_close.timestamp()*1000)-1
+
+    def setup2_trail(self, *, side, entry_price, signal_atr, entered_at, now):
+        """Stateless capped ATR trail recomputed from stored bars; restarts cannot lose it."""
+        from intraday import setup2
+        from intraday.setup2_store import coin_anchor, list_bars
+        reader = self._reader()
+        anchor = coin_anchor(reader, self.symbol)
+        bars = list_bars(reader, self.symbol, self.market, "4h", since=anchor, until=setup2.floor_h4(now))
+        return setup2.trail_stop(side, entry_price, signal_atr, bars, entered_at=entered_at, anchor=anchor)
+
     def spot_setup(self, *, now, rule):
         if self.market != "spot":
             raise ValueError("Spot setup requires Spot scope")
+        if getattr(rule.parameters, "entry_profile", "donchian_v1") == "setup2_v1":
+            return self.setup2_signal(now=now)
         with self.connect() as c:
             rows = c.execute("SELECT payload_json FROM asset_daily_candles WHERE symbol=? AND interval='4h' "
                              "AND close_time<? ORDER BY open_time DESC LIMIT 200", (self.symbol,int(now.timestamp()*1000))).fetchall()

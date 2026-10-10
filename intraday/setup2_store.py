@@ -145,10 +145,10 @@ def heartbeat(store, symbol, market, rule_id, *, start, end):
 
 def coin_anchor(store, symbol):
     version = active_set.current(store)
-    coin = version.plan.coins.get(symbol) if version else None
-    if coin is None:
-        raise ValueError('setup2 rules run only for coins in the active set')
-    return coin.indicator_anchor
+    anchor = version.plan.anchor(symbol) if version else None
+    if anchor is None:
+        raise ValueError('setup2 rules run only for active or watched coins')
+    return anchor
 
 
 def run_setup2_observation(store, provider, snapshot, *, rule, market, now):

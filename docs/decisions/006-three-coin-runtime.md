@@ -29,7 +29,9 @@ and caps Demo sleeves at 30%/20% of capital with a 50% gross and 10% margin limi
   - LLM auto-proposals, weekly confidence reviews and weekly gates skip inactive scopes;
   - a switch requires a paused and flat Demo portfolio and a flat, paused BTC parent paper
     portfolio; coins rotating in need 600 contiguous H4 bars and Setup-2 gate evidence per
-    enabled market, but no backtest (readiness labels `history_not_ready`, `no_backtest_evidence`).
+    enabled market, but no backtest (readiness labels `history_not_ready`, `no_backtest_evidence`);
+  - up to three `watch` coins collect that evidence: a rule-only Setup-2 soak with no Jev call and
+    no trading, so a later switch has a passing soak to point at.
 - **Caps follow the split:** a Setup-2 Demo allocation (`profile=setup2_v1`) binds the active-set
   version, copies its weights and 60/40 split (`execution demo configure --from-active-set`), and
   derives gross (100%), Perp (40%) and isolated-margin (40% at 1x) limits from it. Portfolio halts
