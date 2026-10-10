@@ -134,6 +134,16 @@ class ParentPortfolioPolicy:
     daily_loss_limit_pct: float = 0.015
     max_drawdown_pct: float = 0.08
 
+    @classmethod
+    def from_split(cls, spot, perp, leverage=1, *, initial_equity=10_000):
+        """Setup-2 caps (ADR-006): full sleeves, limits derived from the operator split."""
+        spot, perp = float(spot), float(perp)
+        return cls(initial_equity=initial_equity, spot_budget_pct=spot, perp_budget_pct=perp,
+                   spot_sleeve_target_pct=1.0, perp_sleeve_notional_pct=1.0,
+                   max_gross_exposure_pct=spot+perp, max_abs_net_delta_pct=max(spot, perp),
+                   max_isolated_margin_pct=perp/leverage, leverage=leverage,
+                   daily_loss_limit_pct=0.03, max_drawdown_pct=0.15)
+
 
 class ParentPortfolioCoordinator:
     def __init__(self, policy: ParentPortfolioPolicy | None = None):

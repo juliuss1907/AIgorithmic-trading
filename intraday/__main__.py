@@ -18,6 +18,9 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from intraday.active_set_cli import add_active_set_parser, dispatch_active_set
+from intraday.active_set import (allows as active_set_allows, is_active as active_set_is_active,
+                                 record_skip as active_set_skip)
 from intraday.assets import ASSET_REGISTRY, asset_spec
 from intraday.asset_readiness import build_asset_readiness, format_asset_readiness
 from intraday.replay_v2.cli import add_replay_parser, dispatch_replay, docker_replay_command, dispatch_gate_command
@@ -185,6 +188,7 @@ def _parser() -> argparse.ArgumentParser:
         "--output-dir", default="state/intraday/cross-venue-replay"
     )
     commands.choices["cross-venue-evaluate"].add_argument("--evidence", required=True)
+    add_active_set_parser(commands)
     serve = commands.add_parser("serve")
     serve.add_argument("--database", default=None)
     serve.add_argument("--execution-database", type=Path, default=None, help="opt-in Perp controller journal; never exchange credentials")
@@ -1002,13 +1006,19 @@ def _portfolio_cli(arguments) -> None:
                                 "BTCUSDT", now=now, candle_limit=max(35, limit)
                             )
                             daily = spot_market.closed_candles()
-                        result["spot_daily"] = run_spot_soak_observation(
-                            store,
-                            provider,
-                            spot_snapshot,
-                            now=now,
-                            rule=spot_rule,
-                            candles=daily,
+                        result["spot_daily"] = (
+                            run_spot_soak_observation(
+                                store,
+                                provider,
+                                spot_snapshot,
+                                now=now,
+                                rule=spot_rule,
+                                candles=daily,
+                            )
+                            if active_set_allows(store, "BTCUSDT", DecisionScope.SPOT_DAILY)
+                            else active_set_skip(
+                                store, "BTCUSDT", DecisionScope.SPOT_DAILY, now=now
+                            )
                         )
                     except Exception as error:
                         store.record_portfolio_soak_tick(
@@ -1034,10 +1044,18 @@ def _portfolio_cli(arguments) -> None:
                 if slot is not None:
                     try:
                         store.record_snapshot(spot_snapshot)
-                        perp_result = run_soak_cycle(
-                            store, provider, snapshot, now=now,
-                            scopes=(DecisionScope.PERP_INTRADAY,),
-                        )
+                        if active_set_allows(store, "BTCUSDT", DecisionScope.PERP_INTRADAY):
+                            perp_result = run_soak_cycle(
+                                store, provider, snapshot, now=now,
+                                scopes=(DecisionScope.PERP_INTRADAY,),
+                            )
+                        else:
+                            store.record_snapshot(snapshot)
+                            perp_result = {
+                                DecisionScope.PERP_INTRADAY.value: active_set_skip(
+                                    store, "BTCUSDT", DecisionScope.PERP_INTRADAY, now=now
+                                )
+                            }
                         result.update(perp_result)
                     except Exception as error:
                         store.finish_scheduler_run(
@@ -1279,9 +1297,13 @@ def _portfolio_cli(arguments) -> None:
             slots = {}
             experiment_pairs = {}
             compact_jobs = {}
-            perp_slot = claim_cadence(
-                store, "paper_perp_numeric", now,
-                config.perp_decision_interval_seconds,
+            perp_slot = (
+                claim_cadence(
+                    store, "paper_perp_numeric", now,
+                    config.perp_decision_interval_seconds,
+                )
+                if active_set_allows(store, "BTCUSDT", DecisionScope.PERP_INTRADAY)
+                else None
             )
             if perp_slot is not None:
                 slots[DecisionScope.PERP_INTRADAY] = (
@@ -1300,7 +1322,8 @@ def _portfolio_cli(arguments) -> None:
                     compact_jobs[DecisionScope.PERP_INTRADAY] = compact_slot
             if (spot_4h_rule is not None and spot_4h_snapshot is not None
                     and spot_4h_event and spot_4h_observation
-                    and spot_4h_observation.entry):
+                    and spot_4h_observation.entry
+                    and active_set_allows(store, "BTCUSDT", DecisionScope.SPOT_4H)):
                 if store.claim_scheduler_run(
                     "paper_spot_4h", datetime.fromtimestamp(
                         cached_4h_close / 1000, timezone.utc
@@ -1709,6 +1732,8 @@ def _run_asset_rule_bootstrap_tick(
             selected_v2 = route_requires_v2(store,symbol,scope)
             if scope is DecisionScope.PERP_INTRADAY and symbol == "BTCUSDT":
                 continue  # Existing BTC Perp champion remains on its legacy lifecycle.
+            if not active_set_allows(store, symbol, scope):
+                continue  # Outside the operator active set (ADR-004); no new soaks.
             if store.load_active_scoped_rule(scope, symbol=symbol):
                 continue
             job = f"asset_baseline_{scope.value}_{symbol.lower()}"
@@ -1834,6 +1859,8 @@ def _run_asset_auto_proposal_tick(
             from intraday.replay_v2.automation import route_requires_v2
             if route_requires_v2(store,symbol,scope):
                 continue  # Weekly deterministic evaluation never auto-tunes/model-calls.
+            if active_set_is_active(store, symbol, scope) is not None:
+                continue  # Active-set rules are fixed Setup-2; inactive coins make no model calls.
             if scope is DecisionScope.PERP_INTRADAY and symbol in confidence_review_symbols:
                 continue
             if scope not in spec.enabled_scopes:
@@ -2018,7 +2045,8 @@ def main() -> None:
             if code:
                 raise SystemExit(code)
             return
-    if arguments.command == "assets" and arguments.database is None and getattr(arguments,"report_dir",None) is None:
+    if (arguments.command == "assets" and arguments.database is None and getattr(arguments,"report_dir",None) is None
+            or arguments.command == "active-set" and arguments.database is None):
         deployment = deployment_cli.load_deployment()
         if deployment is not None:
             code = deployment_cli.execute(
@@ -2104,6 +2132,9 @@ def main() -> None:
         return
     if arguments.command == "assets":
         _assets_cli(arguments)
+        return
+    if arguments.command == "active-set":
+        dispatch_active_set(arguments)
         return
     if arguments.command == "provider":
         _provider_cli(arguments)

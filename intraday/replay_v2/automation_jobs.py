@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import fcntl
 import os
 
+from intraday.active_set import allows
 from intraday.replay_v2.automation import MARKETS, install, policy, projection, last_job
 from intraday.replay_v2.artifacts import resolve_report_dir
 from intraday.replay_v2.contracts import utc
@@ -109,6 +110,8 @@ def run_tick(store, *, now, report_dir=None, fetch_funding=None):
             for market,scope in MARKETS.items():
                 if scope not in spec.enabled_scopes or not (p := policy(store,market)) or not p['enabled']:
                     continue
+                if not allows(store,symbol,scope):
+                    continue  # Outside the operator active set (ADR-004): evidence kept, no weekly gate.
                 key = f'{symbol}:{market}'
                 state = None
                 try:

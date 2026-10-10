@@ -20,6 +20,11 @@ class ScopedEvidenceSource(EvidenceSource):
         self.symbol, self.market = ticker_symbol(symbol), market
         self.scope = DecisionScope.SPOT_4H if market == "spot" else DecisionScope.PERP_INTRADAY
 
+    def active_set(self):
+        from intraday.active_set import current
+        from intraday.store import IntradayStore
+        return current(IntradayStore(self.path, read_only=True))
+
     def route(self):
         with self.connect() as c:
             route = c.execute("SELECT * FROM asset_venue_routes WHERE symbol=? AND market=?", (self.symbol,self.market)).fetchone()

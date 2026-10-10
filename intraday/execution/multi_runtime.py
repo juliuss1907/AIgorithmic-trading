@@ -13,12 +13,34 @@ from intraday.contracts import DecisionScope
 from intraday.execution.allocation import DemoAllocation
 from intraday.execution.contracts import ExecutionUnavailable, OrderIntent
 from intraday.execution.journal import OrderCoordinator
-from intraday.portfolio_coordinator import ParentPortfolioState
+from intraday.portfolio_coordinator import ParentPortfolioCoordinator, ParentPortfolioPolicy, ParentPortfolioState
 from intraday.scoped_gate import ScopedEntryGate
 
 
 def identity(*parts):
     return "ag"+hashlib.sha256(":".join(map(str,parts)).encode()).hexdigest()[:32]
+
+
+def require_paused_and_flat(journal):
+    """Journal-only check for audited active-set changes; configure re-verifies with the exchange."""
+    from intraday.execution.contracts import AccountRef
+    status = journal.status()
+    if any(p.get("paused") is not True for p in status["portfolios"].values()):
+        raise ValueError("pause the Demo portfolio before changing the active set")
+    if any(c.get("paused") is not True for c in status["accounts"].values()):
+        raise ValueError("pause legacy Demo execution before changing the active set")
+    for key in status["portfolios"]:
+        base = AccountRef.from_key(key)
+        for market in ("spot","perp"):
+            ref = base.model_copy(update={"market":market})
+            recorded = journal.orders(ref)
+            if any(not u.terminal or sum((f.quantity for f in u.fills),Decimal(0)) != u.executed_quantity for i,u in recorded):
+                raise ValueError("reconcile non-terminal Demo intents before changing the active set")
+            for symbol in {i.symbol for i,u in recorded}:
+                qty = (journal.spot_inventory(ref,symbol,require_valued_fees=False)["quantity"] if market=="spot" else
+                       sum((u.executed_quantity*(1 if i.side=="BUY" else -1) for i,u in recorded if i.symbol==symbol),Decimal(0)))
+                if qty:
+                    raise ValueError("flatten every Demo position before changing the active set")
 
 
 class MultiDemoRuntime:
@@ -29,6 +51,42 @@ class MultiDemoRuntime:
         self.venue_factory,self.source_factory = venue_factory,source_factory
         self.clock = clock or (lambda:datetime.now(timezone.utc))
         self.gate = ScopedEntryGate()
+
+    @staticmethod
+    def _envelope(plan):
+        """Gross, Perp-gross and isolated-margin fractions of equity; Setup-2 follows the split at 1x."""
+        if plan.profile == "legacy":
+            return Decimal(".50"),Decimal(".30"),Decimal(".10")
+        return plan.spot_split+plan.perp_split,plan.perp_split,plan.perp_split
+
+    @staticmethod
+    def _loss_limits(plan):
+        """Daily-loss and drawdown floors; Setup-2 uses 3% and 15% (ADR-006)."""
+        return (Decimal(".985"),Decimal(".92")) if plan.profile == "legacy" else (Decimal(".97"),Decimal(".85"))
+
+    def _gate_for(self,plan):
+        if plan.profile == "legacy":
+            return self.gate
+        policy = ParentPortfolioPolicy.from_split(plan.spot_split,plan.perp_split,1,initial_equity=float(plan.capital))
+        return ScopedEntryGate(ParentPortfolioCoordinator(policy))
+
+    def _bound_active_set(self,plan):
+        symbol,market = plan.routes()[0]
+        return self.source_factory(symbol,market).active_set()
+
+    def _check_active_set(self,plan):
+        from intraday.active_set import RULE_SCOPES
+        version = self._bound_active_set(plan)
+        if version is None or version.version_id != plan.active_set_version_id:
+            raise ValueError("setup2 allocation must bind the current active-set version")
+        coins = version.plan.coins
+        for market,weights in (("spot",plan.spot_weights),("perp",plan.perp_weights)):
+            expected = {s:getattr(c,market+"_weight") for s,c in coins.items() if getattr(c,market+"_weight") > 0}
+            if {s:w for s,w in weights.items() if w > 0} != expected:
+                raise ValueError("setup2 allocation weights must equal the active set")
+        if (plan.spot_split,plan.perp_split) != (version.plan.spot_split,version.plan.perp_split):
+            raise ValueError("setup2 allocation splits must equal the active set")
+        return version,RULE_SCOPES
 
     def _save(self,p,kind):
         self.journal.save_portfolio(self.account,p,now=self.clock(),kind=kind)
@@ -108,6 +166,8 @@ class MultiDemoRuntime:
                            sum((u.executed_quantity*(1 if i.side=="BUY" else -1) for i,u in recorded if i.symbol==symbol),Decimal(0)))
                     if qty:
                         raise ValueError("pause and flatten before changing allocation")
+            if plan.profile == "setup2_v1":
+                self._check_active_set(plan)
             previous = self.journal.portfolio(self.account)
             if previous and (previous.get("paused") is not True or Decimal(previous["allocation"]["capital"]) != plan.capital):
                 raise ValueError("allocation changes require a paused flat portfolio; capital/risk history cannot reset")
@@ -126,7 +186,9 @@ class MultiDemoRuntime:
                 if snapshot.open_orders or market=="perp" and snapshot.positions:
                     raise ValueError("configuration requires flat Perp and no exchange open orders")
                 available = snapshot.balance("USDT").free if market=="spot" else snapshot.available_balance
-                if available < plan.capital*(Decimal(".60") if market=="spot" else Decimal(".40")):
+                sleeve = ({"spot":Decimal(".60"),"perp":Decimal(".40")}[market] if plan.profile == "legacy"
+                          else plan.split(market))
+                if available < plan.capital*sleeve:
                     raise ValueError("insufficient available USDT for the requested sleeve budget")
                 baseline[market] = str(snapshot.balance("USDT").free if market=="spot" else snapshot.wallet_balance)
             p = previous or {"campaign_id":uuid.uuid4().hex,"started_at":now.isoformat(),"routes":{},
@@ -165,6 +227,13 @@ class MultiDemoRuntime:
             p = self._portfolio()
             report = self.preflight(symbol,market,now=now)
             source = self.source_factory(symbol,market)
+            plan = DemoAllocation.model_validate(p["allocation"])
+            if plan.profile == "setup2_v1":
+                version,scopes = self._check_active_set(plan)
+                if scopes[market] not in version.plan.scopes(symbol):
+                    raise ValueError("route is not in the bound active set")
+                if getattr(source.rule().parameters,"entry_profile","donchian_v1") != "setup2_v1":
+                    raise ValueError("setup2 allocation only admits Setup-2 champions")
             source.evaluation(evaluation_id,now=now)
             self._risk(p,now=now)
             venue = self.venue_factory(symbol,market)
@@ -235,7 +304,8 @@ class MultiDemoRuntime:
         if p["day"] != now.date().isoformat():
             p.update(day=now.date().isoformat(),day_start_equity=str(total))
         p["high_water_mark"] = str(max(Decimal(p["high_water_mark"]),total))
-        if total <= 0 or total <= Decimal(p["day_start_equity"])*Decimal(".985") or total <= Decimal(p["high_water_mark"])*Decimal(".92"):
+        daily,drawdown = self._loss_limits(plan)
+        if total <= 0 or total <= Decimal(p["day_start_equity"])*daily or total <= Decimal(p["high_water_mark"])*drawdown:
             raise ExecutionUnavailable("portfolio_loss_limit")
         return total,spot_gross,perp_gross,markets
 
@@ -414,6 +484,13 @@ class MultiDemoRuntime:
                for (symbol,market),(venue,snapshot,quote) in markets.items()):
             p.update(paused=True,reason="perp_settings_drift")
             self._save(p,"perp_settings_drift")
+        if not p["paused"] and plan.profile == "setup2_v1":
+            try:
+                self._check_active_set(plan)
+            except ValueError:
+                # Protection above already ran; new entries wait for an explicit flat reconfiguration.
+                p.update(paused=True,reason="active_set_changed_reconfigure")
+                self._save(p,"active_set_changed")
         if p["paused"]:
             self._save(p,"paused_reconciled")
             return {"status":"paused","reason":p["reason"]}
@@ -465,16 +542,18 @@ class MultiDemoRuntime:
             cap = plan.target_cap(symbol,market)
             if market=="spot":
                 cap *= Decimal(str(observation.size_multiplier))
-            cap = min(cap, max(Decimal(0),equity*Decimal(".50")-spot_gross-perp_gross))
+            gross_cap,perp_cap,margin_cap = self._envelope(plan)
+            cap = min(cap, max(Decimal(0),equity*gross_cap-spot_gross-perp_gross))
             margin = self._perp_margin(markets)
             if market=="perp":
-                cap = min(cap,max(Decimal(0),equity*Decimal(".30")-perp_gross),
-                          max(Decimal(0),equity*Decimal(".10")-margin)*snapshot.leverage)
+                cap = min(cap,max(Decimal(0),equity*perp_cap-perp_gross),
+                          max(Decimal(0),equity*margin_cap-margin)*snapshot.leverage)
             projected_margin = float((margin+(cap/snapshot.leverage if market=="perp" else Decimal(0)))/equity)
-            auth = (self.gate.spot_entry(state,decision,rule.parameters,donchian_entry=observation.entry,
+            gate = self._gate_for(plan)
+            auth = (gate.spot_entry(state,decision,rule.parameters,donchian_entry=observation.entry,
                                        size_multiplier=observation.size_multiplier,scope=DecisionScope.SPOT_4H,
                                        projected_isolated_margin_pct=projected_margin) if market=="spot"
-                    else self.gate.perp_entry(state,decision,rule.parameters,projected_isolated_margin_pct=projected_margin))
+                    else gate.perp_entry(state,decision,rule.parameters,projected_isolated_margin_pct=projected_margin))
             if not auth.allowed or not auth.target_notional:
                 continue
             cap = min(cap,abs(Decimal(str(auth.target_notional))))

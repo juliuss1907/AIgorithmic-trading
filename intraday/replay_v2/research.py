@@ -82,7 +82,14 @@ def run_weekly_confidence(config, *, now, root=None, runner=run_research):
     root = resolve_report_dir(root)
     reviews = ReviewStore(root)
     requested = []
+    from intraday.active_set import allows
+    from intraday.contracts import DecisionScope
+    from intraday.store import IntradayStore
+    # A missing source database has no active set; the runner reports it as before.
+    source = IntradayStore(config.database, read_only=True) if Path(config.database).exists() else None
     for symbol in config.confidence_review_symbols:
+        if source is not None and not allows(source, symbol, DecisionScope.PERP_INTRADAY):
+            continue  # Reviews cover Jev-driven perp_intraday, which an active set turns off.
         previous = reviews.latest(symbol)
         if previous and (previous["week"] == weekly_slot(now) or previous["status"] == "pending_review"):
             continue

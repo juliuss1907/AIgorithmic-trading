@@ -55,6 +55,8 @@ def add_execution_parser(commands):
     configure.add_argument("--spot-stop-percent", type=Decimal, default=Decimal(10), help="Spot emergency stop below entry; operator-selected default 10 percent")
     configure.add_argument("--spot-weight", action="append", default=[], metavar="COIN=FRACTION")
     configure.add_argument("--perp-weight", action="append", default=[], metavar="COIN=FRACTION")
+    configure.add_argument("--from-active-set", action="store_true",
+                           help="Setup-2 profile: weights and splits copied from the current audited active set")
     configure.set_defaults(multi=True)
 
 
@@ -71,6 +73,26 @@ def _weights(values):
             raise ValueError("weights require unique COIN=FRACTION entries")
         result[symbol] = Decimal(weight)
     return result
+
+
+def _allocation(arguments,source):
+    stop = arguments.spot_stop_percent/100
+    if not arguments.from_active_set:
+        return DemoAllocation(capital=arguments.capital,spot_weights=_weights(arguments.spot_weight),
+                              perp_weights=_weights(arguments.perp_weight),spot_emergency_stop_pct=stop)
+    if arguments.spot_weight or arguments.perp_weight:
+        raise ValueError("--from-active-set takes weights from the active set; omit manual weights")
+    from intraday.active_set import current
+    from intraday.store import IntradayStore
+    version = current(IntradayStore(source.path,read_only=True))
+    if version is None:
+        raise ValueError("no active set recorded in the source database")
+    coins = version.plan.coins
+    return DemoAllocation(capital=arguments.capital,spot_emergency_stop_pct=stop,profile="setup2_v1",
+                          spot_weights={s:c.spot_weight for s,c in coins.items() if c.spot_weight > 0},
+                          perp_weights={s:c.perp_weight for s,c in coins.items() if c.perp_weight > 0},
+                          spot_split=version.plan.spot_split,perp_split=version.plan.perp_split,
+                          active_set_version_id=version.version_id)
 
 
 def _dispatch_multi(arguments,journal,credentials,source,*,now):
@@ -92,9 +114,7 @@ def _dispatch_multi(arguments,journal,credentials,source,*,now):
         return ScopedEvidenceSource(source.path,symbol=symbol,market=market)
     runner = MultiDemoRuntime(journal,credentials.account_ref,venue_factory,source_factory)
     if action=="configure":
-        _print(runner.configure(DemoAllocation(capital=arguments.capital,spot_weights=_weights(arguments.spot_weight),
-                                              perp_weights=_weights(arguments.perp_weight),
-                                              spot_emergency_stop_pct=arguments.spot_stop_percent/100),now=now))
+        _print(runner.configure(_allocation(arguments,source),now=now))
     elif action in {"preflight","activate"}:
         if not arguments.symbol or not arguments.market:
             raise ValueError("multi preflight/activate requires --symbol and --market")

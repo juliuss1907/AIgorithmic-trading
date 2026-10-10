@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 
+from intraday import active_set
 from intraday.contracts import DecisionScope, ProviderRole
 from intraday.decision_evaluation import EVALUATION_HORIZONS
 from intraday.dashboard_read_model import (
@@ -22,6 +24,7 @@ from intraday.dashboard_read_model import (
     list_public_signals,
 )
 from intraday.operator_service import build_operator_snapshot
+from intraday.portfolio_coordinator import ParentPortfolioPolicy
 from intraday.portfolio_view import latest_parent_market_view
 from intraday.store import IntradayStore
 from intraday.asset_onboarding import AssetOnboarding
@@ -375,9 +378,9 @@ def create_app(
         parent = store.load_parent_portfolio_state()
         if parent is not None:
             parent = latest_parent_market_view(store, parent)
-        return {
-            "portfolio": parent.model_dump(mode="json") if parent else None,
-            "limits": {
+        version = active_set.current(store)
+        if version is None:
+            limits = {
                 "spot_budget_pct": 0.60,
                 "perp_budget_pct": 0.40,
                 "spot_max_parent_equity_pct": 0.30,
@@ -386,7 +389,27 @@ def create_app(
                 "abs_net_delta_pct": 0.50,
                 "isolated_margin_pct": 0.10,
                 "leverage": 3,
-            },
+            }
+        else:
+            policy = ParentPortfolioPolicy.from_split(
+                version.plan.spot_split, version.plan.perp_split, version.plan.perp_leverage)
+            limits = {
+                "profile": version.plan.rule_profile,
+                "active_set_version_id": version.version_id,
+                "spot_budget_pct": policy.spot_budget_pct,
+                "perp_budget_pct": policy.perp_budget_pct,
+                "spot_max_parent_equity_pct": policy.spot_budget_pct,
+                "perp_max_parent_equity_pct": policy.perp_budget_pct,
+                "gross_exposure_pct": policy.max_gross_exposure_pct,
+                "abs_net_delta_pct": policy.max_abs_net_delta_pct,
+                "isolated_margin_pct": policy.max_isolated_margin_pct,
+                "leverage": policy.leverage,
+                "daily_loss_limit_pct": policy.daily_loss_limit_pct,
+                "max_drawdown_pct": policy.max_drawdown_pct,
+            }
+        return {
+            "portfolio": parent.model_dump(mode="json") if parent else None,
+            "limits": limits,
             "soak": (
                 store.latest_portfolio_soak_evaluation().model_dump(mode="json")
                 if store.latest_portfolio_soak_evaluation()
@@ -398,12 +421,21 @@ def create_app(
     def assets_page(request: Request):
         return templates.TemplateResponse(request=request, name="assets.html", context={"controls_enabled":bool(control_token)})
 
+    @app.get("/api/active-set")
+    def active_set_view():
+        return {"current": active_set.describe(active_set.current(store)),
+                "history": [active_set.describe(v) for v in active_set.history(store)]}
+
     @app.get("/api/assets")
     def list_assets(market: Literal["spot", "perp"] | None = None):
         scope = DecisionScope.SPOT_4H if market == "spot" else DecisionScope.PERP_INTRADAY
+        version = active_set.current(store)
         return {"assets":[{**spec_payload(spec),
                            "stages":{s.scope.value:s.stage.value for s in store.list_asset_lifecycles(spec.symbol)},
-                           "execution_routes":onboarding.routes(spec.symbol)}
+                           "execution_routes":onboarding.routes(spec.symbol),
+                           "active_set":(None if version is None else
+                                         json.loads(version.plan.coins[spec.symbol].model_dump_json())
+                                         if spec.symbol in version.plan.coins else False)}
                           for spec in store.asset_catalog().values()
                           if market is None or scope in spec.enabled_scopes]}
 

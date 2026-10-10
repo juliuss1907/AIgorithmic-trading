@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import operator
 from zoneinfo import ZoneInfo
 
+from intraday.active_set import current as current_active_set, readiness_view
 from intraday.assets import ticker_symbol
 from intraday.contracts import DecisionScope
 from intraday.perp_bootstrap_lifecycle import preview_perp_bootstrap, preview_perp_post_replay
@@ -45,6 +46,7 @@ def build_asset_readiness(database, *, symbol=None, market=None, now=None):
             if symbol not in catalog:
                 raise ValueError("asset is not registered")
         rows = []
+        version = current_active_set(reader)
         for spec in catalog.values():
             if symbol is not None and spec.symbol != symbol:
                 continue
@@ -54,6 +56,7 @@ def build_asset_readiness(database, *, symbol=None, market=None, now=None):
                 row = _asset_row(reader, spec.symbol, selected_market, scope, now)
                 from intraday.replay_v2.automation_readiness import project_weekly_readiness
                 project_weekly_readiness(reader,row,now=now)
+                row["active_set"] = readiness_view(reader, spec.symbol, selected_market, now, version=version)
                 rows.append(row)
     return {"report_schema_version": "1", "generated_at": now.isoformat(), "rows": rows}
 

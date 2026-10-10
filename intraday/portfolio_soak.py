@@ -9,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from intraday.active_set import allows, record_skip
 from intraday.assets import AssetStage
 from intraday.contracts import DecisionScope, FeatureSnapshot
 from intraday.journal import _fallback_trace, record_scoped_signal
@@ -193,6 +194,9 @@ def run_asset_lifecycle_observation(
     """Persist registered shadow data and cross the model boundary only in soak."""
     lifecycle = store.asset_lifecycle(snapshot.symbol, scope)
     store.record_snapshot(snapshot)
+    if not allows(store, snapshot.symbol, scope):
+        # Outside the operator active set (ADR-004): data only, never the model boundary.
+        return record_skip(store, snapshot.symbol, scope, now=now)
     if lifecycle.stage is AssetStage.DISABLED:
         return "disabled"
     if lifecycle.stage is AssetStage.SHADOW:
