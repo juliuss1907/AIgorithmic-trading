@@ -12,6 +12,7 @@ Nhánh: `research/setup2-h1`. Sau khi H1 baseline thua, Julius muốn thử EMA 
 - **Bốn ứng viên, mỗi cái đổi một khái niệm so với H1 baseline:** `H1-GEOM` (stop ATR×6, thoát Donchian 40), `H1-REGIME` (EMA200/50 + ADX20 lấy từ nến H4 đã đóng), `H1-EMA50-20` (câu hỏi của Julius), `H1-ADX30`. Dự đoán ghi trước, năm tiêu chí giữ nguyên.
 - **Code:** `ATRTrail(multiple=3)`, `indicator_series`/`entry_filters` nhận cặp EMA (khoá cũ giữ nguyên với cặp mặc định), `stop_atr_multiple`, cặp thoát (30,40), cổng chế độ H4 gate theo nến đã đóng, chuẩn bị đặc trưng lười theo cấu hình, `--universe h1-family`, verdict theo họ kèm hồ sơ thời gian giữ lệnh.
 - **Kiểm thử:** 11 test mới; toàn bộ suite pass (một lần `test_compact_ab` fail rồi pass khi chạy lại, không tái hiện được trong 8 lần chạy riêng).
+- **Kết quả (commit `9b85a29`, report `donchian-setup2-h1-family-20261011`):** ca H4 và H1 baseline trùng từng byte với các report trước. Không ứng viên nào đạt. `H1-GEOM` tốt nhất: +63,26% (H4 +81,75%), DD 24,70%, 1.205 lệnh, chi phí 703 so với 201 USDT, chi phí ×2 còn −1,57%; số lệnh giữ > 48 giờ tăng từ 36 lên 500. `H1-REGIME` −17,21%, `H1-ADX30` −12,96%, `H1-EMA50-20` −33,70% (đúng dự đoán: EMA nhỏ hơn không giúp, thậm chí tệ hơn). **Kết luận: giữ H4.** Giả thuyết chẩn đoán (stop quá sát cắt đuôi dài) đúng, nhưng H1 vẫn cần gấp ba số lệnh nên chi phí quyết định.
 
 ## 2026-10-11 — Nghiên cứu Setup-2 ở khung H1 (đăng ký trước)
 

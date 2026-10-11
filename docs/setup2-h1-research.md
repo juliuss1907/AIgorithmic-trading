@@ -163,3 +163,41 @@ uv run python -m intraday.replay_v2.donchian_adx_study --universe h1-family \
 uv run python -m intraday.replay_v2.donchian_h1_verdict \
   /home/julius/.local/state/aigorithmic-trading/reports/donchian-setup2-h1-family-20261011/runs/comparison.json
 ```
+
+### Result of the second round (2026-10-11)
+
+Engine commit `9b85a29`, report root `donchian-setup2-h1-family-20261011`; 12 cases, each with a
+deterministic double replay. The H4 control and the H1 baseline reproduced the earlier reports exactly
+(`result_id` and summary), so the engine changes left defaults untouched. Peak memory 7.9 GB, 22 minutes.
+
+| Case | Return % | DD % | Trades | Fees + slippage | Spot net | Perp net | Holds > 48 h (gross) | Return at cost ×2 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| H4 control | **+81.75** | 11.58 | 423 | 201 | +493 | +324 | 240 (+1,968) | +57.39 |
+| H1 baseline | −26.89 | 45.92 | 1,725 | 515 | −93 | −176 | 36 (+553) | −64.97 |
+| H1-GEOM | **+63.26** | 24.70 | 1,205 | 703 | +604 | +28 | 500 (+5,810) | −1.57 |
+| H1-REGIME | −17.21 | 35.47 | 905 | 286 | −139 | −33 | 20 (+334) | −42.50 |
+| H1-ADX30 | −12.96 | 41.63 | 997 | 308 | +15 | −144 | 20 (+308) | −42.94 |
+| H1-EMA50-20 | −33.70 | 49.50 | 1,764 | 501 | −146 | −191 | 36 (+518) | −68.71 |
+
+**No candidate advances.** `H1-GEOM` fails return-not-below-control (63.3% vs 81.7%), drawdown below
+15% (24.7%) and doubled costs (−1.6%); it passes the Spot-and-Perp and both-halves criteria
+(first half +465 USDT, second half +168 USDT). The other three fail all but none or one criterion.
+
+What the round shows:
+
+- **The diagnosis held.** Letting H1 trades breathe (ATR×6, 40-bar exit) turns −26.9% into +63.3% and
+  lifts holds beyond 48 h from 36 to 500. Every prediction was right in direction: GEOM best, REGIME
+  and ADX30 better than baseline but still negative, EMA 50/20 worse than baseline.
+- **Smaller indicators did not help.** EMA 50/20 produced more trades (1,764 vs 1,725) and the
+  worst result of the family, as predicted; "indicators too large" is not the cause.
+- **H1 still does not beat H4.** GEOM's gross price PnL (about +1,336 USDT) exceeds the control's
+  (about +1,027), but it needs 1,205 trades against 423, so costs are 703 against 201 USDT and
+  drawdown doubles. Wide stops also make the 705 trades held under 48 h lose heavily. Its Perp
+  sleeve earns only +28 USDT; the result is carried by Spot.
+- **Cost sensitivity is the binding constraint.** Only the control survives doubled costs
+  comfortably; GEOM breaks even at best.
+
+**Conclusion: keep H4; no ADR-007 and no new prospective test.** Setup-2 H1 would need a lever that
+keeps GEOM's gross while cutting its trade count by roughly two thirds. Whether a combination of
+geometry with a regime or ADX gate does that is a fifth and sixth look at the same seen data, so it
+is left as an explicit decision for the operator rather than added here.
