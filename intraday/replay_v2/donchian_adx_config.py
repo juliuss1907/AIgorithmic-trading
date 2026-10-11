@@ -47,6 +47,9 @@ def cases(start=START, end=END, *, universe='three'):
     if universe == 'h1':
         from intraday.replay_v2.donchian_adx_setups import h1_cases
         return h1_cases(start, end)
+    if universe == 'h1-family':
+        from intraday.replay_v2.donchian_adx_setups import h1_family_cases
+        return h1_family_cases(start, end)
     if universe == 'baskets':
         from intraday.replay_v2.donchian_adx_setups import basket_cases
         return basket_cases(start, end)

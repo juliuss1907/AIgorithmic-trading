@@ -4,6 +4,15 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-11 — Vòng hai H1: bốn ứng viên một khái niệm (đăng ký trước)
+
+Nhánh: `research/setup2-h1`. Sau khi H1 baseline thua, Julius muốn thử EMA 50/20 và thêm các setup H1 khác. Chi tiết, dự đoán và tiêu chí: mục "Second round" trong [setup2-h1-research](docs/setup2-h1-research.md).
+
+- **Chẩn đoán từ nhật ký lệnh:** lãi của Setup-2 nằm ở đuôi dài. H4 có 240 lệnh giữ > 48 giờ (giá gộp +1.968, phí 113) còn 183 lệnh ≤ 48 giờ mất 1.030; H1 chỉ có 36 lệnh sống quá 48 giờ vì stop ATR×3 trên H1 chỉ bằng nửa khoảng giá của H4. Cỡ EMA không phải đòn bẩy chính.
+- **Bốn ứng viên, mỗi cái đổi một khái niệm so với H1 baseline:** `H1-GEOM` (stop ATR×6, thoát Donchian 40), `H1-REGIME` (EMA200/50 + ADX20 lấy từ nến H4 đã đóng), `H1-EMA50-20` (câu hỏi của Julius), `H1-ADX30`. Dự đoán ghi trước, năm tiêu chí giữ nguyên.
+- **Code:** `ATRTrail(multiple=3)`, `indicator_series`/`entry_filters` nhận cặp EMA (khoá cũ giữ nguyên với cặp mặc định), `stop_atr_multiple`, cặp thoát (30,40), cổng chế độ H4 gate theo nến đã đóng, chuẩn bị đặc trưng lười theo cấu hình, `--universe h1-family`, verdict theo họ kèm hồ sơ thời gian giữ lệnh.
+- **Kiểm thử:** 11 test mới; toàn bộ suite pass (một lần `test_compact_ab` fail rồi pass khi chạy lại, không tái hiện được trong 8 lần chạy riêng).
+
 ## 2026-10-11 — Nghiên cứu Setup-2 ở khung H1 (đăng ký trước)
 
 Nhánh: `research/setup2-h1` (từ `feature/three-coin-runtime`). Julius hỏi có nên đổi sang khung nhỏ hơn khi dữ liệu ít. Đã trả lời là không đổi Setup-2 vì lý do đó; Julius chọn nghiên cứu H1 như một ứng viên riêng. Chi tiết và tiêu chí: [setup2-h1-research](docs/setup2-h1-research.md).

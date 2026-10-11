@@ -42,17 +42,17 @@ class FilterConfig(HistoricalConfig):
 
 
 class ATRTrail:
-    def __init__(self, side, entry, atr):
+    def __init__(self, side, entry, atr, multiple=3):
         if side not in {-1, 1} or not entry.is_finite() or entry <= 0 or not atr.is_finite() or atr <= 0:
             raise ValueError('positive entry/ATR and valid trail side required')
-        self.side, self.extreme = side, entry
-        self.stop = entry-side*3*atr
+        self.side, self.extreme, self.multiple = side, entry, multiple
+        self.stop = entry-side*multiple*atr
 
     def update(self, high, low, atr):
         if not atr.is_finite() or atr <= 0:
             raise ValueError('positive finite trailing ATR required')
         self.extreme = max(self.extreme, high) if self.side > 0 else min(self.extreme, low)
-        candidate = self.extreme-self.side*3*atr
+        candidate = self.extreme-self.side*self.multiple*atr
         self.stop = max(self.stop, candidate) if self.side > 0 else min(self.stop, candidate)
 
 

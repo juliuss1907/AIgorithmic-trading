@@ -9,7 +9,7 @@ from intraday.replay_v2.artifacts import _write, publish_report, SERIES
 from intraday.replay_v2.donchian_adx_config import config_type, cases
 from intraday.replay_v2.donchian_adx_data import read_join_inputs
 from intraday.replay_v2.donchian_filter_data import decode_bundle, verify_files
-from intraday.replay_v2.donchian_filter_engine import prepare, simulate
+from intraday.replay_v2.donchian_filter_engine import indicator_settings, prepare, simulate
 from intraday.replay_v2.donchian_oos_analysis import annual_equity
 from intraday.replay_v2.donchian_oos_pipeline import source_hashes, git, REPO, verify_item
 from intraday.replay_v2.historical_study import read_inputs
@@ -18,7 +18,8 @@ from intraday.replay_v2.metrics import encoded, fingerprint
 from intraday.replay_v2.portfolio_study import file_hash
 
 
-PRESETS = {'setups': 'donchian-adx-setups', 'baskets': 'donchian-basket3', 'h1': 'donchian-setup2-h1'}
+PRESETS = {'setups': 'donchian-adx-setups', 'baskets': 'donchian-basket3', 'h1': 'donchian-setup2-h1',
+           'h1-family': 'donchian-setup2-h1-family'}
 
 
 def calendar_periods(curve, start, end, capital):
@@ -134,7 +135,7 @@ def verify_three_coin(comparison_path, output_root, *, progress=print, universe=
 
 def run_study(inputs_path, report_root, *, resume=False, progress=print, universe='three'):
     source=Path(inputs_path).expanduser().resolve();before=file_hash(source)
-    if universe in ('five', 'setups', 'baskets', 'h1'):
+    if universe in ('five', 'setups', 'baskets', 'h1', 'h1-family'):
         from intraday.replay_v2.donchian_five_data import read_manifest
         raw=read_manifest(source)
     else:
@@ -151,20 +152,29 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
     else:
         root.mkdir(parents=True,mode=0o700)
         _write(root/'binding.json',encoded(binding))
-    progress('Preparing shared causal H4 features and native M15 volume profiles')
-    preparation_config = (config_type('five')(start=start,end=end) if universe in ('setups','baskets','h1') else variants[0][1])
+    progress('Preparing shared causal features and native M15 volume profiles')
+    preparation_config = (config_type('five')(start=start,end=end) if universe in ('setups','baskets','h1','h1-family') else variants[0][1])
     data,funding=decode_bundle(preparation_config,raw)
-    prepared={'4h':prepare(preparation_config,data,funding,native_boundary_policy=raw.get('native_boundary_policy'))}
-    hourly_config=next((c for _,c in variants if getattr(c,'bar_interval','4h')=='1h'),None)
-    if hourly_config is not None:
-        # H1 bars come from the same decoded M15 rows; only the configured coins are needed.
-        from intraday.replay_v2.donchian_hourly import build
-        symbols=sorted(hourly_config.weights)
-        progress('Deriving H1 signal bars from native M15 and reproducing native H4: '+', '.join(symbols))
-        series,derivation=build(data,symbols,start,end)
-        prepared['1h']=prepare(hourly_config,series,{s:funding[s] for s in symbols},derivation=derivation)
-        del series
-    del data,funding,raw
+    policy=raw.get('native_boundary_policy')
+    del raw
+    cache={}
+
+    def prepared_for(config):
+        """One feature set at a time: cases are ordered by indicator settings, so memory stays flat."""
+        key=indicator_settings(config)
+        if key not in cache:
+            cache.clear()
+            if key[0]=='4h':
+                cache[key]=prepare(preparation_config,data,funding,native_boundary_policy=policy)
+            else:
+                # H1 bars come from the same decoded M15 rows; only the configured coins are needed.
+                from intraday.replay_v2.donchian_hourly import build
+                symbols=sorted(config.weights)
+                progress('Deriving H1 signal bars from native M15 and reproducing native H4: '+', '.join(symbols))
+                series,derivation=build(data,symbols,start,end,keep_h4=bool(key[3]))
+                cache[key]=prepare(config,series,{s:funding[s] for s in symbols},derivation=derivation)
+                del series
+        return cache[key]
     results=[]
     for index,(name,config) in enumerate(variants):
         if runtime_hashes()!=binding['sources']:raise ValueError('research engine changed during run')
@@ -172,13 +182,13 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
         if checkpoint.exists():
             item=read_inputs(checkpoint)
             if (item['variant']!=name or item['config_checksum']!=fingerprint(config.model_dump(mode='json')) or
-                    item['dataset_checksum']!=prepared[getattr(config,'bar_interval','4h')].checksum):
+                    item['dataset_checksum']!=prepared_for(config).checksum):
                 raise ValueError('research case checkpoint binding changed')
             verify_item(item)
             progress('Verified existing case '+name)
         else:
             progress('Replay '+name)
-            dataset=prepared[getattr(config,'bar_interval','4h')]
+            dataset=prepared_for(config)
             report=enriched(config,dataset)
             # Basket studies mix the Setup-2 control and cost-stress classes; restore each as its own type.
             kind=type(config)
@@ -226,6 +236,14 @@ def markdown(receipt):
         s=item['summary'];net=s['net_pnl'];ret=s['net_return_pct']
         lines.append(f"| {item['variant']} | {s['final_equity_known']:.2f} | {net if net is not None else 'UNKNOWN'} | "
                      f"{ret if ret is not None else 'UNKNOWN'} | {s['max_drawdown_known_pct']:.2f} | {s['closed_trades']} |")
+    if receipt['preset']=='donchian-setup2-h1-family':
+        lines += ['', 'ETH-NEAR-SOL equal thirds, Spot60/Short40, Short1x, ATR14 sizing, combined UTC daily3%. H4 is the frozen',
+                  'Setup-2 control; H1 is the earlier baseline with every window counted in H1 bars (bars derived exactly from M15).',
+                  'GEOM: ATR x6 stop and 40-bar exit channel. ADX30: ADX threshold 30. EMA50-20: EMA50 trend and rising EMA20',
+                  'momentum. REGIME: EMA200/50 and ADX20 read from the last closed H4 bar. cost2x doubles fees and slippage.',
+                  'Seen data, a family of four tries after the H1 baseline failed: a pass is grounds for a new frozen prospective',
+                  'test, never for activation.']
+        return '\n'.join(lines)+'\n'
     if receipt['preset']=='donchian-setup2-h1':
         lines += ['', 'ETH-NEAR-SOL equal thirds, Spot60/Short40, Short1x, ADX20 both markets, ATR14x3, combined UTC daily3%.',
                   'H4 rows are the frozen Setup-2 control; H1 rows count every window in H1 bars (Donchian30/10, EMA200/50,',
@@ -265,14 +283,14 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description='Local five-case A4 ADX exploration; no models or trading')
     parser.add_argument('--report-root',required=True)
     parser.add_argument('--inputs')
-    parser.add_argument('--universe',choices=('three','five','setups','baskets','h1'),default='three')
+    parser.add_argument('--universe',choices=('three','five','setups','baskets','h1','h1-family'),default='three')
     parser.add_argument('--early-inputs');parser.add_argument('--late-inputs')
     parser.add_argument('--resume',action='store_true')
     args=parser.parse_args(argv)
     root=Path(args.report_root).expanduser().resolve()
     source=args.inputs
-    if args.universe in ('five','setups','baskets','h1') and source is None:
-        parser.error('--universe five/setups/baskets/h1 requires a validated --inputs manifest')
+    if args.universe in ('five','setups','baskets','h1','h1-family') and source is None:
+        parser.error('--universe five/setups/baskets/h1/h1-family requires a validated --inputs manifest')
     if source is None:
         if not args.early_inputs or not args.late_inputs:parser.error('supply --inputs or both parent inputs')
         source=root/'data'/'inputs.json'

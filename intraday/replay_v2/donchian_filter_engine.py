@@ -31,6 +31,12 @@ from intraday.replay_v2.donchian_adx_setups import market_weights, adx_threshold
 VERSION = 'historical-donchian-filter-study-v1.1'
 MS = timedelta(milliseconds=1)
 PAIRS = ((20,8),(20,10),(30,8),(30,10))
+OBSERVED_PAIRS = PAIRS+((30,40),)  # The extra pair serves the H1 geometry candidate; PAIRS keeps the 20-case matrix.
+
+
+def indicator_settings(config):
+    return (getattr(config,'bar_interval','4h'), getattr(config,'ema_fast',50),
+            getattr(config,'ema_slow',200), getattr(config,'regime_interval',None))
 
 
 @dataclass
@@ -53,6 +59,8 @@ class Prepared:
     five_source_symbols: frozenset = frozenset()
     bar_interval: str = '4h'  # Signal-bar width; `h4` keeps its name for the default study.
     derivation: dict | None = None
+    ema_periods: tuple = (50, 200)  # (fast, slow)
+    regime_interval: str | None = None  # '4h': EMA/ADX/DMI come from the last closed H4 bar.
 
 
 SIGNAL_HOURS = {'4h': 4, '1h': 1}
@@ -68,6 +76,10 @@ def prepare(config, data, funding, *, native_boundary_policy=None, derivation=No
         raise ValueError('hourly signal bars require an audited M15 derivation and no H4 boundary policy')
     lookback = timedelta(hours=PROFILE_BARS*SIGNAL_HOURS[signal])
     profile_m15 = int(lookback/timedelta(minutes=15))
+    _, ema_fast, ema_slow, regime = indicator_settings(config)
+    if regime not in (None, '4h') or (regime and (signal != '1h' or (ema_fast, ema_slow) != (50, 200))):
+        raise ValueError('an H4 regime gate needs H1 bars with the default EMA pair')
+    extra = {'spot4h','perp4h'} if regime else set()
     symbols = set(config.weights) | set(market_weights(config, 'perp'))
     if set(data) != symbols or set(funding) != symbols:
         raise ValueError('filter research requires configured coins in both markets and funding')
@@ -79,12 +91,12 @@ def prepare(config, data, funding, *, native_boundary_policy=None, derivation=No
     mark_policy = frozenset(s for s, tags in data.items() if any(isinstance(b, SourceMarkCandle) for b in tags['mark15m']))
     for s, series in data.items():
         identities[s] = {}
-        if set(series) != {'spot'+signal,'spot15m','perp'+signal,'perp15m','mark15m'}:
+        if set(series) != {'spot'+signal,'spot15m','perp'+signal,'perp15m','mark15m'}|extra:
             raise ValueError('missing native filter study series')
         for tag, rows in series.items():
             if not rows:
                 raise ValueError('missing native filter study series rows')
-            interval = signal if tag.endswith(signal) else '15m'
+            interval = '15m' if tag.endswith('15m') else tag[-2:]
             first = config.start if tag == 'mark15m' else config.start-WARMUP_BY_INTERVAL[interval]
             if tag == 'spot15m' and s in gap_policy:
                 checker=five_policy.spot_candles if isinstance(rows[0],five_policy.FiveSpotCandle) else spot_candles
@@ -92,7 +104,7 @@ def prepare(config, data, funding, *, native_boundary_policy=None, derivation=No
             elif tag == 'mark15m' and s in mark_policy:
                 checker=five_policy.mark_candles if isinstance(rows[0],five_policy.FiveMarkCandle) else mark_candles
                 checker([b.row() for b in rows], s, first, config.end)
-            elif interval == '1h':
+            elif interval == '1h' and signal == '1h':
                 # Derived from the validated M15 series by the hourly builder, which owns gap checks.
                 if rows[0].opened_at != first or rows[-1].available_at != config.end:
                     raise ValueError('hourly signal bars do not cover the study window')
@@ -108,7 +120,10 @@ def prepare(config, data, funding, *, native_boundary_policy=None, derivation=No
                 checker=five_policy.verify_five_boundaries
             if signal == '4h':  # Hourly bars are built from these same M15 rows, so the check would be circular.
                 checker(s, large, small, config.start, config.end, market+' H4/M15')
-            indicators = indicator_series(large)
+            indicators = indicator_series(large, ema_fast=ema_fast, ema_slow=ema_slow)
+            if regime:
+                gate = series[market+'4h']
+                gate_features, gate_times = indicator_series(gate), [b.available_at for b in gate]
             small_times = [b.available_at for b in small]
             features.setdefault(market, {})[s] = {}
             observations.setdefault(market, {})[s] = {}
@@ -117,6 +132,14 @@ def prepare(config, data, funding, *, native_boundary_policy=None, derivation=No
                 if not config.start <= bar.available_at < config.end:
                     continue
                 f = indicators[i].copy()
+                if regime:
+                    # Only an H4 bar already closed at this H1 close may speak for the regime.
+                    j = bisect_right(gate_times, bar.available_at)-1
+                    if j < 0:
+                        raise ValueError('H4 regime warmup does not cover the first signal bar')
+                    f.update({k:gate_features[j][k] for k in
+                              ('ema50','prior_ema50','ema200','adx','prior_adx','plus_di','minus_di')})
+                    f['regime_available_at'] = gate_times[j].isoformat()
                 # Profile ends at trigger candle OPEN: never includes trigger volume.
                 end = bisect_right(small_times, bar.opened_at)
                 begin = bisect_right(small_times, bar.opened_at-lookback)
@@ -128,7 +151,7 @@ def prepare(config, data, funding, *, native_boundary_policy=None, derivation=No
                 f['profile'] = {k:v for k,v in profile.items() if k != 'volumes'} if profile else None
                 features[market][s][bar.available_at] = f
                 observations[market][s][bar.available_at] = {
-                    pair:observation(large[max(0,i-30):i+1], *pair) for pair in PAIRS}
+                    pair:observation(large[max(0,i-40):i+1], *pair) for pair in OBSERVED_PAIRS}
                 h4[market][s][bar.available_at] = bar
         for market in opens:
             for bar in series[market+'15m']:
@@ -157,11 +180,12 @@ def prepare(config, data, funding, *, native_boundary_policy=None, derivation=No
     identity=dict(series=identities,funding={s:h.model_dump(mode='json') for s,h in sorted(funding.items())})
     if native_boundary_policy: identity['native_boundary_policy']=native_boundary_policy
     if signal != '4h': identity.update(bar_interval=signal, derivation=derivation)
+    if (ema_fast, ema_slow) != (50, 200) or regime: identity.update(ema_periods=[ema_fast, ema_slow], regime_interval=regime)
     checksum=fingerprint(identity)
     return Prepared(config.start, config.end, features, observations, h4, opens, closes,
                     settlements, timeline, checksum, audit, gap_policy, mark_policy, reference_times,native_boundary_policy,
                     frozenset(s for s,tags in data.items() if isinstance(tags['spot15m'][0],five_policy.FiveSpotCandle)),
-                    signal, derivation)
+                    signal, derivation, (ema_fast, ema_slow), regime)
 
 
 def position(book, market, symbol):
@@ -197,8 +221,12 @@ def check_stops(book, at, bars, closed, *, opening):
 def simulate(config, prepared):
     if (config.start, config.end) != (prepared.start,prepared.end):
         raise ValueError('prepared features belong to another window')
+    if indicator_settings(config) != (prepared.bar_interval, *prepared.ema_periods, prepared.regime_interval):
+        raise ValueError('prepared features belong to another indicator configuration')
     book = FilterBook(config)
     label = 'h4' if prepared.bar_interval == '4h' else 'h1'
+    stop = getattr(config, 'stop_atr_multiple', 3)
+    ema = dict(ema_fast=prepared.ema_periods[0], ema_slow=prepared.ema_periods[1])
     active = {m: market_weights(config, m) for m in ('spot', 'perp')}
     if any(not set(active[m]) <= set(prepared.features[m]) for m in active):
         raise ValueError('prepared data is missing configured market/coins')
@@ -328,13 +356,13 @@ def simulate(config, prepared):
                     continue
                 f = prepared.features[market][s][at]
                 failed = entry_filters(f,side,config.filter_level,
-                                       adx_threshold=adx_threshold(config,market,s))
+                                       adx_threshold=adx_threshold(config,market,s),**ema)
                 if failed:
                     book.event(at,'entry_blocked','indicator_filters',market=market,symbol=s,
                         failed_filters=failed,signal_available_at=at.isoformat())
                     continue
                 price, atr = opening[market][s].open, f['atr']
-                if atr is None or not ZERO < 3*atr/price < ONE:
+                if atr is None or not ZERO < stop*atr/price < ONE:
                     book.event(at,'entry_blocked','invalid_atr_stop',market=market,symbol=s)
                     continue
                 if book.halted:
@@ -347,11 +375,11 @@ def simulate(config, prepared):
                 f, price = prepared.features[market][s][at], opening[market][s].open
                 if market == 'perp':
                     target = book.perp_budget(marks)*config.perp_weights[s]*multiplier
-                    if not book.enter_perp(s,at,marks,price,-1,3*f['atr']/price,approved_target=target):
+                    if not book.enter_perp(s,at,marks,price,-1,stop*f['atr']/price,approved_target=target):
                         continue
                     book.events[-1]['reason'] = 'donchian_short_entry'
                 if position(book,market,s).quantity:
-                    book.trails[(market,s)] = ATRTrail(side,price,f['atr'])
+                    book.trails[(market,s)] = ATRTrail(side,price,f['atr'],stop)
                     book.event(at,'entry_features',f'closed_{label}',market=market,symbol=s,
                         atr_size_multiplier=str(multiplier),stop=str(book.trails[(market,s)].stop),
                         features=f,signal_available_at=at.isoformat())
@@ -409,6 +437,17 @@ def result(config, prepared, book):
     def timeframe(text):
         return text.replace('H4','H1') if hourly else text
 
+    variant = {}
+    if getattr(config, 'stop_atr_multiple', 3) != 3:
+        variant['stop_atr_multiple'] = getattr(config, 'stop_atr_multiple')
+    if config.exit_window == 40:
+        variant['donchian_entry_exit'] = [config.entry_window, config.exit_window]
+    if prepared.ema_periods != (50, 200):
+        variant['ema_fast_slow'] = list(prepared.ema_periods)
+    if prepared.regime_interval:
+        variant['regime'] = ('EMA200/50 and ADX/DMI14 from the last closed H4 bar; Donchian, volume, profile, ATR '
+                             'and stops stay on H1')
+
     return dict(schema_version='2',evaluator_version=VERSION,
         result_id=fingerprint(dict(version=VERSION,config=payload,data=prepared.checksum)),
         research_only=True,activation_allowed=False,official_gate_eligible=False,
@@ -430,6 +469,7 @@ def result(config, prepared, book):
                    if getattr(config, 'cost_multiplier', 1) == 1 else
                    'Spot20/10bps, Perp10/10bps fee/cash-charged slippage each fill; actual funding unchanged'),
             drawdown='native M15 marks open/close plus funding/cost; observe-only; not exact tick/intrabar DD',
+            **({'variant': variant} if variant else {}),
             **({'funding_pricing':'Original API rates/times; missing settlement quotes use actual native mark open 0-31ms before settlement, explicitly reference not API-confirmed settlement price'}
                if prepared.funding_reference_times else {})),
         limitations=sorted(book.limitations | {'approximate_m15_volume_profile_not_tick_volume_at_price',

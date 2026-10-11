@@ -84,12 +84,14 @@ def h4_reproduction(large, small, *, missing_opens=()):
     return dict(compared=compared, skipped_incomplete=skipped, disagreements=disagreements)
 
 
-def build(data, symbols, start, end):
-    """Replace H4 with H1 for `symbols`; return the series bundle and an auditable derivation."""
+def build(data, symbols, start, end, *, keep_h4=False):
+    """Replace H4 with H1 for `symbols`; return the series bundle and an auditable derivation.
+
+    `keep_h4` retains the native H4 candles for a regime gate that reads them next to the H1 bars."""
     first = start-WARMUP['15m']
     hourly, derivation = {}, {}
     for symbol in sorted(symbols):
-        hourly[symbol] = {tag: rows for tag, rows in data[symbol].items() if not tag.endswith('4h')}
+        hourly[symbol] = {tag: rows for tag, rows in data[symbol].items() if keep_h4 or not tag.endswith('4h')}
         derivation[symbol] = {}
         for market in ('spot', 'perp'):
             missing = GAP_OPENS if market == 'spot' else ()

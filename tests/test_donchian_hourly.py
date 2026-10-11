@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal as D
 from typing import Literal
@@ -188,3 +189,190 @@ def test_each_registered_criterion_blocks_alone(tmp_path, overrides, failing):
     result = verdict.evaluate(receipt(tmp_path, **overrides))
     assert [c['name'] for c in result['criteria'] if not c['passed']] == ([failing] if failing else [])
     assert result['advance'] is (failing is None)
+
+
+# --- Second round: one-concept H1 candidates --------------------------------------------------
+
+from pydantic import ValidationError  # noqa: E402
+
+from intraday.replay_v2.contracts import Candle  # noqa: E402
+from intraday.replay_v2.donchian_adx_setups import (  # noqa: E402
+    BasketConfig, H1Adx30Config, H1BasketConfig, basket_specification, h1_family_cases)
+from intraday.replay_v2.donchian_filter_book import ATRTrail  # noqa: E402
+from intraday.replay_v2.donchian_filters import entry_filters, indicator_series  # noqa: E402
+
+
+class RegimeConfig(HourlyConfig):
+    regime_interval: Literal['4h'] = '4h'
+
+
+class GeometryConfig(HourlyConfig):
+    stop_atr_multiple: Literal[6] = 6
+
+
+class FastEmaConfig(HourlyConfig):
+    ema_fast: Literal[20] = 20
+    ema_slow: Literal[50] = 50
+
+
+def closes(values):
+    return [Candle(opened_at=T0+timedelta(hours=4*i), available_at=T0+timedelta(hours=4*i+4),
+                   open=D(v), high=D(v)+1, low=D(v)-1, close=D(v), volume=D(10)) for i, v in enumerate(values)]
+
+
+def test_atr_trail_multiple_defaults_to_three_and_scales_the_stop_distance():
+    assert ATRTrail(1, D(100), D(2)).stop == D(94)
+    wide = ATRTrail(1, D(100), D(2), 6)
+    assert wide.stop == D(88)
+    wide.update(D(120), D(110), D(2))
+    assert wide.stop == D(108)  # extreme 120 - 6 * 2; never loosens
+
+
+def test_indicator_pair_changes_seeds_and_names_without_touching_the_legacy_keys():
+    rows = closes(range(100, 160))
+    legacy = indicator_series(rows)[60-1]
+    assert {'ema50', 'prior_ema50', 'ema200'} <= set(legacy) and legacy['ema200'] is None
+    fast = indicator_series(rows, ema_fast=20, ema_slow=50)
+    assert 'ema50' not in fast[0] and {'ema_fast', 'prior_ema_fast', 'ema_slow'} <= set(fast[0])
+    assert fast[18]['ema_fast'] is None and fast[19]['ema_fast'] == sum(D(100+i) for i in range(20))/20
+    assert fast[48]['ema_slow'] is None and fast[49]['ema_slow'] == sum(D(100+i) for i in range(50))/50
+    assert fast[20]['ema_fast'] == fast[19]['ema_fast']+D(2)/21*(D(120)-fast[19]['ema_fast'])
+    assert fast[20]['prior_ema_fast'] == fast[19]['ema_fast']
+
+
+def test_role_named_filters_block_on_the_right_side_and_slope():
+    ok = dict(close=D(110), ema_slow=D(100), ema_fast=D(105), prior_ema_fast=D(104), adx=D(30), prior_adx=D(25),
+              plus_di=D(30), minus_di=D(10), volume=D(5), volume_ma=D(1), profile=dict(vah=100, val=90))
+    assert entry_filters(ok, 1, 4, adx_threshold=20, ema_fast=20, ema_slow=50) == []
+    assert entry_filters({**ok, 'ema_fast': D(115)}, 1, 1, ema_fast=20, ema_slow=50) == ['ema_fast']
+    assert entry_filters({**ok, 'prior_ema_fast': D(106)}, 1, 1, ema_fast=20, ema_slow=50) == ['ema_fast']
+    assert entry_filters({**ok, 'ema_slow': D(120)}, 1, 1, ema_fast=20, ema_slow=50) == ['ema_slow']
+    assert entry_filters({**ok, 'adx': D(25)}, 1, 2, adx_threshold=30, ema_fast=20, ema_slow=50) == ['adx']
+
+
+def test_prepared_features_must_match_the_study_indicator_settings():
+    cfg, data, hourly, derivation, funding = hourly_setup()
+    prepared = prepare(cfg, hourly, funding, derivation=derivation)
+    for other in (FastEmaConfig(start=cfg.start, end=cfg.end),):
+        with pytest.raises(ValueError, match='another indicator configuration'):
+            simulate(other, prepared)
+    assert prepared.ema_periods == (50, 200) and prepared.regime_interval is None
+    fast = prepare(FastEmaConfig(start=cfg.start, end=cfg.end), hourly, funding, derivation=derivation)
+    assert fast.ema_periods == (20, 50) and fast.checksum != prepared.checksum
+    assert {'ema_fast', 'ema_slow'} <= set(fast.features['spot']['BTCUSDT'][cfg.start])
+
+
+def regime_setup():
+    cfg, data, funding = fixture()
+    symbols = list(cfg.weights)
+    hourly, derivation = build(data, symbols, cfg.start, cfg.end, keep_h4=True)
+    return RegimeConfig(start=cfg.start, end=cfg.end), data, hourly, derivation, funding
+
+
+def test_regime_gate_reads_only_h4_bars_already_closed_at_the_h1_close():
+    cfg, _, hourly, derivation, funding = regime_setup()
+    base = prepare(cfg, hourly, funding, derivation=derivation).features['spot']['BTCUSDT']
+    assert base[cfg.start]['regime_available_at'] == cfg.start.isoformat()
+    assert base[cfg.start+timedelta(hours=3)]['regime_available_at'] == cfg.start.isoformat()
+    assert base[cfg.start+timedelta(hours=4)]['regime_available_at'] == (cfg.start+timedelta(hours=4)).isoformat()
+
+    series = {s: dict(tags) for s, tags in hourly.items()}
+    rows = list(series['BTCUSDT']['spot4h'])
+    index = next(i for i, b in enumerate(rows) if b.opened_at == cfg.start)
+    rows[index] = rows[index].model_copy(update={'close': D(500), 'high': D(501)})
+    series['BTCUSDT']['spot4h'] = tuple(rows)
+    changed = prepare(cfg, series, funding, derivation=derivation).features['spot']['BTCUSDT']
+    for hours in range(0, 4):  # The altered H4 bar is still open until START+4h.
+        at = cfg.start+timedelta(hours=hours)
+        assert changed[at]['ema50'] == base[at]['ema50'] and changed[at]['adx'] == base[at]['adx']
+    assert changed[cfg.start+timedelta(hours=4)]['ema50'] != base[cfg.start+timedelta(hours=4)]['ema50']
+
+
+def test_regime_gate_needs_the_default_pair_and_h1_bars():
+    cfg, _, hourly, derivation, funding = regime_setup()
+
+    class Mixed(RegimeConfig):
+        ema_fast: Literal[20] = 20
+        ema_slow: Literal[50] = 50
+    with pytest.raises(ValueError, match='H4 regime gate'):
+        prepare(Mixed(start=cfg.start, end=cfg.end), hourly, funding, derivation=derivation)
+
+
+def breakout_setup(config_type):
+    cfg, _, hourly, derivation, funding = hourly_setup()
+    cut = cfg.start-timedelta(hours=1)
+    for series in hourly.values():
+        for tag in ('spot1h', 'spot15m'):
+            series[tag] = tuple(
+                b.model_copy(update={'open': D(130), 'high': D(131), 'low': D(129), 'close': D(130)})
+                if b.opened_at >= cut else b for b in series[tag])
+    config = config_type(start=cfg.start, end=cfg.end)
+    return config, prepare(config, hourly, funding, derivation=derivation)
+
+
+def test_wider_stop_multiple_doubles_the_initial_stop_distance_and_is_reported():
+    base_cfg, base_prepared = breakout_setup(HourlyConfig)
+    wide_cfg, wide_prepared = breakout_setup(GeometryConfig)
+
+    def first_stop(report):
+        entry = next(e for e in report['events'] if e['kind'] == 'entry_features' and e['symbol'] == 'BTCUSDT')
+        return D(entry['stop']), D(next(t for t in report['trades'] if t['symbol'] == 'BTCUSDT'
+                                         and t['market'] == 'spot')['entry_price'])
+    base, base_price = first_stop(simulate(base_cfg, base_prepared))
+    report = simulate(wide_cfg, wide_prepared)
+    wide, wide_price = first_stop(report)
+    assert base_price == wide_price and wide_price-wide == 2*(base_price-base)
+    assert report['methodology']['variant'] == {'stop_atr_multiple': 6}
+
+
+def test_default_reports_carry_no_variant_block():
+    cfg, prepared = breakout_setup(HourlyConfig)
+    assert 'variant' not in simulate(cfg, prepared)['methodology']
+
+
+def test_family_configs_change_one_concept_each_and_leave_the_baseline_payload_alone():
+    from datetime import datetime as dt
+    start, end = dt(2022, 1, 1, tzinfo=timezone.utc), dt(2026, 10, 2, tzinfo=timezone.utc)
+    cases = dict(h1_family_cases(start, end))
+    assert list(cases)[:4] == ['ETH-NEAR-SOL-H4', 'ETH-NEAR-SOL-H4-cost2x', 'ETH-NEAR-SOL-H1', 'ETH-NEAR-SOL-H1-cost2x']
+    assert len(cases) == 12
+    baseline = cases['ETH-NEAR-SOL-H1'].model_dump(mode='json')
+    assert baseline['bar_interval'] == '1h' and not {'stop_atr_multiple', 'ema_fast', 'ema_slow', 'regime_interval'} & set(baseline)
+    assert baseline['exit_window'] == 10 and baseline['adx_by_market']['spot']['ETHUSDT'] == 20
+    geometry = cases['ETH-NEAR-SOL-H1-GEOM'].model_dump(mode='json')
+    assert (geometry['stop_atr_multiple'], geometry['exit_window']) == (6, 40)
+    assert cases['ETH-NEAR-SOL-H1-ADX30'].model_dump(mode='json')['adx_by_market']['perp']['SOLUSDT'] == 30
+    assert cases['ETH-NEAR-SOL-H1-REGIME'].model_dump(mode='json')['regime_interval'] == '4h'
+    fast = cases['ETH-NEAR-SOL-H1-EMA50-20'].model_dump(mode='json')
+    assert (fast['ema_fast'], fast['ema_slow']) == (20, 50)
+    assert all(cases[f'{n}-cost2x'].model_dump(mode='json')['cost_multiplier'] == 2 for n in
+               ('ETH-NEAR-SOL-H4', 'ETH-NEAR-SOL-H1-GEOM', 'ETH-NEAR-SOL-H1-REGIME'))
+
+
+def test_adx30_is_only_accepted_by_its_own_candidate():
+    from datetime import datetime as dt
+    start, end = dt(2022, 1, 1, tzinfo=timezone.utc), dt(2026, 10, 2, tzinfo=timezone.utc)
+    spec = basket_specification(('ETH', 'NEAR', 'SOL'))
+    thirty = {m: dict.fromkeys(spec['weights'], 30) for m in ('spot', 'perp')}
+    H1Adx30Config(start=start, end=end, basket=('ETH', 'NEAR', 'SOL'), **{**spec, 'adx_by_market': thirty})
+    with pytest.raises(ValidationError):
+        H1BasketConfig(start=start, end=end, basket=('ETH', 'NEAR', 'SOL'), **{**spec, 'adx_by_market': thirty})
+    with pytest.raises(ValidationError):
+        BasketConfig(start=start, end=end, basket=('ETH', 'NEAR', 'SOL'), **{**spec, 'adx_by_market': thirty})
+
+
+def test_verdict_family_reads_each_candidate_against_the_same_control(tmp_path):
+    rec = receipt(tmp_path, after_split=250.0)
+    directory = tmp_path/'ETH-NEAR-SOL-H1'
+    trades = [dict(opened_at='2023-01-01T00:00:00+00:00', closed_at='2023-01-04T00:00:00+00:00', gross_pnl='30'),
+              dict(opened_at='2023-02-01T00:00:00+00:00', closed_at='2023-02-01T06:00:00+00:00', gross_pnl='-2')]
+    for item in rec['results']:
+        Path(item['report_directory']).joinpath('trades.jsonl').write_text('\n'.join(json.dumps(t) for t in trades))
+    for extra in ('', '-cost2x'):
+        twin = json.loads(json.dumps(rec['results'][3 if extra else 2]))
+        twin['variant'] = f'ETH-NEAR-SOL-H1-GEOM{extra}'
+        rec['results'].append(twin)
+    result = verdict.evaluate(rec, 'H1-GEOM')
+    assert result['candidate'] == 'H1-GEOM' and result['advance'] is True
+    assert verdict.hold_profile(directory) == dict(trades=2, median_hold_hours=72.0, holds_over_48h=1,
+                                                   gross_pnl_over_48h=30.0)

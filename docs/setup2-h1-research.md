@@ -111,3 +111,55 @@ still positive (+250 USDT) but costs of 515 USDT consume it; mean holding time f
 (ADX 2,393, volume profile 2,555, EMA200 1,267), yet the survivors still lose after costs.
 
 **Conclusion: keep H4.** No ADR-007 and no new prospective test are proposed.
+
+## Second round: four one-concept H1 candidates (pre-registered 2026-10-11)
+
+The operator asked for the indicator set to be shrunk (EMA 50/20 with ADX20) and for further H1 setups.
+Before choosing them the H1 baseline's trade log was read, because it shows where Setup-2 earns:
+
+| | H4 control (423 trades) | H1 baseline (1,725 trades) |
+|---|---:|---:|
+| Held ≤ 48 h | 183 trades, net −1,030 | 1,689 trades, net −810 |
+| Held > 48 h | 240 trades, gross +1,968, costs 113 | **36 trades**, gross +553, costs 12 |
+| Median hold | 58 h | 14 h |
+| Win rate / avg win / avg loss | 41% / 14.5 / −7.0 | 35% / 4.4 / −2.6 |
+
+The long tail pays for everything, and H1 per-trade tail profit (~15 USDT) is not worse than H4 (~8).
+H1 simply rarely reaches the tail: ATR14×3 on H1 is about half the price distance of ATR14×3 on H4, and
+82% of H1 trades leave by trailing stop. Indicator size is not the lever: in clock time the H1
+EMA200 is already 8 days against 33 days at H4, and a smaller EMA loosens the filter.
+
+Each candidate changes one concept against the H1 baseline; all run at normal and doubled costs on the
+same basket, window, bars and costs, against the same H4 control:
+
+| Candidate | Change | Prediction (written before the run) |
+|---|---|---|
+| `H1-GEOM` | stop and trail ATR14×6, Donchian exit 40 bars (H1 ATR×6 ≈ H4 ATR×3 in price, 40 H1 bars = 10 H4 bars) | fewer trades, many more holds > 48 h, clearly better than baseline, probably still below H4 |
+| `H1-REGIME` | EMA200/50 and ADX/DMI14 > 20 read from the last closed H4 bar; Donchian, volume, profile, ATR and stops stay on H1 | fewer trades, better than baseline |
+| `H1-EMA50-20` | EMA50 as trend line, EMA20 as momentum line (close on the right side and rising), replacing EMA200/EMA50 | looser filter, more and shorter trades, worse than baseline; included to test "the indicators are too large" |
+| `H1-ADX30` | ADX threshold 30 instead of 20, both markets | fewer trades, small improvement, still negative |
+
+Mechanics worth knowing:
+
+- Regime features use native H4 candles. For an H1 bar closing at time `t`, only the H4 bar with
+  `available_at ≤ t` is used, so a still-open H4 candle never speaks for the regime. The entry
+  event records `regime_available_at`.
+- With EMA 50/20 the feature and blocker names are `ema_fast` / `ema_slow` (not `ema50` / `ema200`),
+  because `ema50` would otherwise mean the slow line there and the fast line elsewhere.
+- Position sizing stays `min(1, 0.02 / ATR%)` for every candidate. A wider stop therefore raises the
+  loss per stopped trade; that is part of the geometry being measured, not corrected.
+- The H4 control and the H1 baseline must reproduce `donchian-basket3-20261009` and
+  `donchian-setup2-h1-20261011` exactly; this also proves the engine changes left defaults alone.
+
+**Decision rule:** the same five criteria as above, computed by `donchian_h1_verdict` for each
+candidate against the same H4 control. This is four further tries in one family on already-seen data,
+made after the baseline failed, so a pass is weaker evidence than the first test and only grounds for a
+new frozen prospective test. No further H1 variants are added without a new reason.
+
+```bash
+uv run python -m intraday.replay_v2.donchian_adx_study --universe h1-family \
+  --inputs /home/julius/.local/state/aigorithmic-trading/reports/donchian-adx-five-20261005/approved-data/inputs.json \
+  --report-root /home/julius/.local/state/aigorithmic-trading/reports/donchian-setup2-h1-family-20261011
+uv run python -m intraday.replay_v2.donchian_h1_verdict \
+  /home/julius/.local/state/aigorithmic-trading/reports/donchian-setup2-h1-family-20261011/runs/comparison.json
+```

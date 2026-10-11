@@ -7,20 +7,28 @@ import numpy as np
 ZERO, ONE = Decimal(0), Decimal(1)
 
 
-def indicator_series(rows):
+def ema_keys(ema_fast=50, ema_slow=200):
+    """Feature names: legacy ones for the Setup-2 pair, role names for any other pair."""
+    if (ema_fast, ema_slow) == (50, 200):
+        return 'ema50', 'prior_ema50', 'ema200'
+    return 'ema_fast', 'prior_ema_fast', 'ema_slow'
+
+
+def indicator_series(rows, *, ema_fast=50, ema_slow=200):
     """EMA SMA seeds; ATR simple TR14 (legacy sizing); DMI/ADX Wilder14."""
+    fast_key, prior_key, slow_key = ema_keys(ema_fast, ema_slow)
     result, trs, ups, downs, dxs = [], [], [], [], []
     ema50 = ema200 = tr_rma = up_rma = down_rma = adx = None
     for i, bar in enumerate(rows):
         prior50, prior_adx = ema50, adx
-        if i == 49:
-            ema50 = sum((b.close for b in rows[:50]), ZERO)/50
+        if i == ema_fast-1:
+            ema50 = sum((b.close for b in rows[:ema_fast]), ZERO)/ema_fast
         elif ema50 is not None:
-            ema50 += Decimal(2)/51*(bar.close-ema50)
-        if i == 199:
-            ema200 = sum((b.close for b in rows[:200]), ZERO)/200
+            ema50 += Decimal(2)/(ema_fast+1)*(bar.close-ema50)
+        if i == ema_slow-1:
+            ema200 = sum((b.close for b in rows[:ema_slow]), ZERO)/ema_slow
         elif ema200 is not None:
-            ema200 += Decimal(2)/201*(bar.close-ema200)
+            ema200 += Decimal(2)/(ema_slow+1)*(bar.close-ema200)
         plus = minus = None
         if i:
             previous = rows[i-1]
@@ -46,7 +54,7 @@ def indicator_series(rows):
         result.append(dict(close=bar.close, volume=bar.volume,
             volume_ma=sum((b.volume for b in rows[i-20:i]), ZERO)/20 if i >= 20 else None,
             atr=sum(trs[-14:], ZERO)/14 if len(trs) >= 14 else None,
-            ema50=ema50, prior_ema50=prior50, ema200=ema200, adx=adx,
+            **{fast_key: ema50, prior_key: prior50, slow_key: ema200}, adx=adx,
             prior_adx=prior_adx, plus_di=plus, minus_di=minus))
     return result
 
@@ -112,15 +120,16 @@ def volume_profile(rows, bins=50):
                 vah=float(edges[last+1]), volumes=hist.tolist(), covered_volume=float(covered))
 
 
-def entry_filters(f, side, level, *, adx_threshold=25):
+def entry_filters(f, side, level, *, adx_threshold=25, ema_fast=50, ema_slow=200):
     """All applicable blockers, not merely the first one, for ablation reports."""
     failed = []
+    fast_key, prior_key, slow_key = ema_keys(ema_fast, ema_slow)
     if level >= 1:
-        if f['ema200'] is None or side*(f['close']-f['ema200']) <= 0:
-            failed.append('ema200')
-        if f['ema50'] is None or f['prior_ema50'] is None or (
-                side*(f['close']-f['ema50']) <= 0 or side*(f['ema50']-f['prior_ema50']) <= 0):
-            failed.append('ema50')
+        if f[slow_key] is None or side*(f['close']-f[slow_key]) <= 0:
+            failed.append(slow_key)
+        if f[fast_key] is None or f[prior_key] is None or (
+                side*(f['close']-f[fast_key]) <= 0 or side*(f[fast_key]-f[prior_key]) <= 0):
+            failed.append(fast_key)
     if level >= 2 and adx_threshold is not None:
         if f['adx'] is None or f['prior_adx'] is None or f['adx'] <= adx_threshold or f['adx'] <= f['prior_adx']:
             failed.append('adx')

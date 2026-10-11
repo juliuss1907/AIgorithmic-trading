@@ -109,9 +109,13 @@ class BasketConfig(HistoricalConfig):
     drawdown_policy: Literal['observe-only'] = 'observe-only'
     perp_stop: Literal['atr14-3x'] = 'atr14-3x'
 
+    def locked_overrides(self):
+        """Pre-registered variants replace individual locked entries here; the default is none."""
+        return {}
+
     @model_validator(mode='after')
     def locked_basket(self):
-        if not matches(self, basket_specification(self.basket)):
+        if not matches(self, {**basket_specification(self.basket), **self.locked_overrides()}):
             raise ValueError('three-coin basket allocation/threshold/risk rules changed')
         return self
 
@@ -129,6 +133,45 @@ class H1BasketConfig(BasketConfig):
 
 class H1BasketStressConfig(H1BasketConfig):
     cost_multiplier: Literal[2] = 2
+
+
+class H1GeometryConfig(H1BasketConfig):
+    """H1 entries with the H4 price distances: ATR x6 stop/trail and a 40-bar exit channel.
+    Volatility scales with the square root of time, so H1 ATR x6 ~ H4 ATR x3; 40 H1 bars = 10 H4 bars."""
+    stop_atr_multiple: Literal[6] = 6
+    exit_window: Literal[40] = 40
+
+
+class H1RegimeConfig(H1BasketConfig):
+    """H1 triggers; EMA200/50 and ADX/DMI14 are read from the last closed H4 bar."""
+    regime_interval: Literal['4h'] = '4h'
+
+
+class H1FastEmaConfig(H1BasketConfig):
+    """EMA50 as the trend line and EMA20 as the rising momentum line, in place of EMA200/EMA50."""
+    ema_fast: Literal[20] = 20
+    ema_slow: Literal[50] = 50
+
+
+class H1Adx30Config(H1BasketConfig):
+    """Only the ADX threshold moves, 20 -> 30, in both markets."""
+    adx_by_market: dict[str, dict[str, Literal[30]]]
+
+    def locked_overrides(self):
+        return {'adx_by_market': {m: dict.fromkeys(self.weights, 30) for m in ('spot', 'perp')}}
+
+
+def _stress(cls):
+    class Stressed(cls):
+        cost_multiplier: Literal[2] = 2
+    Stressed.__name__ = cls.__name__.replace('Config', 'StressConfig')
+    return Stressed
+
+
+H1GeometryStressConfig = _stress(H1GeometryConfig)
+H1RegimeStressConfig = _stress(H1RegimeConfig)
+H1FastEmaStressConfig = _stress(H1FastEmaConfig)
+H1Adx30StressConfig = _stress(H1Adx30Config)
 
 
 def basket_name(basket):
@@ -154,6 +197,26 @@ def h1_cases(start, end):
             (f'{name}-H4-cost2x', BasketStressConfig(start=start, end=end, basket=H1_BASKET, **spec)),
             (f'{name}-H1', H1BasketConfig(start=start, end=end, basket=H1_BASKET, **spec)),
             (f'{name}-H1-cost2x', H1BasketStressConfig(start=start, end=end, basket=H1_BASKET, **spec))]
+
+
+def h1_family_cases(start, end):
+    """H4 control and H1 baseline, then four one-concept H1 candidates, each at normal and doubled costs.
+    Ordered by indicator preparation so the study prepares each feature set once."""
+    spec = basket_specification(H1_BASKET)
+    name = basket_name(H1_BASKET)
+    adx30 = {m: dict.fromkeys(spec['weights'], 30) for m in ('spot', 'perp')}
+    rows = [('H4', BasketConfig, BasketStressConfig, {}),
+            ('H1', H1BasketConfig, H1BasketStressConfig, {}),
+            ('H1-GEOM', H1GeometryConfig, H1GeometryStressConfig, {}),
+            ('H1-ADX30', H1Adx30Config, H1Adx30StressConfig, {'adx_by_market': adx30}),
+            ('H1-EMA50-20', H1FastEmaConfig, H1FastEmaStressConfig, {}),
+            ('H1-REGIME', H1RegimeConfig, H1RegimeStressConfig, {})]
+    cases = []
+    for label, normal, stressed, override in rows:
+        for suffix, cls in (('', normal), ('-cost2x', stressed)):
+            cases.append((f'{name}-{label}{suffix}',
+                          cls(start=start, end=end, basket=H1_BASKET, **{**spec, **override})))
+    return cases
 
 
 def setup_cases(start, end):
