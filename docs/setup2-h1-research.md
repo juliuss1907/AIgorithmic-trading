@@ -225,3 +225,39 @@ uv run python -m intraday.replay_v2.donchian_adx_study --universe h1-family --st
   --inputs /home/julius/.local/state/aigorithmic-trading/reports/donchian-adx-five-20261005/approved-data/inputs.json \
   --report-root /home/julius/.local/state/aigorithmic-trading/reports/donchian-setup2-h1-family-2026ytd-20261011
 ```
+
+### Result of the recent-window replay (2026-10-11)
+
+Engine commit `1c67af1`, report root `donchian-setup2-h1-family-2026ytd-20261011`; 12 cases from a fresh
+account at 2026-01-01 to 2026-10-02, each with a deterministic double replay (5 minutes, 6.9 GB).
+
+| Case | Return % | DD % | Trades | Fees + slippage | Spot net | Perp net | Return at cost ×2 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **H4 control** | +14.23 | 10.46 | 65 | 26 | +86 | +56 | +11.38 |
+| H1 baseline | +8.12 | 11.03 | 265 | 117 | +124 | −43 | −3.79 |
+| H1-GEOM | +4.63 | 21.10 | 192 | 85 | +81 | −34 | −3.63 |
+| H1-REGIME | +8.12 | **7.36** | 140 | 62 | +40 | +41 | +1.83 |
+| **H1-ADX30** | **+15.50** | 9.80 | 140 | 64 | +145 | +10 | +8.53 |
+| H1-EMA50-20 | +6.84 | 11.23 | 270 | 118 | +116 | −47 | −5.12 |
+
+Mechanical verdict (split 2026-05-18): **`H1-ADX30` meets all five criteria**; `H1-REGIME` fails only
+the return criterion (8.1% vs 14.2%); baseline, GEOM and EMA 50/20 fail four or five.
+
+Why this is not grounds to change anything:
+
+- **The margin is noise.** ADX30 beats H4 by 12.7 USDT (+1.3 pp). Per-trade results give a standard
+  error of about 150 USDT on that difference, and about 113 USDT on H4's own +142. The window cannot
+  separate ADX30 from H4, nor reliably H4 from zero.
+- **Selection.** ADX30 is one of five candidates, picked after the full-window run showed it at −13.0%
+  (DD 41.6%). Taking the best of five in a sub-window of the same data is what chance alone produces.
+- **Different mechanism.** In this window ADX30 holds only 2 trades beyond 48 h (median hold 14 h)
+  against H4's 38 (median 58 h); it earns through frequent short Spot trades with 2.2× the trades
+  and 2.5× the costs, and the second half carries almost all of it (+10.8 then +144.2 USDT).
+- **GEOM reverses.** The full-window winner among H1 variants falls to +4.6% with 21% drawdown here;
+  the long-trend years it relied on are mostly outside 2026.
+- **H4 is the stable reference.** +14.2% at 10.5% drawdown on 65 trades, +11.4% at doubled costs, and
+  the same sign in both halves, consistent with its earlier segments.
+
+Per the pre-registered rule a pass is at most grounds to propose a new frozen prospective test.
+The recommendation is not to, because no statistical separation exists and the mechanism differs
+from the one Setup-2 was chosen for. ADR-005 (ETH-NEAR-SOL H4) stays the only frozen candidate.

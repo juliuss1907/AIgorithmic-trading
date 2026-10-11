@@ -4,6 +4,13 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-11 — Chạy lại họ H1 trên cửa sổ 2026
+
+Nhánh: `research/setup2-h1`. Julius muốn xem riêng dữ liệu từ đầu 2026. Thêm `donchian_adx_study --start` (cắt nến đã đóng băng sau khi giải mã, tài khoản mới 1.000 USDT, các dòng trước ngày bắt đầu chỉ làm nóng chỉ báo) và quy tắc chia nửa cửa sổ ở điểm giữa (2026-05-18) cho cửa sổ ngắn. Dữ liệu dừng ở 2026-10-02 (hết manifest), không phải hôm nay.
+
+- **Kết quả (commit `1c67af1`):** H4 +14,23%, DD 10,46%, 65 lệnh, chi phí ×2 còn +11,38%. `H1-ADX30` +15,50%, DD 9,80%, 140 lệnh, qua cả năm tiêu chí theo công thức. `H1-REGIME` +8,12% nhưng DD thấp nhất (7,36%) và Spot, Perp đều dương. `H1-GEOM` +4,63% với DD 21%; baseline +8,12%; EMA 50/20 +6,84%.
+- **Không đổi gì:** ADX30 hơn H4 12,7 USDT trong khi sai số chuẩn của chênh lệch cỡ 150 USDT; nó là một trong năm ứng viên chọn sau khi toàn cửa sổ cho −13%, kiếm tiền bằng lệnh ngắn (chỉ 2 lệnh giữ > 48 giờ, so với 38 của H4), 2,5 lần chi phí. Giữ nguyên ADR-005 (H4).
+
 ## 2026-10-11 — Vòng hai H1: bốn ứng viên một khái niệm (đăng ký trước)
 
 Nhánh: `research/setup2-h1`. Sau khi H1 baseline thua, Julius muốn thử EMA 50/20 và thêm các setup H1 khác. Chi tiết, dự đoán và tiêu chí: mục "Second round" trong [setup2-h1-research](docs/setup2-h1-research.md).
