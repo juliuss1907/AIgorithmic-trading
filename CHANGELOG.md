@@ -14,6 +14,7 @@ Nhánh: `research/setup2-h1` (từ `feature/three-coin-runtime`). Julius hỏi c
 - **Tiêu chí ghi trước khi chạy** và do `donchian_h1_verdict` tính: lợi nhuận không thấp hơn H4, DD dưới 15%, chi phí gấp đôi vẫn dương, Spot và Perp đều dương, cả hai nửa cửa sổ (chia tại 2024-10-29) đều dương. Đạt cũng chỉ là căn cứ đề xuất paper-test prospective mới, không bật gì.
 - **Code:** `bar_interval` trong engine (mặc định H4 giữ nguyên từng byte, config và `result_id` cũ không đổi), `donchian_hourly.py`, `donchian_h1_verdict.py`, `--universe h1`.
 - **Kiểm thử:** 15 test mới; 184 test `donchian_*` và parity Setup-2 vẫn pass.
+- **Kết quả (commit `b42b56c`):** ca đối chứng H4 trùng từng byte với kết quả đã công bố (+81,75%, DD 11,58%, 423 lệnh). H1 thua: −26,89%, DD 45,92%, 1.725 lệnh, phí+trượt giá 515 so với 201 USDT; gấp đôi chi phí còn −64,97%. Giá gộp vẫn dương (+250) nhưng bị chi phí nuốt; Spot −93, Perp −176. Cả 5 tiêu chí đều trượt. **Kết luận: giữ H4**, không đề xuất ADR-007.
 
 ## 2026-10-10 — Công cụ A/B offline: Jev nhận số hay nhận ký tự
 

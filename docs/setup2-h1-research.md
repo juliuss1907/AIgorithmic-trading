@@ -90,3 +90,24 @@ uv run python -m intraday.replay_v2.donchian_h1_verdict \
 
 Commit the clean implementation first: the runner binds the engine commit, source hashes, config
 hashes and the input SHA256, and refuses a changed binding on resume.
+
+## Result (2026-10-11)
+
+Engine commit `b42b56c`, report root `donchian-setup2-h1-20261011` (private reports directory).
+The control reproduced the published basket result exactly (`result_id`, dataset checksum and
+summary equal for both H4 cases). Every case passed the deterministic double replay.
+
+| Case | Final USDT | Return % | DD % | Trades | Fees + slippage | Spot net | Perp net |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| H4 control | 1,817.45 | +81.75 | 11.58 | 423 | 200.8 | +493 | +324 |
+| H4 cost2x | 1,573.90 | +57.39 | 12.71 | 423 | 371.0 | +322 | +252 |
+| **H1** | 731.09 | **−26.89** | **45.92** | 1,725 | 514.8 | −93 | −176 |
+| H1 cost2x | 350.34 | −64.97 | 68.88 | 1,725 | 743.0 | −377 | −272 |
+
+All five registered criteria fail (return below control, DD above 15%, doubled costs negative,
+Spot and Perp both negative, first half −392 USDT / second half +123 USDT). H1 gross price PnL is
+still positive (+250 USDT) but costs of 515 USDT consume it; mean holding time falls from 68.8 h to
+16.5 h and trailing-stop exits rise from 361 to 1,421. The filters block many more H1 breakouts
+(ADX 2,393, volume profile 2,555, EMA200 1,267), yet the survivors still lose after costs.
+
+**Conclusion: keep H4.** No ADR-007 and no new prospective test are proposed.
