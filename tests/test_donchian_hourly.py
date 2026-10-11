@@ -376,3 +376,26 @@ def test_verdict_family_reads_each_candidate_against_the_same_control(tmp_path):
     assert result['candidate'] == 'H1-GEOM' and result['advance'] is True
     assert verdict.hold_profile(directory) == dict(trades=2, median_hold_hours=72.0, holds_over_48h=1,
                                                    gross_pnl_over_48h=30.0)
+
+
+def test_window_start_keeps_only_warmup_and_the_new_window_and_prepares_cleanly():
+    from intraday.replay_v2.donchian_adx_study import window_data
+    cfg, data, funding = fixture(days=3)
+    later = cfg.start+timedelta(days=1)
+    sliced = window_data(data, later)
+    symbol = next(iter(sliced))
+    assert sliced[symbol]['perp4h'][0].opened_at == later-timedelta(hours=2400)
+    assert sliced[symbol]['spot15m'][0].opened_at == later-timedelta(hours=484)
+    assert sliced[symbol]['mark15m'][0].opened_at == later
+    shorter = FilterConfig(start=later, end=cfg.end)
+    prepared = prepare(shorter, sliced, funding)
+    assert min(prepared.features['spot'][symbol]) == later
+    assert simulate(shorter, prepared)['summary']['closed_trades'] >= 0
+
+
+def test_verdict_split_is_the_registered_date_or_the_window_midpoint():
+    from datetime import datetime as dt
+    full = {'window': {'start': '2022-01-01T00:00:00+00:00', 'end': '2026-10-02T00:00:00+00:00'}}
+    short = {'window': {'start': '2026-01-01T00:00:00+00:00', 'end': '2026-10-02T00:00:00+00:00'}}
+    assert verdict.split_for(full) == verdict.SPLIT
+    assert verdict.split_for(short) == dt(2026, 5, 18, tzinfo=timezone.utc)

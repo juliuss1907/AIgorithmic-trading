@@ -201,3 +201,27 @@ What the round shows:
 keeps GEOM's gross while cutting its trade count by roughly two thirds. Whether a combination of
 geometry with a regime or ADX gate does that is a fifth and sixth look at the same seen data, so it
 is left as an explicit decision for the operator rather than added here.
+
+## Recent-window replay: 2026-01-01 → 2026-10-02 (pre-registered 2026-10-11)
+
+The operator asked to look only at data from the start of 2026. The same 12 cases are replayed from
+a fresh 1,000 USDT account at 2026-01-01, with the earlier rows used only to warm the indicators
+(H4 600 bars, M15 484 hours, as before). `donchian_adx_study --start 2026-01-01` slices the frozen
+candles after decoding; nothing is refetched.
+
+- **Data end:** 2026-10-02, the end of the frozen manifest, not today. Newer candles need a new
+  manifest and are out of scope here.
+- **Criteria:** the same five. The two-halves test splits at the window midpoint, 2026-05-18, instead
+  of 2024-10-29 (`donchian_h1_verdict.split_for`); this rule is fixed before the run.
+- **Not independent evidence:** this window is part of the 2022–2026 window already used to pick and
+  judge every candidate. It describes the recent regime only.
+- **Thin sample:** Setup-2 H4 trades roughly once per 25 days per coin and market, so expect on the
+  order of 60–100 trades; differences between candidates will be mostly noise. Read it descriptively.
+- **Reference from the continuous run:** H4's two 2026 half-year segments were +3.6% and +10.2%
+  (segments carry capital and positions, so a fresh account will differ slightly).
+
+```bash
+uv run python -m intraday.replay_v2.donchian_adx_study --universe h1-family --start 2026-01-01T00:00:00+00:00 \
+  --inputs /home/julius/.local/state/aigorithmic-trading/reports/donchian-adx-five-20261005/approved-data/inputs.json \
+  --report-root /home/julius/.local/state/aigorithmic-trading/reports/donchian-setup2-h1-family-2026ytd-20261011
+```

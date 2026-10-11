@@ -9,7 +9,7 @@ from intraday.replay_v2.artifacts import _write, publish_report, SERIES
 from intraday.replay_v2.donchian_adx_config import config_type, cases
 from intraday.replay_v2.donchian_adx_data import read_join_inputs
 from intraday.replay_v2.donchian_filter_data import decode_bundle, verify_files
-from intraday.replay_v2.donchian_filter_engine import indicator_settings, prepare, simulate
+from intraday.replay_v2.donchian_filter_engine import WARMUP_BY_INTERVAL, indicator_settings, prepare, simulate
 from intraday.replay_v2.donchian_oos_analysis import annual_equity
 from intraday.replay_v2.donchian_oos_pipeline import source_hashes, git, REPO, verify_item
 from intraday.replay_v2.historical_study import read_inputs
@@ -133,7 +133,19 @@ def verify_three_coin(comparison_path, output_root, *, progress=print, universe=
     return results
 
 
-def run_study(inputs_path, report_root, *, resume=False, progress=print, universe='three'):
+def window_data(data, start):
+    """Keep only the rows a later-starting replay validates: warmup before `start`, then the window."""
+    sliced={}
+    for symbol,series in data.items():
+        sliced[symbol]={}
+        for tag,rows in series.items():
+            interval='15m' if tag.endswith('15m') else tag[-2:]
+            first=start if tag=='mark15m' else start-WARMUP_BY_INTERVAL[interval]
+            sliced[symbol][tag]=tuple(r for r in rows if r.opened_at>=first)
+    return sliced
+
+
+def run_study(inputs_path, report_root, *, resume=False, progress=print, universe='three', window_start=None):
     source=Path(inputs_path).expanduser().resolve();before=file_hash(source)
     if universe in ('five', 'setups', 'baskets', 'h1', 'h1-family'):
         from intraday.replay_v2.donchian_five_data import read_manifest
@@ -141,10 +153,18 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
     else:
         raw=read_join_inputs(source)
     start,end=(datetime.fromisoformat(raw['window'][k]) for k in ('start','end'))
+    bundle_start=start
+    if window_start is not None:
+        # Same frozen candles, shorter account: replay starts later, earlier rows only warm the indicators.
+        start=datetime.fromisoformat(window_start)
+        if universe not in ('baskets','h1','h1-family') or start.tzinfo is None or not bundle_start<start<end:
+            raise ValueError('a later window start needs a basket universe and a date inside the frozen window')
     variants=cases(start,end,universe=universe);lineage=raw['source_files_sha256'];verify_files(lineage)
     binding=dict(version='donchian-adx-exploration-1',engine_commit=git('rev-parse','HEAD'),
                  sources=runtime_hashes(),inputs_path=str(source),inputs_sha256=before,
                  configs={name:cfg.model_dump(mode='json') for name,cfg in variants})
+    if window_start is not None:
+        binding['window_start']=start.isoformat()
     root=Path(report_root).expanduser().resolve()
     if root.exists():
         if not resume:raise FileExistsError(root)
@@ -154,7 +174,9 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
         _write(root/'binding.json',encoded(binding))
     progress('Preparing shared causal features and native M15 volume profiles')
     preparation_config = (config_type('five')(start=start,end=end) if universe in ('setups','baskets','h1','h1-family') else variants[0][1])
-    data,funding=decode_bundle(preparation_config,raw)
+    data,funding=decode_bundle(config_type('five')(start=bundle_start,end=end) if window_start is not None else preparation_config,raw)
+    if window_start is not None:
+        data=window_data(data,start)
     policy=raw.get('native_boundary_policy')
     del raw
     cache={}
@@ -286,6 +308,7 @@ def main(argv=None):
     parser.add_argument('--universe',choices=('three','five','setups','baskets','h1','h1-family'),default='three')
     parser.add_argument('--early-inputs');parser.add_argument('--late-inputs')
     parser.add_argument('--resume',action='store_true')
+    parser.add_argument('--start',help='ISO UTC date inside the frozen window; replay from there with a fresh account')
     args=parser.parse_args(argv)
     root=Path(args.report_root).expanduser().resolve()
     source=args.inputs
@@ -296,7 +319,7 @@ def main(argv=None):
         source=root/'data'/'inputs.json'
         if not source.exists():source=collect_join(args.early_inputs,args.late_inputs,root/'data')
         elif not args.resume:raise FileExistsError(source)
-    run_study(source,root/'runs',resume=args.resume,universe=args.universe)
+    run_study(source,root/'runs',resume=args.resume,universe=args.universe,window_start=args.start)
 
 
 if __name__=='__main__':

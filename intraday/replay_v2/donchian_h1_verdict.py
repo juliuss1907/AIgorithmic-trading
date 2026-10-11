@@ -16,6 +16,18 @@ SPLIT = datetime(2024, 10, 29, tzinfo=timezone.utc)  # Start of the earlier 703-
 DRAWDOWN_LIMIT_PCT = 15.0  # The live portfolio halt.
 
 
+def split_for(receipt):
+    """The registered split for the full window; for a shorter window, its midpoint floored to a UTC date."""
+    window = receipt.get('window')
+    if not window:
+        return SPLIT
+    start, end = (datetime.fromisoformat(window[k]) for k in ('start', 'end'))
+    if start < SPLIT < end:
+        return SPLIT
+    middle = start+(end-start)/2
+    return middle.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
 def equity_at(report_directory, at):
     last = None
     with open(Path(report_directory)/'equity_curve.jsonl') as stream:
@@ -54,7 +66,8 @@ def evaluate(receipt, candidate='H1'):
     markets = {m: sum(v['net_pnl'] for k, v in h1['contributions'].items() if k.startswith(m+':'))
                for m in ('spot', 'perp')}
     capital, final = Decimal(str(h1['initial_capital'])), Decimal(str(h1['final_equity_known']))
-    split = equity_at(normal['report_directory'], SPLIT)
+    cut = split_for(receipt)
+    split = equity_at(normal['report_directory'], cut)
     halves = dict(before=float(split-capital), after=float(final-split))
     criteria = [
         dict(name='net_return_not_below_h4_control', passed=h1['net_return_pct'] >= h4['net_return_pct'],
@@ -64,7 +77,7 @@ def evaluate(receipt, candidate='H1'):
         dict(name='doubled_costs_still_positive', passed=h1_cost['net_return_pct'] > 0,
              h1_cost2x=h1_cost['net_return_pct']),
         dict(name='spot_and_perp_net_positive', passed=all(v > 0 for v in markets.values()), **markets),
-        dict(name='both_halves_positive', passed=all(v > 0 for v in halves.values()), split=SPLIT.isoformat(), **halves),
+        dict(name='both_halves_positive', passed=all(v > 0 for v in halves.values()), split=cut.isoformat(), **halves),
     ]
     return dict(advance=all(c['passed'] for c in criteria), criteria=criteria, candidate=candidate,
                 trades=dict(h4=h4['closed_trades'], h1=h1['closed_trades']),
