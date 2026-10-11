@@ -121,6 +121,16 @@ class BasketStressConfig(BasketConfig):
     cost_multiplier: Literal[2] = 2
 
 
+class H1BasketConfig(BasketConfig):
+    """The Setup-2 rule with every window counted in H1 bars (Donchian 30/10, EMA200/50, ADX14, volume MA20,
+    120-bar profile, ATR14 x3). The one pre-registered change from `BasketConfig`; nothing else moves."""
+    bar_interval: Literal['1h'] = '1h'
+
+
+class H1BasketStressConfig(H1BasketConfig):
+    cost_multiplier: Literal[2] = 2
+
+
 def basket_name(basket):
     return '-'.join(basket)
 
@@ -131,6 +141,19 @@ def basket_cases(start, end):
     return [('Setup-2', control)] + [
         (basket_name(b)+suffix, cls(start=start, end=end, basket=b, **basket_specification(b)))
         for b in BASKETS for suffix, cls in (('', BasketConfig), ('-cost2x', BasketStressConfig))]
+
+
+H1_BASKET = ('ETH', 'NEAR', 'SOL')
+
+
+def h1_cases(start, end):
+    """Pre-registered: the frozen ETH-NEAR-SOL H4 control and its H1 counterpart, each at normal and doubled costs."""
+    spec = basket_specification(H1_BASKET)
+    name = basket_name(H1_BASKET)
+    return [(f'{name}-H4', BasketConfig(start=start, end=end, basket=H1_BASKET, **spec)),
+            (f'{name}-H4-cost2x', BasketStressConfig(start=start, end=end, basket=H1_BASKET, **spec)),
+            (f'{name}-H1', H1BasketConfig(start=start, end=end, basket=H1_BASKET, **spec)),
+            (f'{name}-H1-cost2x', H1BasketStressConfig(start=start, end=end, basket=H1_BASKET, **spec))]
 
 
 def setup_cases(start, end):

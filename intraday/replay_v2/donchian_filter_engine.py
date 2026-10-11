@@ -51,11 +51,23 @@ class Prepared:
     funding_reference_times: dict | None = None
     native_boundary_policy: str | None = None
     five_source_symbols: frozenset = frozenset()
+    bar_interval: str = '4h'  # Signal-bar width; `h4` keeps its name for the default study.
+    derivation: dict | None = None
 
 
-def prepare(config, data, funding, *, native_boundary_policy=None):
+SIGNAL_HOURS = {'4h': 4, '1h': 1}
+WARMUP_BY_INTERVAL = {**WARMUP, '1h': WARMUP['15m']}
+PROFILE_BARS = 120  # Prior signal bars in the volume profile; 20 days at H4, 5 days at H1.
+
+
+def prepare(config, data, funding, *, native_boundary_policy=None, derivation=None):
     if native_boundary_policy not in (None,BOUNDARY_POLICY,JOIN_POLICY,five_policy.POLICY):
         raise ValueError('unknown native boundary exception policy')
+    signal = getattr(config, 'bar_interval', '4h')
+    if signal not in SIGNAL_HOURS or (signal != '4h' and (derivation is None or native_boundary_policy)):
+        raise ValueError('hourly signal bars require an audited M15 derivation and no H4 boundary policy')
+    lookback = timedelta(hours=PROFILE_BARS*SIGNAL_HOURS[signal])
+    profile_m15 = int(lookback/timedelta(minutes=15))
     symbols = set(config.weights) | set(market_weights(config, 'perp'))
     if set(data) != symbols or set(funding) != symbols:
         raise ValueError('filter research requires configured coins in both markets and funding')
@@ -67,30 +79,35 @@ def prepare(config, data, funding, *, native_boundary_policy=None):
     mark_policy = frozenset(s for s, tags in data.items() if any(isinstance(b, SourceMarkCandle) for b in tags['mark15m']))
     for s, series in data.items():
         identities[s] = {}
-        if set(series) != {'spot4h','spot15m','perp4h','perp15m','mark15m'}:
+        if set(series) != {'spot'+signal,'spot15m','perp'+signal,'perp15m','mark15m'}:
             raise ValueError('missing native filter study series')
         for tag, rows in series.items():
             if not rows:
                 raise ValueError('missing native filter study series rows')
-            interval = '4h' if tag.endswith('4h') else '15m'
-            first = config.start if tag == 'mark15m' else config.start-WARMUP[interval]
+            interval = signal if tag.endswith(signal) else '15m'
+            first = config.start if tag == 'mark15m' else config.start-WARMUP_BY_INTERVAL[interval]
             if tag == 'spot15m' and s in gap_policy:
                 checker=five_policy.spot_candles if isinstance(rows[0],five_policy.FiveSpotCandle) else spot_candles
                 checker([b.row() for b in rows], s, first, config.end)
             elif tag == 'mark15m' and s in mark_policy:
                 checker=five_policy.mark_candles if isinstance(rows[0],five_policy.FiveMarkCandle) else mark_candles
                 checker([b.row() for b in rows], s, first, config.end)
+            elif interval == '1h':
+                # Derived from the validated M15 series by the hourly builder, which owns gap checks.
+                if rows[0].opened_at != first or rows[-1].available_at != config.end:
+                    raise ValueError('hourly signal bars do not cover the study window')
             else:
                 validate_rows([b.row() for b in rows], interval, first, config.end)
             identities[s][tag] = fingerprint([b.row() for b in rows])
         for market in ('spot','perp'):
-            large, small = series[market+'4h'], series[market+'15m']
+            large, small = series[market+signal], series[market+'15m']
             checker=verify_spot_boundaries if market=='spot' and s in gap_policy else verify_boundaries
             if market=='perp' and native_boundary_policy:
                 checker=verify_join_boundaries if native_boundary_policy==JOIN_POLICY else verify_perp_boundaries
             if native_boundary_policy==five_policy.POLICY and (market=='perp' or s in five_policy.SYMBOLS):
                 checker=five_policy.verify_five_boundaries
-            checker(s, large, small, config.start, config.end, market+' H4/M15')
+            if signal == '4h':  # Hourly bars are built from these same M15 rows, so the check would be circular.
+                checker(s, large, small, config.start, config.end, market+' H4/M15')
             indicators = indicator_series(large)
             small_times = [b.available_at for b in small]
             features.setdefault(market, {})[s] = {}
@@ -102,11 +119,11 @@ def prepare(config, data, funding, *, native_boundary_policy=None):
                 f = indicators[i].copy()
                 # Profile ends at trigger candle OPEN: never includes trigger volume.
                 end = bisect_right(small_times, bar.opened_at)
-                begin = bisect_right(small_times, bar.opened_at-timedelta(hours=480))
+                begin = bisect_right(small_times, bar.opened_at-lookback)
                 window = small[begin:end]
-                missing = missing_profile_count(bar.opened_at-timedelta(hours=480), bar.opened_at) if s in gap_policy and market == 'spot' else 0
-                if len(window) != 1920-missing:
-                    raise ValueError('profile requires full prior 20-day M15 coverage')
+                missing = missing_profile_count(bar.opened_at-lookback, bar.opened_at) if s in gap_policy and market == 'spot' else 0
+                if len(window) != profile_m15-missing:
+                    raise ValueError('profile requires full prior M15 coverage')
                 profile = volume_profile(window)
                 f['profile'] = {k:v for k,v in profile.items() if k != 'volumes'} if profile else None
                 features[market][s][bar.available_at] = f
@@ -139,10 +156,12 @@ def prepare(config, data, funding, *, native_boundary_policy=None):
                                  settlements, {config.end}))
     identity=dict(series=identities,funding={s:h.model_dump(mode='json') for s,h in sorted(funding.items())})
     if native_boundary_policy: identity['native_boundary_policy']=native_boundary_policy
+    if signal != '4h': identity.update(bar_interval=signal, derivation=derivation)
     checksum=fingerprint(identity)
     return Prepared(config.start, config.end, features, observations, h4, opens, closes,
                     settlements, timeline, checksum, audit, gap_policy, mark_policy, reference_times,native_boundary_policy,
-                    frozenset(s for s,tags in data.items() if isinstance(tags['spot15m'][0],five_policy.FiveSpotCandle)))
+                    frozenset(s for s,tags in data.items() if isinstance(tags['spot15m'][0],five_policy.FiveSpotCandle)),
+                    signal, derivation)
 
 
 def position(book, market, symbol):
@@ -179,6 +198,7 @@ def simulate(config, prepared):
     if (config.start, config.end) != (prepared.start,prepared.end):
         raise ValueError('prepared features belong to another window')
     book = FilterBook(config)
+    label = 'h4' if prepared.bar_interval == '4h' else 'h1'
     active = {m: market_weights(config, m) for m in ('spot', 'perp')}
     if any(not set(active[m]) <= set(prepared.features[m]) for m in active):
         raise ValueError('prepared data is missing configured market/coins')
@@ -288,7 +308,7 @@ def simulate(config, prepared):
                     if market == 'perp':
                         book.perps[s].stop = trail.stop
                     if before != trail.stop:
-                        book.event(at,'trailing_update','closed_h4_atr14x3',market=market,symbol=s,
+                        book.event(at,'trailing_update',f'closed_{label}_atr14x3',market=market,symbol=s,
                             previous_stop=str(before),stop=str(trail.stop),signal_available_at=at.isoformat())
         # H4 closed immediately before this M15 open. Tightened stop is active
         # now, but cannot be used against the already closed M15/H4 candle.
@@ -332,7 +352,7 @@ def simulate(config, prepared):
                     book.events[-1]['reason'] = 'donchian_short_entry'
                 if position(book,market,s).quantity:
                     book.trails[(market,s)] = ATRTrail(side,price,f['atr'])
-                    book.event(at,'entry_features','closed_h4',market=market,symbol=s,
+                    book.event(at,'entry_features',f'closed_{label}',market=market,symbol=s,
                         atr_size_multiplier=str(multiplier),stop=str(book.trails[(market,s)].stop),
                         features=f,signal_available_at=at.isoformat())
                 risk(at)
@@ -384,22 +404,28 @@ def result(config, prepared, book):
             join_disclosure() if prepared.native_boundary_policy==JOIN_POLICY else disclosure())
     if prepared.five_source_symbols:
         summary['new_coin_data_policy']=five_policy.disclosure()
+    hourly = prepared.bar_interval == '1h'
+
+    def timeframe(text):
+        return text.replace('H4','H1') if hourly else text
+
     return dict(schema_version='2',evaluator_version=VERSION,
         result_id=fingerprint(dict(version=VERSION,config=payload,data=prepared.checksum)),
         research_only=True,activation_allowed=False,official_gate_eligible=False,
         status='complete' if valid else 'limited',config=payload,
-        inputs=dict(dataset_checksum=prepared.checksum,config_checksum=fingerprint(payload),funding_audit=prepared.funding_audit),
+        inputs=dict(dataset_checksum=prepared.checksum,config_checksum=fingerprint(payload),funding_audit=prepared.funding_audit,
+                    **({'signal_bar_derivation':prepared.derivation} if hourly else {})),
         summary=summary,methodology=dict(
             allocation=(allocation_text(config)+'; Short-only1x; independent realized Spot/Perp sizing, no reserve/transfers'
                         if hasattr(config,'adx_by_market') else
                         '60/40 Spot/isolated Short1x; both '+ ' '.join(s.removesuffix('USDT')+str(int(w*100)) for s,w in config.weights.items())+'; independent realized sizing, no reserve/transfers'),
-            signals='closed native H4 Donchian; preceding channel excludes trigger; no D1/Jev/LLM',
+            signals=timeframe('closed native H4 Donchian; preceding channel excludes trigger; no D1/Jev/LLM'),
             atr='simple TR14 preserves old sizing min(1,.02/ATR%); initial and ratcheting price stop ATRx3',
             indicators='EMA SMA seeds; DMI14/ADX14 Wilder; prior20 volume SMA and strict >1.2x',
-            profile='prior120 H4 excluding trigger; native M15 uniform volume in low/high,50 bins,VA70%,POC tie lower/expansion tie upper',
-            trailing='closed H4 high/low since entry; new stop effective next M15; old stop evaluated first',
+            profile=timeframe('prior120 H4 excluding trigger; native M15 uniform volume in low/high,50 bins,VA70%,POC tie lower/expansion tie upper'),
+            trailing=timeframe('closed H4 high/low since entry; new stop effective next M15; old stop evaluated first'),
             daily='combined marked start-of-UTC-day equity3%; pending flatten next M15 open; next UTC day AND flat resume',
-            fills='H4 signal next H4 open; old stops gap at open or touch priced at stop/logged at M15 close; no same-bar reentry',
+            fills=timeframe('H4 signal next H4 open; old stops gap at open or touch priced at stop/logged at M15 close; no same-bar reentry'),
             costs=('Spot10/5bps, Perp5/5bps fee/cash-charged slippage each fill; actual funding separate'
                    if getattr(config, 'cost_multiplier', 1) == 1 else
                    'Spot20/10bps, Perp10/10bps fee/cash-charged slippage each fill; actual funding unchanged'),
@@ -410,6 +436,7 @@ def result(config, prepared, book):
             'm15_ohlc_touch_execution_order_unknown', 'daily_gaps_and_exit_costs_can_overshoot',
             'ideal_fractional_fills_without_order_book_or_partial_fills','no_exact_liquidation_or_historical_demo_simulation',
             'window_already_seen_not_untouched_out_of_sample'} | (
+                {'hourly_bars_derived_from_native_m15_not_native_h1'} if hourly else set()) | (
                 {'spot_source_gap_stale_valuation_and_delayed_execution'} if prepared.spot_gap_policy else set()) | (
                 {'mark_source_gap_stale_valuation'} if prepared.mark_gap_policy else set()) | (
                 {'missing_funding_settlement_quote_native_mark_open_reference_0_to_31ms'} if prepared.funding_reference_times else set()) | (

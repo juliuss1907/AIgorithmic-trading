@@ -4,6 +4,17 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-11 — Nghiên cứu Setup-2 ở khung H1 (đăng ký trước)
+
+Nhánh: `research/setup2-h1` (từ `feature/three-coin-runtime`). Julius hỏi có nên đổi sang khung nhỏ hơn khi dữ liệu ít. Đã trả lời là không đổi Setup-2 vì lý do đó; Julius chọn nghiên cứu H1 như một ứng viên riêng. Chi tiết và tiêu chí: [setup2-h1-research](docs/setup2-h1-research.md).
+
+- **Không đụng gì đang chạy:** ADR-005 và rule hash `bf6fccc9…`, runtime, VPS, pin `replay-v2.2` / `gate-v2.1` giữ nguyên.
+- **Ứng viên:** đúng rule Setup-2 nhưng mọi cửa sổ đếm theo nến H1 (Donchian 30/10, EMA200/50, ADX14, volume MA20, profile 120 nến). Bốn ca: H4 đối chứng và H1, mỗi ca ở chi phí thường và gấp đôi.
+- **Dữ liệu:** nến H1 gộp chính xác từ M15 đã lưu, không tải thêm, không tạo nến giả. Gộp M15 thành H4 trùng native H4 ở mọi nến Spot đầy đủ; Perp lệch ở bốn cửa sổ đã kiểm toán, ngoài đó thì dừng. Giờ ngừng giao dịch ngày 2023-03-24 vẫn để trống.
+- **Tiêu chí ghi trước khi chạy** và do `donchian_h1_verdict` tính: lợi nhuận không thấp hơn H4, DD dưới 15%, chi phí gấp đôi vẫn dương, Spot và Perp đều dương, cả hai nửa cửa sổ (chia tại 2024-10-29) đều dương. Đạt cũng chỉ là căn cứ đề xuất paper-test prospective mới, không bật gì.
+- **Code:** `bar_interval` trong engine (mặc định H4 giữ nguyên từng byte, config và `result_id` cũ không đổi), `donchian_hourly.py`, `donchian_h1_verdict.py`, `--universe h1`.
+- **Kiểm thử:** 15 test mới; 184 test `donchian_*` và parity Setup-2 vẫn pass.
+
 ## 2026-10-10 — Công cụ A/B offline: Jev nhận số hay nhận ký tự
 
 Nhánh: `feature/three-coin-runtime`. Câu hỏi của Julius sau khi đọc bài của alex saint: có nên đổi trạng thái Jev từ số sang ký tự. Chi tiết: [compact-state-ab](docs/compact-state-ab.md).
