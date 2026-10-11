@@ -78,6 +78,9 @@ class FilterBook(HistoricalBook):
     def combined_budget(self, marks):
         return self.spot_budget(marks)+self.perp_budget(marks)
 
+    def perp_weight(self, symbol):
+        return self.config.perp_weights[symbol]
+
     def enter_batch(self, at, marks, multipliers):
         budget = self.spot_budget(marks)
         used = self.budget_exposures(marks)[0]
@@ -105,3 +108,39 @@ class FilterBook(HistoricalBook):
     def close_perp(self, symbol, at, price, reason):
         super().close_perp(symbol, at, price, reason)
         self.trails.pop(('perp', symbol), None)
+
+
+class SlotBook(FilterBook):
+    """One realized-capital pool shared by Spot longs and Perp shorts, split into equal fixed slots.
+
+    A slot is `1/slots` of the pool, scaled by the usual ATR multiplier. Which coins get a slot is the
+    engine's decision; the book only sizes entries and keeps Spot and Perp inside the same pool."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.slot = ONE/config.slots
+        self.weights = {s: self.slot for s in self.weights}
+
+    def spot_budget(self, marks):
+        return self.allocation_base(marks)
+
+    def perp_budget(self, marks):
+        return self.allocation_base(marks)
+
+    def combined_budget(self, marks):
+        return self.allocation_base(marks)
+
+    def perp_weight(self, symbol):
+        return self.slot
+
+    def enter_batch(self, at, marks, multipliers):
+        # FilterBook's pre-scaling looks at Spot principal only; the shared pool is checked once, below it.
+        HistoricalBook.enter_batch(self, at, marks, multipliers)
+
+    def perp_target(self, symbol, marks):
+        pool = self.allocation_base(marks)
+        spot, perp = self.budget_exposures(marks)
+        requested = pool*self.slot
+        cost = ONE+self.perp_fee+self.perp_slip
+        target = max(ZERO, min(requested, (pool-spot-perp)/cost, self.free_cash/cost))
+        return pool, requested, target

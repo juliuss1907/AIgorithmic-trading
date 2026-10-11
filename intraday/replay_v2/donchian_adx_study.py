@@ -19,7 +19,7 @@ from intraday.replay_v2.portfolio_study import file_hash
 
 
 PRESETS = {'setups': 'donchian-adx-setups', 'baskets': 'donchian-basket3', 'h1': 'donchian-setup2-h1',
-           'h1-family': 'donchian-setup2-h1-family'}
+           'h1-family': 'donchian-setup2-h1-family', 'wide-slots': 'donchian-wide-slots'}
 
 
 def calendar_periods(curve, start, end, capital):
@@ -147,7 +147,10 @@ def window_data(data, start):
 
 def run_study(inputs_path, report_root, *, resume=False, progress=print, universe='three', window_start=None):
     source=Path(inputs_path).expanduser().resolve();before=file_hash(source)
-    if universe in ('five', 'setups', 'baskets', 'h1', 'h1-family'):
+    if universe == 'wide-slots':
+        from intraday.replay_v2.donchian_wide_data import read_wide_manifest
+        raw=read_wide_manifest(source)
+    elif universe in ('five', 'setups', 'baskets', 'h1', 'h1-family'):
         from intraday.replay_v2.donchian_five_data import read_manifest
         raw=read_manifest(source)
     else:
@@ -159,7 +162,12 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
         start=datetime.fromisoformat(window_start)
         if universe not in ('baskets','h1','h1-family') or start.tzinfo is None or not bundle_start<start<end:
             raise ValueError('a later window start needs a basket universe and a date inside the frozen window')
-    variants=cases(start,end,universe=universe);lineage=raw['source_files_sha256'];verify_files(lineage)
+    if universe == 'wide-slots':
+        from intraday.replay_v2.donchian_wide_config import wide_cases
+        variants=wide_cases(start,end,sorted(raw['candles']))
+    else:
+        variants=cases(start,end,universe=universe)
+    lineage=raw['source_files_sha256'];verify_files(lineage)
     binding=dict(version='donchian-adx-exploration-1',engine_commit=git('rev-parse','HEAD'),
                  sources=runtime_hashes(),inputs_path=str(source),inputs_sha256=before,
                  configs={name:cfg.model_dump(mode='json') for name,cfg in variants})
@@ -258,6 +266,12 @@ def markdown(receipt):
         s=item['summary'];net=s['net_pnl'];ret=s['net_return_pct']
         lines.append(f"| {item['variant']} | {s['final_equity_known']:.2f} | {net if net is not None else 'UNKNOWN'} | "
                      f"{ret if ret is not None else 'UNKNOWN'} | {s['max_drawdown_known_pct']:.2f} | {s['closed_trades']} |")
+    if receipt['preset']=='donchian-wide-slots':
+        lines += ['', 'Wide basket from the current Binance USDT-M volume ranking (survivorship bias); five shared slots of one',
+                  'realized pool, each 1/5 of the pool times the ATR multiplier; Spot long or Perp short 1x, one position per coin.',
+                  'Entries are ranked by ADX then volume ratio (`random` uses a seeded hash); Jev is not replayed. cost2x doubles',
+                  'fees and slippage. Seen-data research: a pass is grounds for a new frozen prospective test, never activation.']
+        return '\n'.join(lines)+'\n'
     if receipt['preset']=='donchian-setup2-h1-family':
         lines += ['', 'ETH-NEAR-SOL equal thirds, Spot60/Short40, Short1x, ATR14 sizing, combined UTC daily3%. H4 is the frozen',
                   'Setup-2 control; H1 is the earlier baseline with every window counted in H1 bars (bars derived exactly from M15).',
@@ -305,15 +319,15 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description='Local five-case A4 ADX exploration; no models or trading')
     parser.add_argument('--report-root',required=True)
     parser.add_argument('--inputs')
-    parser.add_argument('--universe',choices=('three','five','setups','baskets','h1','h1-family'),default='three')
+    parser.add_argument('--universe',choices=('three','five','setups','baskets','h1','h1-family','wide-slots'),default='three')
     parser.add_argument('--early-inputs');parser.add_argument('--late-inputs')
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--start',help='ISO UTC date inside the frozen window; replay from there with a fresh account')
     args=parser.parse_args(argv)
     root=Path(args.report_root).expanduser().resolve()
     source=args.inputs
-    if args.universe in ('five','setups','baskets','h1','h1-family') and source is None:
-        parser.error('--universe five/setups/baskets/h1/h1-family requires a validated --inputs manifest')
+    if args.universe in ('five','setups','baskets','h1','h1-family','wide-slots') and source is None:
+        parser.error('--universe five/setups/baskets/h1/h1-family/wide-slots requires a validated --inputs manifest')
     if source is None:
         if not args.early_inputs or not args.late_inputs:parser.error('supply --inputs or both parent inputs')
         source=root/'data'/'inputs.json'

@@ -4,10 +4,11 @@ from bisect import bisect_right
 from collections import defaultdict, Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import hashlib
 from decimal import Decimal
 
 from intraday.replay_v2.donchian_filters import indicator_series, observation, volume_profile, entry_filters
-from intraday.replay_v2.donchian_filter_book import FilterBook, ATRTrail
+from intraday.replay_v2.donchian_filter_book import FilterBook, SlotBook, ATRTrail
 from intraday.replay_v2.donchian_filter_data import WARMUP
 from intraday.replay_v2.historical_data import validate_rows
 from intraday.replay_v2.historical_mixed import funding_audit, continuous_periods
@@ -223,7 +224,8 @@ def simulate(config, prepared):
         raise ValueError('prepared features belong to another window')
     if indicator_settings(config) != (prepared.bar_interval, *prepared.ema_periods, prepared.regime_interval):
         raise ValueError('prepared features belong to another indicator configuration')
-    book = FilterBook(config)
+    slots = getattr(config, 'slots', None)
+    book = SlotBook(config) if slots else FilterBook(config)
     label = 'h4' if prepared.bar_interval == '4h' else 'h1'
     stop = getattr(config, 'stop_atr_multiple', 3)
     ema = dict(ema_fast=prepared.ema_periods[0], ema_slow=prepared.ema_periods[1])
@@ -253,6 +255,71 @@ def simulate(config, prepared):
         if prepared.mark_gap_policy:
             book.curve[-1].update(stale_mark_symbols=stale_marks(at, {s: observed_mark[s] for s in prepared.mark_gap_policy if s in active['perp']}),
                 mark_observed_at={s:t.isoformat() for s,t in observed_mark.items()})
+
+    def collect(at, market, side, opening, closed):
+        """Entries this bar would take in one market, before any slot limit."""
+        candidates = {}
+        for s in sorted(active[market]):
+            if s not in opening[market] or position(book,market,s).quantity or (market,s) in closed:
+                continue
+            if slots and any(position(book,m,s).quantity for m in ('spot','perp') if m != market):
+                continue  # One position per coin across both markets.
+            obs = prepared.observations[market][s][at][(config.entry_window,config.exit_window)]
+            if not obs['long_entry' if side > 0 else 'short_entry']:
+                continue
+            f = prepared.features[market][s][at]
+            failed = entry_filters(f,side,config.filter_level,
+                                   adx_threshold=adx_threshold(config,market,s),**ema)
+            if failed:
+                book.event(at,'entry_blocked','indicator_filters',market=market,symbol=s,
+                    failed_filters=failed,signal_available_at=at.isoformat())
+                continue
+            price, atr = opening[market][s].open, f['atr']
+            if atr is None or not ZERO < stop*atr/price < ONE:
+                book.event(at,'entry_blocked','invalid_atr_stop',market=market,symbol=s)
+                continue
+            if book.halted:
+                book.event(at,'entry_blocked','portfolio_loss_limit',market=market,symbol=s)
+                continue
+            candidates[s] = min(ONE,Decimal('.02')/(atr/f['close']))
+        return candidates
+
+    def grant_slots(at, opening, closed):
+        """Pool both markets' entries, rank them and keep as many as there are free slots."""
+        pooled = {m: collect(at,m,side,opening,closed) for m,side in (('spot',1),('perp',-1))}
+        entries = [(m,s,mult) for m in ('spot','perp') for s,mult in pooled[m].items()]
+        granted = {'spot':{}, 'perp':{}}
+        if not entries:
+            return granted
+        open_now = sum(1 for m in ('spot','perp') for s in active[m] if position(book,m,s).quantity)
+        free = max(0, slots-open_now)
+
+        def score(entry):
+            f = prepared.features[entry[0]][entry[1]][at]
+            ratio = f['volume']/f['volume_ma'] if f['volume_ma'] else ZERO
+            return (f['adx'] if f['adx'] is not None else ZERO), ratio
+
+        if getattr(config,'ranker','adx_volume') == 'random':
+            seed = getattr(config,'seed','')
+            order = sorted(entries,key=lambda e:hashlib.sha256(f'{seed}|{at.isoformat()}|{e[0]}|{e[1]}'.encode()).hexdigest())
+        else:
+            order = sorted(entries,key=lambda e:(-score(e)[0],-score(e)[1],e[1],e[0]))
+        chosen, rejected, taken = [], [], set()
+        for entry in order:  # Best first; a coin never takes two slots, even across its two markets.
+            if len(chosen) < free and entry[1] not in taken:
+                chosen.append(entry)
+                taken.add(entry[1])
+            else:
+                rejected.append(entry)
+        book.event(at,'selection','slot_ranking',ranker=getattr(config,'ranker','adx_volume'),
+            open_positions=open_now,free_slots=free,
+            ranked=[dict(market=m,symbol=s,adx=str(score((m,s,x))[0]),volume_ratio=str(score((m,s,x))[1]),
+                         granted=(m,s,x) in chosen) for m,s,x in order])
+        for m,s,x in chosen:
+            granted[m][s] = x
+        for m,s,_ in rejected:
+            book.event(at,'entry_blocked','slot_limit',market=m,symbol=s)
+        return granted
 
     for at in prepared.timeline:
         closed = cooldown.pop(at, set())
@@ -346,35 +413,15 @@ def simulate(config, prepared):
         if book.halted:
             flatten(book,at,opening,closed)
             risk(at)
+        granted = grant_slots(at,opening,closed) if slots else None
         for market,side in (('spot',1),('perp',-1)):
-            candidates = {}
-            for s in sorted(active[market]):
-                if s not in opening[market] or position(book,market,s).quantity or (market,s) in closed:
-                    continue
-                obs = prepared.observations[market][s][at][(config.entry_window,config.exit_window)]
-                if not obs['long_entry' if side > 0 else 'short_entry']:
-                    continue
-                f = prepared.features[market][s][at]
-                failed = entry_filters(f,side,config.filter_level,
-                                       adx_threshold=adx_threshold(config,market,s),**ema)
-                if failed:
-                    book.event(at,'entry_blocked','indicator_filters',market=market,symbol=s,
-                        failed_filters=failed,signal_available_at=at.isoformat())
-                    continue
-                price, atr = opening[market][s].open, f['atr']
-                if atr is None or not ZERO < stop*atr/price < ONE:
-                    book.event(at,'entry_blocked','invalid_atr_stop',market=market,symbol=s)
-                    continue
-                if book.halted:
-                    book.event(at,'entry_blocked','portfolio_loss_limit',market=market,symbol=s)
-                    continue
-                candidates[s] = min(ONE,Decimal('.02')/(atr/f['close']))
+            candidates = granted[market] if slots else collect(at,market,side,opening,closed)
             if market == 'spot' and candidates:
                 book.enter_batch(at,marks,candidates)
             for s,multiplier in candidates.items():
                 f, price = prepared.features[market][s][at], opening[market][s].open
                 if market == 'perp':
-                    target = book.perp_budget(marks)*config.perp_weights[s]*multiplier
+                    target = book.perp_budget(marks)*book.perp_weight(s)*multiplier
                     if not book.enter_perp(s,at,marks,price,-1,stop*f['atr']/price,approved_target=target):
                         continue
                     book.events[-1]['reason'] = 'donchian_short_entry'
@@ -444,6 +491,9 @@ def result(config, prepared, book):
         variant['donchian_entry_exit'] = [config.entry_window, config.exit_window]
     if prepared.ema_periods != (50, 200):
         variant['ema_fast_slow'] = list(prepared.ema_periods)
+    if getattr(config, 'slots', None):
+        variant['slots'] = dict(count=config.slots, ranker=getattr(config, 'ranker', 'adx_volume'),
+                                seed=getattr(config, 'seed', None) if getattr(config, 'ranker', '') == 'random' else None)
     if prepared.regime_interval:
         variant['regime'] = ('EMA200/50 and ADX/DMI14 from the last closed H4 bar; Donchian, volume, profile, ATR '
                              'and stops stay on H1')
@@ -455,7 +505,10 @@ def result(config, prepared, book):
         inputs=dict(dataset_checksum=prepared.checksum,config_checksum=fingerprint(payload),funding_audit=prepared.funding_audit,
                     **({'signal_bar_derivation':prepared.derivation} if hourly else {})),
         summary=summary,methodology=dict(
-            allocation=(allocation_text(config)+'; Short-only1x; independent realized Spot/Perp sizing, no reserve/transfers'
+            allocation=(f'{config.slots} shared slots of one realized pool ({len(config.weights)} coins); Spot long or Perp short1x, '
+                        f'one position per coin; entries ranked by {getattr(config,"ranker","adx_volume")}'
+                        if getattr(config,'slots',None) else
+                        allocation_text(config)+'; Short-only1x; independent realized Spot/Perp sizing, no reserve/transfers'
                         if hasattr(config,'adx_by_market') else
                         '60/40 Spot/isolated Short1x; both '+ ' '.join(s.removesuffix('USDT')+str(int(w*100)) for s,w in config.weights.items())+'; independent realized sizing, no reserve/transfers'),
             signals=timeframe('closed native H4 Donchian; preceding channel excludes trigger; no D1/Jev/LLM'),

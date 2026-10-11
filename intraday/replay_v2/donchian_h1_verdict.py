@@ -58,8 +58,8 @@ def hold_profile(report_directory):
                 holds_over_48h=sum(h > LONG_HOLD_HOURS for h in holds), gross_pnl_over_48h=float(long_gross))
 
 
-def evaluate(receipt, candidate='H1'):
-    name = basket_name(H1_BASKET)
+def evaluate(receipt, candidate='H1', prefix=None):
+    name = prefix or basket_name(H1_BASKET)
     by_name = {item['variant']: item for item in receipt['results']}
     control, normal, stressed = (by_name[f'{name}-{suffix}'] for suffix in ('H4', candidate, candidate+'-cost2x'))
     h4, h1, h1_cost = control['summary'], normal['summary'], stressed['summary']
@@ -86,6 +86,56 @@ def evaluate(receipt, candidate='H1'):
                 note='Seen data; a pass proposes a new frozen prospective test, never activation.')
 
 
+WIDE_FAMILY = ('H1', 'H1-GEOM', 'H1-ADX30', 'H1-EMA50-20', 'H1-REGIME')
+
+
+def slot_profile(report_directory, window_hours):
+    """How the five slots were used and how concentrated the result is (descriptive only)."""
+    directory = Path(report_directory)
+    open_hours, per_coin, blocked = Decimal(0), {}, 0
+    with open(directory/'trades.jsonl') as stream:
+        for line in stream:
+            trade = json.loads(line)
+            hours = (datetime.fromisoformat(trade['closed_at'])-datetime.fromisoformat(trade['opened_at'])).total_seconds()/3600
+            open_hours += Decimal(str(hours))
+            per_coin[trade['symbol']] = per_coin.get(trade['symbol'], Decimal(0))+Decimal(trade['net_pnl'])
+    with open(directory/'events.jsonl') as stream:
+        for line in stream:
+            if '"slot_limit"' in line:
+                blocked += 1
+    total = sum(per_coin.values(), Decimal(0))
+    top5 = sum(sorted(per_coin.values(), reverse=True)[:5], Decimal(0))
+    return dict(average_open_positions=float(open_hours/Decimal(str(window_hours))), signals_blocked_by_slots=blocked,
+                coins_traded=len(per_coin), net_pnl=float(total),
+                top5_coins_net_pnl=float(top5), top5_share_of_net=float(top5/total) if total > 0 else None)
+
+
+def evaluate_wide(receipt):
+    """The H1 family on the wide basket against its own H4 control, plus the random-selection control."""
+    by_name = {item['variant']: item for item in receipt['results']}
+    window = receipt['window']
+    hours = (datetime.fromisoformat(window['end'])-datetime.fromisoformat(window['start'])).total_seconds()/3600
+    result = {}
+    for candidate in WIDE_FAMILY:
+        entry = evaluate(receipt, candidate, prefix='WIDE')
+        entry['hold_profile'] = hold_profile(by_name[f'WIDE-{candidate}']['report_directory'])
+        entry['slot_profile'] = slot_profile(by_name[f'WIDE-{candidate}']['report_directory'], hours)
+        result[candidate] = entry
+    control = by_name['WIDE-H4']
+    random_control = by_name['WIDE-H4-random']
+    result['H4'] = dict(hold_profile=hold_profile(control['report_directory']),
+                        slot_profile=slot_profile(control['report_directory'], hours),
+                        net_return_pct=control['summary']['net_return_pct'],
+                        max_drawdown_pct=control['summary']['max_drawdown_known_pct'])
+    result['H4-random'] = dict(net_return_pct=random_control['summary']['net_return_pct'],
+                               max_drawdown_pct=random_control['summary']['max_drawdown_known_pct'],
+                               trades=random_control['summary']['closed_trades'],
+                               ranked_minus_random_pp=control['summary']['net_return_pct']-random_control['summary']['net_return_pct'],
+                               cost2x_net_return_pct=by_name['WIDE-H4-random-cost2x']['summary']['net_return_pct'])
+    return dict(candidates=result, advancing=[c for c in WIDE_FAMILY if result[c]['advance']],
+                note='Wide basket, five slots, deterministic ranking standing in for Jev; seen-data research, never activation.')
+
+
 def evaluate_family(receipt):
     """Every pre-registered candidate against the same H4 control, plus the H1 baseline for reference."""
     name = basket_name(H1_BASKET)
@@ -104,7 +154,9 @@ def evaluate_family(receipt):
 def main(argv=None):
     path = Path((argv or sys.argv[1:])[0])
     receipt = json.loads(path.read_text())
-    verdict = evaluate_family(receipt) if receipt.get('preset') == 'donchian-setup2-h1-family' else evaluate(receipt)
+    preset = receipt.get('preset')
+    verdict = (evaluate_wide(receipt) if preset == 'donchian-wide-slots'
+               else evaluate_family(receipt) if preset == 'donchian-setup2-h1-family' else evaluate(receipt))
     output = path.with_name('verdict.json')
     text = json.dumps(verdict, indent=2, sort_keys=True)+'\n'
     if output.exists() and output.read_text() != text:
