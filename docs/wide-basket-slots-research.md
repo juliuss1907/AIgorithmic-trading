@@ -69,3 +69,51 @@ uv run python -m intraday.replay_v2.donchian_adx_study --universe wide-slots \
 uv run python -m intraday.replay_v2.donchian_h1_verdict \
   /home/julius/.local/state/aigorithmic-trading/reports/donchian-wide-slots-20261011/runs/comparison.json
 ```
+
+## Result (2026-10-11)
+
+Data: 30 coins, 2026-01-01 → 2026-10-11 08:00 UTC (collected today; two ranked candidates, QNT and LSK,
+were dropped for native Spot H4/M15 disagreements and replaced). Engine commit `bad14c1`, report root
+`donchian-wide-slots-20261011`; 14 cases, each with a deterministic double replay (27 minutes, 8.8 GB).
+The three-coin family re-run on the new engine reproduced all 12 earlier 2026 results byte for byte.
+
+| Case | Return % | DD % | Trades | Fees + slippage | Spot net | Perp net | Daily stops | Return at cost ×2 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **H4, ranked** (reference) | **+23.40** | **30.59** | 328 | 146 | +287 | −53 | 7 | +9.85 |
+| H4, random (seed `wide-slots-v1`) | +3.57 | 32.00 | 339 | 148 | +112 | −76 | 10 | −10.82 |
+| H1 baseline | −5.89 | 49.20 | 1,256 | 748 | +242 | −301 | 30 | −48.46 |
+| H1-GEOM | −32.03 | 52.39 | 648 | 284 | −195 | −125 | 47 | −46.13 |
+| H1-ADX30 | +3.87 | 36.04 | 868 | 486 | +221 | −182 | 13 | −36.23 |
+| H1-EMA50-20 | −4.16 | 50.23 | 1,260 | 763 | +229 | −270 | 28 | −46.67 |
+| H1-REGIME | −6.63 | 41.78 | 832 | 405 | +213 | −279 | 12 | −41.31 |
+
+**No H1 variant advances;** all five fail every criterion except none (return below the H4 reference,
+drawdown far above 15%, doubled costs negative, Perp negative, the second half negative).
+
+What the run shows:
+
+- **Wider and slotted lifts return and drawdown together.** H4 on 30 coins makes +23.4% against +14.2%
+  on ETH-NEAR-SOL, but drawdown triples (30.6% vs 10.5%) and the 3% daily stop fires 7 times. Five
+  20% slots of mostly correlated alts can be almost fully invested with no 60/40 cap. Return per unit
+  of drawdown is 0.76 against 1.36. It also fails the 15% drawdown criterion that guards the live halt.
+- **Ranking matters in this window.** A supplementary check (not pre-registered) drew ten random
+  selections of the same H4 case: mean +6.2%, standard deviation 7.1, range −3.7% to +18.3%, drawdown
+  29.9–32.7%. The ADX ranking's +23.4% is above all ten draws (about 2.4 standard deviations over the
+  mean), while drawdown is unchanged: selection changed which coins were bought, not how deep the
+  book fell. The ranker was fixed before the run; the ten seeds were added afterwards because one draw
+  is a weak control.
+- **Concentration and path.** Fifteen of 30 coins finished positive; the five best made +428 on a
+  net +234. The account gained +236 USDT by 2026-05-22 and was flat afterwards (−2); equity peaked near
+  1,290 in June and fell about 18% in July.
+- **H1 still loses to costs.** 1,256 trades cost 748 USDT, and Perp shorts lose in every H1 case.
+- **Slots bind often.** H4 left 843 signals unfilled, H1 baseline 3,368; average open positions are
+  2.9 (H4) and 2.8 (H1), so the limit is hit in bursts, not constantly.
+- **Jev is untouched.** Everything above is a deterministic ranker standing in for the choice.
+
+Limits repeat: about nine months, seen-data selection of candidates, a current-day top-30 list with
+survivorship bias (PAXG, a gold token, is included because Binance tags it as COIN), Jev not replayed.
+
+**Conclusion.** H4 remains the only family worth carrying forward; H1 is closed. The wide basket is
+not adoptable as run (drawdown 30.6%), but the ranking effect is the most interesting finding and is
+the natural thing to test next, together with a smaller slot size or a exposure cap that brings the
+drawdown inside the live limit. Both would be new, pre-registered experiments.

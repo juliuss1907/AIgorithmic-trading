@@ -12,6 +12,8 @@ Nhánh: `research/wide-basket-slots` (từ `research/setup2-h1`). Julius muốn 
 - **Chọn coin:** xếp hạng ADX rồi tỷ lệ volume; đối chứng `H4-random` chọn ngẫu nhiên có seed. **Jev không được phát lại** vì trạng thái của Jev dùng sổ lệnh, OI, long/short, sentiment mà Binance không có lịch sử; nhật ký `selection` ghi mọi ứng viên và điểm để ghép câu trả lời shadow về sau.
 - **Code:** `SlotBook` (một quỹ vốn, slot cố định), cổng slot trong engine (gom hai thị trường, xếp hạng, chặn `slot_limit`, một coin một slot), `WideSlotConfig`/`wide_cases` (14 ca), `donchian_wide_data` (chọn rổ, thu từng coin nghiêm ngặt, manifest), `--universe wide-slots`, verdict kèm thống kê slot và tập trung coin. Đường mặc định không đổi.
 - **Kiểm thử:** 13 test mới; toàn bộ suite pass (1451).
+- **Kết quả (commit `bad14c1`, report `donchian-wide-slots-20261011`; dữ liệu 01/01–11/10/2026, thu hôm nay, loại QNT và LSK do lệch H4/M15):** H4 xếp hạng ADX +23,40% nhưng **DD 30,59%** (rổ 3 coin: +14,23%, DD 10,46%), 328 lệnh, 7 lần dừng lỗ ngày, chi phí ×2 còn +9,85%. Chọn ngẫu nhiên (10 seed bổ sung, không đăng ký trước): trung bình +6,2%, độ lệch chuẩn 7,1, từ −3,7% đến +18,3%; xếp hạng ADX cao hơn cả 10 lần rút (khoảng 2,4 độ lệch chuẩn) nhưng DD không đổi (~30–33%). Cả năm biến thể H1 trượt mọi tiêu chí (−32% đến +4%, DD 36–52%). Trên 30 coin, 15 coin dương, 5 coin tốt nhất kiếm +428 trên tổng +234; tài khoản +236 tới 22/05 rồi đi ngang.
+- **Kết luận:** H1 đóng. Rổ rộng chưa dùng được vì DD; điều đáng thử tiếp là xếp hạng với slot nhỏ hơn hoặc trần phơi nhiễm để đưa DD vào giới hạn. Jev vẫn chưa được đo, chỉ có nhật ký `selection` để ghép shadow sau.
 
 ## 2026-10-11 — Chạy lại họ H1 trên cửa sổ 2026
 
