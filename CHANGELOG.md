@@ -11,6 +11,11 @@ Nhánh: `research/rotating-slots`. Chỉ nghiên cứu offline; thiết kế, 30
 - **Thêm:** cửa sổ vào Donchian 25 và 20 (thoát giữ 10) và `limit_scope='sleeve'` (tối đa 3 vị thế mỗi túi, một coin được giữ cả Spot lẫn Perp); universe `rotation-window`; verdict `evaluate_window` kèm số vị thế mở đồng thời tối đa.
 - **Code:** `OBSERVED_PAIRS` thêm `(25,10)`; `RotationConfig.entry_window` và `limit_scope`; xoay vị thế chỉ trong cùng túi khi giới hạn theo túi. Cấu hình cũ giữ nguyên kết quả.
 - **Kiểm thử:** 5 test mới (cửa sổ 25, giới hạn theo túi, 6 vị thế, xoay trong cùng túi, verdict cửa sổ).
+- **Kết quả (60 ca, cả cửa sổ và chỉ 2026, đều tái hiện):**
+  - Giới hạn 3 vị thế mỗi túi cho kết quả **giống hệt** giới hạn 3 tổng ở mọi ca; số vị thế mở đồng thời tối đa luôn là 3 (không bao giờ 4 hay 6), vì các coin chạy cùng chiều nên tín hiệu bị chặn luôn nằm cùng túi.
+  - Cửa sổ vào ngắn hơn không phải cải thiện: 3 coin +73,2% → +73,1% (25) → +68,6% (20); 4 coin có ZEC +88,7% → +103,3% → +94,2%, nhưng đó là do ZEC và NEAR, còn ETH kém dần (Perp ETH +61 → +27 → +2). 2026 không phân biệt được (±1,3 điểm).
+  - Số lệnh chỉ tăng 2–5%, thấp hơn dự đoán 15–40%.
+  - Kết luận: giữ cửa sổ vào 30; giới hạn theo túi không thêm gì so với 3 vị thế tổng.
 
 ## 2026-10-12 — Nghiên cứu xoay vị thế: 2 túi, cổng PnL, stop 5%
 

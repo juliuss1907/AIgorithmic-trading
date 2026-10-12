@@ -232,3 +232,60 @@ Predictions, written before the run:
   it earns more and draws down more, since exposure can double.
 - Six simultaneous positions practically never occur; the observed peak is three Spot or three Perp.
 - Rotation stays rare.
+
+### Results: entry window 30, 25, 20 and the per-sleeve limit (60 cases, all reproduced)
+
+Private roots: `…/donchian-rotation-window-20261012/` (2022-01-01 → 2026-10-02) and
+`…/donchian-rotation-window-2026ytd-20261012/` (2026 only). Window-30 reference cases reproduce the earlier results exactly in both.
+`ROT-SLOT6` (three per sleeve) equals `ROT-SLOT` (three in total) in every case, so each row stands for both.
+
+Full window, return / max DD / trades (cost ×2 return):
+
+| Basket | Window 30 | Window 25 | Window 20 |
+|---|---|---|---|
+| ETH-NEAR-SOL fixed thirds 50/50 | +78,72% / 10,40% / 424 | +77,68% / 10,42% / 435 | +72,57% / 11,59% / 446 |
+| ETH-NEAR-SOL `ROT-SLOT` | +73,24% / 9,93% / 438 (+50,6%) | +73,12% / 10,60% / 449 (+49,9%) | +68,55% / 11,58% / 460 (+45,9%) |
+| ETH-NEAR-SOL-ZEC `ROT-SLOT` | +88,72% / 9,40% / 548 (+59,1%) | +103,30% / 9,83% / 553 (+71,0%) | +94,15% / 10,69% / 570 (+62,4%) |
+
+2026 only:
+
+| Basket | Window 30 | Window 25 | Window 20 |
+|---|---|---|---|
+| ETH-NEAR-SOL fixed thirds 50/50 | +14,20% / 10,34% / 65 | +14,13% / 10,41% / 66 | +15,48% / 10,52% / 67 |
+| ETH-NEAR-SOL `ROT-SLOT` | +15,51% / 9,49% / 64 | +15,44% / 9,56% / 65 | +16,80% / 9,68% / 66 |
+| ETH-NEAR-SOL-ZEC `ROT-SLOT` | +22,81% / 9,43% / 82 | +22,34% / 9,51% / 83 | +22,90% / 9,65% / 85 |
+
+Most positions open at once: **three** in every case (Spot or Perp), never four and never six, even with the per-sleeve limit.
+
+**Mechanical verdict.** Full window: `ROT-SLOT6` three coins and the four-coin `ZEC` cases at 25 and 20 advance; the three-coin windows 25
+and 20 fail criterion 1. 2026: seven cases advance, all by margins of 0,1 to 1,3 points on 53 to 85 trades, i.e. ties and noise.
+`ROT-SLOT6` "passes" only because it is identical to its control.
+
+### Predictions scored
+
+| Prediction | Outcome |
+|---|---|
+| Window-30 cases reproduce | Yes, all of them |
+| Shorter windows add 15 to 40% more trades | **No**: +2% to +5% (full window), +1% to +4% (2026) |
+| Shorter windows do not beat 30 on the full window | Yes on three coins (−0,1 and −4,7 points); **no** on four (+14,6 and +5,4) |
+| 2026 differences stay in the noise | Yes (−0,5 to +1,3 points) |
+| `ROT-SLOT6` equals `ROT-SLOT` on three coins | Yes |
+| With ZEC, `ROT-SLOT6` earns and draws down more | **No**: identical |
+| Six simultaneous positions practically never occur | Yes, the peak is three |
+| Rotation stays rare | Yes (8 to 9 over the full window, 1 in 2026) |
+
+### What the numbers say
+
+- **A limit per sleeve changes nothing.** Every blocked signal (66 `rotation_margin` blocks in the four-coin full window) happened in
+  the same sleeve as the positions already open: coins trend together, so three Spot longs are followed by a fourth Spot signal, and
+  Spot long against Perp short are opposite trends. The ceiling of six is theoretical; three is the working ceiling.
+- **A shorter entry window is not an improvement.** On three coins it is neutral at 25 and worse at 20 (−4,7 points, DD +1,7 points,
+  cost ×2 return −4,7 points), the same direction as A4 `20/10` on 2022-2024. On four coins it is better, but through the coin mix:
+  ZEC +99 USDT and NEAR +58 at window 25 while ETH loses 27 (Perp ETH +61 → +27 → +2 as the window shortens).
+- **ETH is the coin that gets worse with shorter windows** in both baskets, NEAR and ZEC improve, SOL is flat. A window chosen
+  on this pattern would be tuned to which coins are in the basket.
+- **Trades barely rise** (+2% to +5%), so costs are not what separates the windows; the signals themselves are.
+- **2026 alone cannot tell the windows apart** (all within ±1,3 points).
+
+Conclusion: keep entry 30. The per-sleeve limit adds nothing over the pooled limit; if a limit is kept at all, the simpler
+three in total does the same.
