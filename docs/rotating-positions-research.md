@@ -163,3 +163,38 @@ Predictions, written before the run:
 - The slot variants stay near the controls' drawdown and return.
 - Rotation acts only a handful of times (the window holds about a fifth of the signals).
 - Trade counts are small (about 60 to 110), so differences of a few points are noise.
+
+### 2026-only results (2026-01-01 → 2026-10-02, fresh account, 18 cases, all reproduced)
+
+Private root: `~/.local/state/aigorithmic-trading/reports/donchian-rotation-2026ytd-20261012/`. `H4` reproduces the earlier
+2026 run exactly (+14,23%, 10,46%, 65 trades, cost ×2 +11,38%).
+
+| Case | Return | Max DD | Return/DD | Trades | Daily stops | Rotations | Cost ×2 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `H4` 60/40 fixed thirds | +14,23% | 10,46% | 1,36 | 65 | 0 | | +11,4% |
+| `FIXED5050` | +14,20% | 10,34% | 1,37 | 65 | 0 | | +11,5% |
+| `ROT` (three coins) | +17,97% | 11,38% | 1,58 | 56 | 1 | | +13,7% |
+| `ROT-SLOT` (three coins) | +15,51% | 9,49% | 1,63 | 64 | 0 | | +12,8% |
+| `ROT-NOGATE` / `NOSTOP` / `BARE` | +20,84% / +25,25% / +28,47% | 11,38% | 1,83 / 2,22 / 2,50 | 56 / 53 / 53 | 1 / 2 / 2 | | |
+| `ZEC-ROT` (four coins) | +34,00% | 14,55% | 2,34 | 75 | 2 | 2 | +27,9% (DD 15,0%) |
+| `ZEC-ROT-SLOT` | +22,81% | 9,43% | 2,42 | 82 | 0 | 1 | +19,4% |
+| `ZEC-ROT-NOLIMIT` / `NOROT` / `BARE` | +33,23% / +33,11% / +40,07% | 16,36% / 16,11% / 16,42% | 2,03 / 2,05 / 2,44 | 76 / 74 / 72 | 3 / 3 / 4 | | |
+
+**Mechanical verdict: `ROT`, `ROT-SLOT` (three coins) and `ZEC-ROT` advance.** `ZEC-ROT-SLOT` fails criterion 1 only
+against the uncapped `NOLIMIT` control.
+
+Predictions scored: `H4` reproduces (yes); `ROT` again about twice `FIXED5050` with twice its drawdown (**no**:
++1,27× return and +1 point of drawdown); criterion 2 is the likeliest to flip (yes, `ROT` stays under 15%); slot variants
+stay near the controls (yes); rotation acts a handful of times (yes, two or fewer); trade counts are small (yes, 53 to 82).
+
+How to read it:
+
+- **It is a sub-period of the window already seen, not new evidence.** The full window still fails criterion 2
+  for the uncapped design (DD 19,2% and 21,6%); 2026 alone does not.
+- **The uncapped design's advantage shrinks to about 4 points** over `FIXED5050` with only 56 trades; that is inside
+  the noise of a nine-month window.
+- **The stop is not a stable result.** It helped on the full window (+152,7% against +131,3%) and cost 7 to 10 points in 2026
+  (+17,97% against +25,25%).
+- **The four-coin edge is ZEC's 2026, not HYPE and not the mechanism.** Spot carried it (+301 USDT against +39 USDT for Perp),
+  and the limit of three positions and rotation add nothing: `NOLIMIT` +33,2%, `NOROT` +33,1%, `ROT` +34,0%.
+- **Most of the profit is in the second half** of the window in every case (first half +23 USDT, second +157 USDT for `ROT`).

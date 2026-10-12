@@ -18,6 +18,7 @@ Nhánh: `research/rotating-slots`. Chỉ nghiên cứu offline, không đụng r
   - Xoay vị thế gần như không hoạt động (6 lần trong 4,75 năm); giới hạn 3 vị thế làm giảm lợi nhuận (+184,7% khi bỏ giới hạn).
   - Stop 5% giúp (+152,7% so với +131,3% khi bỏ), cổng PnL gần như trung tính.
   - Dự đoán sai một điều: `ROT` không thua `FIXED5050` về lợi nhuận mà gần gấp đôi.
+- **Chạy lại chỉ cửa sổ 2026 (tài khoản mới 1.000 USDT):** `ROT` +18,0% / DD 11,4% (50/50 cố định +14,2% / 10,3%), `ROT-SLOT` +15,5% / 9,5%, 4 coin `ROT` +34,0% / DD 14,6%, `ROT-SLOT` +22,8% / 9,4%. Ba ca qua tiêu chí cơ học, nhưng đây là một đoạn của cửa sổ đã thấy, chênh lệch nhỏ so với nhiễu (53–82 lệnh), stop 5% từ có ích thành tốn 7–10 điểm, và phần hơn ở 4 coin là của ZEC. Xoay vị thế chỉ hoạt động 1–2 lần.
 - **Sự cố:** ổ đĩa đầy 100% làm study dừng ở ca 9; đã chạy `uv cache clean` (Julius duyệt) và `--resume`.
 
 ## 2026-10-12 — H1-SLOWREGIME: bộ lọc chế độ chậm tính hoàn toàn trên H1 (đăng ký trước)
