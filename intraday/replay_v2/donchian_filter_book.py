@@ -42,11 +42,16 @@ class FilterConfig(HistoricalConfig):
 
 
 class ATRTrail:
-    def __init__(self, side, entry, atr, multiple=3):
+    def __init__(self, side, entry, atr, multiple=3, hard_pct=None):
         if side not in {-1, 1} or not entry.is_finite() or entry <= 0 or not atr.is_finite() or atr <= 0:
             raise ValueError('positive entry/ATR and valid trail side required')
         self.side, self.extreme, self.multiple = side, entry, multiple
         self.stop = entry-side*multiple*atr
+        # A fixed percentage stop from the entry price. The tighter of it and the ATR stop wins, and the
+        # ratchet below never loosens it, so it stays a hard cap on the initial loss.
+        self.hard = None if hard_pct is None else entry*(ONE-side*hard_pct)
+        if self.hard is not None:
+            self.stop = max(self.stop, self.hard) if side > 0 else min(self.stop, self.hard)
 
     def update(self, high, low, atr):
         if not atr.is_finite() or atr <= 0:
@@ -144,3 +149,26 @@ class SlotBook(FilterBook):
         cost = ONE+self.perp_fee+self.perp_slip
         target = max(ZERO, min(requested, (pool-spot-perp)/cost, self.free_cash/cost))
         return pool, requested, target
+
+
+class RotationBook(FilterBook):
+    """Two separate realized-capital sleeves (Spot and Perp) and no per-coin weights.
+
+    A position may use up to `share` of its own sleeve's realized capital, before the ATR multiplier and
+    bounded by that sleeve's free principal: 1 for the uncapped design, 1/max_positions for the slot
+    comparison. Which coins get a position, and the three-position limit, are the engine's decision."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.share = ONE if config.position_cap == 'none' else ONE/config.max_positions
+        self.weights = {s: self.share for s in self.weights}
+
+    def perp_weight(self, symbol):
+        return self.share
+
+    def perp_target(self, symbol, marks):
+        budget = self.perp_budget(marks)
+        requested = budget*self.share
+        cost = ONE+self.perp_fee+self.perp_slip
+        target = max(ZERO, min(requested, (budget-self.locked_margin)/cost, self.free_cash/cost))
+        return self.allocation_base(marks), requested, target

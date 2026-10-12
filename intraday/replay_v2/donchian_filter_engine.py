@@ -8,7 +8,7 @@ import hashlib
 from decimal import Decimal
 
 from intraday.replay_v2.donchian_filters import indicator_series, observation, volume_profile, entry_filters
-from intraday.replay_v2.donchian_filter_book import FilterBook, SlotBook, ATRTrail
+from intraday.replay_v2.donchian_filter_book import FilterBook, SlotBook, RotationBook, ATRTrail
 from intraday.replay_v2.donchian_filter_data import WARMUP
 from intraday.replay_v2.historical_data import validate_rows
 from intraday.replay_v2.historical_mixed import funding_audit, continuous_periods
@@ -222,7 +222,10 @@ def check_stops(book, at, bars, closed, *, opening):
                         bar.low <= trail.stop if trail.side > 0 else bar.high >= trail.stop)
             if breached:
                 price = bar.open if opening else trail.stop
-                close_position(book,market,s,at,price,'atr_stop_gap' if opening else 'atr_trailing_touch')
+                hard = trail.hard is not None and trail.stop == trail.hard
+                close_position(book,market,s,at,price,
+                               ('hard_stop_gap' if hard else 'atr_stop_gap') if opening else
+                               ('hard_stop_touch' if hard else 'atr_trailing_touch'))
                 closed.add((market,s))
 
 
@@ -233,7 +236,9 @@ def simulate(config, prepared):
                                       prepared.adx_period, prepared.warmup_hours):
         raise ValueError('prepared features belong to another indicator configuration')
     slots = getattr(config, 'slots', None)
-    book = SlotBook(config) if slots else FilterBook(config)
+    rotating = getattr(config, 'max_positions', None)
+    hard_stop = getattr(config, 'hard_stop_pct', None)
+    book = RotationBook(config) if rotating else SlotBook(config) if slots else FilterBook(config)
     label = 'h4' if prepared.bar_interval == '4h' else 'h1'
     stop = getattr(config, 'stop_atr_multiple', 3)
     ema = dict(ema_fast=prepared.ema_periods[0], ema_slow=prepared.ema_periods[1])
@@ -270,7 +275,7 @@ def simulate(config, prepared):
         for s in sorted(active[market]):
             if s not in opening[market] or position(book,market,s).quantity or (market,s) in closed:
                 continue
-            if slots and any(position(book,m,s).quantity for m in ('spot','perp') if m != market):
+            if (slots or rotating) and any(position(book,m,s).quantity for m in ('spot','perp') if m != market):
                 continue  # One position per coin across both markets.
             obs = prepared.observations[market][s][at][(config.entry_window,config.exit_window)]
             if not obs['long_entry' if side > 0 else 'short_entry']:
@@ -327,6 +332,90 @@ def simulate(config, prepared):
             granted[m][s] = x
         for m,s,_ in rejected:
             book.event(at,'entry_blocked','slot_limit',market=m,symbol=s)
+        return granted
+
+    def strength(market, symbol, side, at):
+        """Trend strength of a coin at this bar: ADX when DMI still points the position's way, else zero."""
+        f = prepared.features[market][symbol][at]
+        if f['adx'] is None or f['plus_di'] is None or f['minus_di'] is None:
+            return ZERO
+        return f['adx'] if side*(f['plus_di']-f['minus_di']) > 0 else ZERO
+
+    def open_book_pnl():
+        total = ZERO
+        for m in ('spot','perp'):
+            for s in active[m]:
+                p = position(book,m,s)
+                if p.quantity:
+                    mark = marks[s] if m == 'spot' else book.perp_marks[s]
+                    total += p.quantity*(mark-p.entry_price)
+        return total
+
+    def grant_rotation(at, opening, closed):
+        """Rank this bar's entries; use free positions first, then rotate out the weakest open position."""
+        pooled = {m: collect(at,m,side,opening,closed) for m,side in (('spot',1),('perp',-1))}
+        entries = [(m,s,mult) for m in ('spot','perp') for s,mult in pooled[m].items()]
+        granted = {'spot':{}, 'perp':{}}
+        if not entries:
+            return granted
+        held = [(m,s) for m in ('spot','perp') for s in sorted(active[m]) if position(book,m,s).quantity]
+        pnl = open_book_pnl()
+        if config.pnl_gate and held and pnl <= 0:
+            for m,s,_ in entries:
+                book.event(at,'entry_blocked','pnl_gate',market=m,symbol=s,open_positions=len(held),
+                           open_book_pnl=str(pnl))
+            return granted
+        side_of = {'spot':1,'perp':-1}
+
+        def rank(entry):
+            f = prepared.features[entry[0]][entry[1]][at]
+            ratio = f['volume']/f['volume_ma'] if f['volume_ma'] else ZERO
+            return (f['adx'] if f['adx'] is not None else ZERO), ratio
+
+        order = sorted(entries,key=lambda e:(-rank(e)[0],-rank(e)[1],e[1],e[0]))
+        free = max(0, config.max_positions-len(held))
+        taken, rotated, decisions = set(), [], []
+        for m,s,mult in order:
+            if s in taken:
+                book.event(at,'entry_blocked','one_position_per_coin',market=m,symbol=s)
+                continue
+            candidate = rank((m,s,mult))[0]
+            if free > 0:
+                free -= 1
+                granted[m][s] = mult
+                taken.add(s)
+                decisions.append(dict(market=m,symbol=s,adx=str(candidate),action='free_position'))
+                continue
+            if config.rotation == 'off':
+                book.event(at,'entry_blocked','position_limit',market=m,symbol=s)
+                continue
+            victims = [(hm,hs) for hm,hs in held if (hm,hs) not in rotated and hs in opening[hm]]
+            if not victims:
+                book.event(at,'entry_blocked','position_limit',market=m,symbol=s)
+                continue
+            weakest = min(victims,key=lambda v:(strength(v[0],v[1],side_of[v[0]],at),
+                          position(book,*v).quantity*(opening[v[0]][v[1]].open-position(book,*v).entry_price),
+                          v[1],v[0]))
+            weak = strength(weakest[0],weakest[1],side_of[weakest[0]],at)
+            if candidate <= weak+config.rotation_margin:
+                book.event(at,'entry_blocked','rotation_margin',market=m,symbol=s,candidate_adx=str(candidate),
+                           weakest=f'{weakest[0]}:{weakest[1]}',weakest_strength=str(weak))
+                continue
+            book.event(at,'rotation','close_weakest_for_new_signal',market=m,symbol=s,candidate_adx=str(candidate),
+                       closed_market=weakest[0],closed_symbol=weakest[1],closed_strength=str(weak))
+            close_position(book,weakest[0],weakest[1],at,opening[weakest[0]][weakest[1]].open,'rotation_exit')
+            closed.add(weakest)
+            rotated.append(weakest)
+            risk(at)
+            if book.halted:
+                flatten(book,at,opening,closed)
+                risk(at)
+                return {'spot':{}, 'perp':{}}
+            granted[m][s] = mult
+            taken.add(s)
+            decisions.append(dict(market=m,symbol=s,adx=str(candidate),action='rotated',
+                                  closed=f'{weakest[0]}:{weakest[1]}'))
+        book.event(at,'selection','rotation_ranking',open_positions=len(held),open_book_pnl=str(pnl),decisions=decisions)
         return granted
 
     for at in prepared.timeline:
@@ -421,20 +510,28 @@ def simulate(config, prepared):
         if book.halted:
             flatten(book,at,opening,closed)
             risk(at)
-        granted = grant_slots(at,opening,closed) if slots else None
+        granted = (grant_rotation(at,opening,closed) if rotating else
+                   grant_slots(at,opening,closed) if slots else None)
         for market,side in (('spot',1),('perp',-1)):
-            candidates = granted[market] if slots else collect(at,market,side,opening,closed)
+            candidates = granted[market] if granted is not None else collect(at,market,side,opening,closed)
             if market == 'spot' and candidates:
-                book.enter_batch(at,marks,candidates)
+                if rotating:  # Best-ranked entry first; each takes its share of what the sleeve still has free.
+                    for s,multiplier in candidates.items():
+                        book.enter_batch(at,marks,{s:multiplier})
+                else:
+                    book.enter_batch(at,marks,candidates)
             for s,multiplier in candidates.items():
                 f, price = prepared.features[market][s][at], opening[market][s].open
                 if market == 'perp':
                     target = book.perp_budget(marks)*book.perp_weight(s)*multiplier
-                    if not book.enter_perp(s,at,marks,price,-1,stop*f['atr']/price,approved_target=target):
+                    distance = stop*f['atr']/price
+                    if hard_stop is not None:
+                        distance = min(distance, hard_stop)
+                    if not book.enter_perp(s,at,marks,price,-1,distance,approved_target=target):
                         continue
                     book.events[-1]['reason'] = 'donchian_short_entry'
                 if position(book,market,s).quantity:
-                    book.trails[(market,s)] = ATRTrail(side,price,f['atr'],stop)
+                    book.trails[(market,s)] = ATRTrail(side,price,f['atr'],stop,hard_stop)
                     book.event(at,'entry_features',f'closed_{label}',market=market,symbol=s,
                         atr_size_multiplier=str(multiplier),stop=str(book.trails[(market,s)].stop),
                         features=f,signal_available_at=at.isoformat())
@@ -506,6 +603,10 @@ def result(config, prepared, book):
     if getattr(config, 'slots', None):
         variant['slots'] = dict(count=config.slots, ranker=getattr(config, 'ranker', 'adx_volume'),
                                 seed=getattr(config, 'seed', None) if getattr(config, 'ranker', '') == 'random' else None)
+    if getattr(config, 'max_positions', None):
+        variant['rotation'] = dict(max_positions=config.max_positions, position_cap=config.position_cap,
+            rotation=config.rotation, rotation_margin=config.rotation_margin, pnl_gate=config.pnl_gate,
+            hard_stop_pct=str(config.hard_stop_pct) if config.hard_stop_pct is not None else None)
     if prepared.regime_interval:
         variant['regime'] = ('EMA200/50 and ADX/DMI14 from the last closed H4 bar; Donchian, volume, profile, ATR '
                              'and stops stay on H1')
@@ -517,7 +618,12 @@ def result(config, prepared, book):
         inputs=dict(dataset_checksum=prepared.checksum,config_checksum=fingerprint(payload),funding_audit=prepared.funding_audit,
                     **({'signal_bar_derivation':prepared.derivation} if hourly else {})),
         summary=summary,methodology=dict(
-            allocation=(f'{config.slots} shared slots of one realized pool ({len(config.weights)} coins); Spot long or Perp short1x, '
+            allocation=(f'two separate realized sleeves, Spot {config.entry_cap*100}% and Perp {config.perp_cap*100}%; no per-coin '
+                        f'weights; at most {config.max_positions} open positions across both sleeves, one per coin; '
+                        f'a position uses '+('the free sleeve' if config.position_cap == 'none' else '1/'+str(config.max_positions)+' of its sleeve')+
+                        ' times the ATR multiplier; entries ranked by ADX then volume ratio'
+                        if getattr(config,'max_positions',None) else
+                        f'{config.slots} shared slots of one realized pool ({len(config.weights)} coins); Spot long or Perp short1x, '
                         f'one position per coin; entries ranked by {getattr(config,"ranker","adx_volume")}'
                         if getattr(config,'slots',None) else
                         allocation_text(config)+'; Short-only1x; independent realized Spot/Perp sizing, no reserve/transfers'
