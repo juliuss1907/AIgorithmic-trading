@@ -108,7 +108,8 @@ def build(data, symbols, start, end, *, keep_h4=False, warmup_hours=None):
             if not small or small[0].opened_at > first:
                 raise ValueError(f'{symbol} {market}: M15 history is shorter than the {warmup_hours or 484}h warmup')
             bars, gaps = hourly_series(small, first, end, missing_opens=missing)
-            check = h4_reproduction(data[symbol][market+'4h'], small, missing_opens=missing)
+            large = tuple(r for r in data[symbol][market+'4h'] if r.opened_at >= floors['4h'])
+            check = h4_reproduction(large, small, missing_opens=missing)
             unexpected = set(check['disagreements'])-(KNOWN_PERP_H4_DISAGREEMENTS if market == 'perp' else frozenset())
             if unexpected:
                 raise ValueError(f'{symbol} {market}: M15 aggregation disagrees with native H4 at '
