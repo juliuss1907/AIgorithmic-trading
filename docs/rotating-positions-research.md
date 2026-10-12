@@ -147,3 +147,19 @@ registered control `ROT-NOLIMIT` is uncapped, so that comparison is not like for
 The design as asked (uncapped, three positions, no per-coin weight) would breach the runtime's 15% drawdown
 halt and its 3% daily stop repeatedly. The slot-capped variant keeps drawdown near 10% and costs roughly half
 the return. No frozen candidate changes; ADR-005 stays the only prospective test.
+
+## Re-run on 2026 only (registered before the run)
+
+Same 18 pre-registered cases and the same five criteria, a fresh 1.000 USDT account from 2026-01-01 to
+2026-10-02 (`--start 2026-01-01`; earlier rows only warm the indicators). The criteria's half split is the
+window midpoint. Julius asked for it to see whether the full-window picture holds in the recent regime.
+
+Predictions, written before the run:
+
+- `H4` reproduces the earlier 2026 result (+14,23%, DD 10,46%, 65 trades, cost ×2 +11,38%).
+- The uncapped `ROT` earns again roughly twice `FIXED5050` with roughly twice its drawdown; return per drawdown
+  stays close to the controls'. Its drawdown can stay under 15% in a shorter window, so criterion 2 is the one
+  most likely to flip; it is not evidence that the design is safer.
+- The slot variants stay near the controls' drawdown and return.
+- Rotation acts only a handful of times (the window holds about a fifth of the signals).
+- Trade counts are small (about 60 to 110), so differences of a few points are noise.
