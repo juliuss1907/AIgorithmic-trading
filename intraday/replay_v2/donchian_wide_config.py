@@ -42,8 +42,10 @@ class WideSlotConfig(HistoricalConfig):
     adx_threshold: Literal[20, 30] = 20
     bar_interval: Literal['4h', '1h'] = '4h'
     stop_atr_multiple: Literal[3, 6] = 3
-    ema_fast: Literal[20, 50] = 50
-    ema_slow: Literal[50, 200] = 200
+    ema_fast: Literal[20, 50, 200] = 50
+    ema_slow: Literal[50, 200, 800] = 200
+    adx_period: Literal[14, 56] = 14
+    warmup_hours: Literal[484, 1000] = 484
     regime_interval: Literal['4h'] | None = None
     cost_multiplier: Literal[1, 2] = 1
     entry_cap: D = POOL_SPLIT
@@ -79,8 +81,14 @@ class WideSlotConfig(HistoricalConfig):
             raise ValueError('wide-slot study requires sorted unique symbols, 1000 USDT and the locked risk rules')
         if self.regime_interval and (self.bar_interval != '1h' or (self.ema_fast, self.ema_slow) != (50, 200)):
             raise ValueError('an H4 regime gate needs H1 bars with the default EMA pair')
-        if (self.ema_fast, self.ema_slow) not in ((50, 200), (20, 50)):
-            raise ValueError('EMA pair must be 50/200 or 20/50')
+        if self.bar_interval == '4h' and (self.warmup_hours != 484 or self.adx_period != 14):
+            raise ValueError('H4 cases use the fixed warmup and ADX 14')
+        if (self.ema_fast, self.ema_slow) not in ((50, 200), (20, 50), (200, 800)):
+            raise ValueError('EMA pair must be 50/200, 20/50 or 200/800')
+        slow = (self.ema_fast, self.ema_slow) == (200, 800)
+        if slow != (self.adx_period == 56) or slow != (self.warmup_hours == 1000) or (
+                slow and (self.bar_interval != '1h' or self.regime_interval)):
+            raise ValueError('the slow H1 regime pairs EMA 200/800 with ADX 56, 1,000 h warmup and H1 bars')
         return self
 
 
@@ -88,19 +96,27 @@ class WideSlotStressConfig(WideSlotConfig):
     cost_multiplier: Literal[2] = 2
 
 
-def wide_cases(start, end, symbols):
+def wide_cases(start, end, symbols, only=None):
     """H4 reference and the H1 family, each at normal and doubled costs, plus a random-selection control.
 
-    Ordered so cases that share an indicator preparation are adjacent."""
+    The registered list has 14 cases; `H1-SLOWREGIME` is added only on request through `only`. Ordered so
+    cases that share an indicator preparation are adjacent."""
     symbols = tuple(sorted(symbols))
     rows = [('H4', {}), ('H4-random', dict(ranker='random')),
             ('H1', dict(bar_interval='1h')),
             ('H1-GEOM', dict(bar_interval='1h', stop_atr_multiple=6, exit_window=40)),
             ('H1-ADX30', dict(bar_interval='1h', adx_threshold=30)),
             ('H1-EMA50-20', dict(bar_interval='1h', ema_fast=20, ema_slow=50)),
-            ('H1-REGIME', dict(bar_interval='1h', regime_interval='4h'))]
+            ('H1-REGIME', dict(bar_interval='1h', regime_interval='4h')),
+            ('H1-SLOWREGIME', dict(bar_interval='1h', ema_fast=200, ema_slow=800, adx_period=56, warmup_hours=1000))]
     cases = []
     for label, change in rows:
+        if only is None and label == 'H1-SLOWREGIME':
+            continue
         for suffix, cls in (('', WideSlotConfig), ('-cost2x', WideSlotStressConfig)):
-            cases.append((f'WIDE-{label}{suffix}', cls(start=start, end=end, symbols=symbols, **change)))
+            name = f'WIDE-{label}{suffix}'
+            if only is None or name in only:
+                cases.append((name, cls(start=start, end=end, symbols=symbols, **change)))
+    if only is not None and {n for n, _ in cases} != set(only):
+        raise ValueError('unknown wide case requested')
     return cases

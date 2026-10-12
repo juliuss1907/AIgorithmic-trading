@@ -1,6 +1,6 @@
 """Five exploratory A4 variants, full-journal verification and continuous capital."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -19,7 +19,8 @@ from intraday.replay_v2.portfolio_study import file_hash
 
 
 PRESETS = {'setups': 'donchian-adx-setups', 'baskets': 'donchian-basket3', 'h1': 'donchian-setup2-h1',
-           'h1-family': 'donchian-setup2-h1-family', 'wide-slots': 'donchian-wide-slots'}
+           'h1-family': 'donchian-setup2-h1-family', 'wide-slots': 'donchian-wide-slots',
+           'h1-slowregime': 'donchian-setup2-h1-slowregime'}
 
 
 def calendar_periods(curve, start, end, capital):
@@ -145,12 +146,13 @@ def window_data(data, start):
     return sliced
 
 
-def run_study(inputs_path, report_root, *, resume=False, progress=print, universe='three', window_start=None):
+def run_study(inputs_path, report_root, *, resume=False, progress=print, universe='three', window_start=None,
+              only=None):
     source=Path(inputs_path).expanduser().resolve();before=file_hash(source)
     if universe == 'wide-slots':
         from intraday.replay_v2.donchian_wide_data import read_wide_manifest
         raw=read_wide_manifest(source)
-    elif universe in ('five', 'setups', 'baskets', 'h1', 'h1-family'):
+    elif universe in ('five', 'setups', 'baskets', 'h1', 'h1-family', 'h1-slowregime'):
         from intraday.replay_v2.donchian_five_data import read_manifest
         raw=read_manifest(source)
     else:
@@ -160,11 +162,11 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
     if window_start is not None:
         # Same frozen candles, shorter account: replay starts later, earlier rows only warm the indicators.
         start=datetime.fromisoformat(window_start)
-        if universe not in ('baskets','h1','h1-family') or start.tzinfo is None or not bundle_start<start<end:
+        if universe not in ('baskets','h1','h1-family','h1-slowregime') or start.tzinfo is None or not bundle_start<start<end:
             raise ValueError('a later window start needs a basket universe and a date inside the frozen window')
     if universe == 'wide-slots':
         from intraday.replay_v2.donchian_wide_config import wide_cases
-        variants=wide_cases(start,end,sorted(raw['candles']))
+        variants=wide_cases(start,end,sorted(raw['candles']),only=only)
     else:
         variants=cases(start,end,universe=universe)
     lineage=raw['source_files_sha256'];verify_files(lineage)
@@ -181,10 +183,10 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
         root.mkdir(parents=True,mode=0o700)
         _write(root/'binding.json',encoded(binding))
     progress('Preparing shared causal features and native M15 volume profiles')
-    preparation_config = (config_type('five')(start=start,end=end) if universe in ('setups','baskets','h1','h1-family') else variants[0][1])
-    data,funding=decode_bundle(config_type('five')(start=bundle_start,end=end) if window_start is not None else preparation_config,raw)
-    if window_start is not None:
-        data=window_data(data,start)
+    preparation_config = (config_type('five')(start=start,end=end) if universe in ('setups','baskets','h1','h1-family','h1-slowregime') else variants[0][1])
+    m15_warmup = timedelta(hours=raw['m15_warmup_hours']) if raw.get('m15_warmup_hours', 484) != 484 else None
+    data,funding=decode_bundle(config_type('five')(start=bundle_start,end=end) if window_start is not None else preparation_config,
+                               raw,m15_warmup=m15_warmup)
     policy=raw.get('native_boundary_policy')
     del raw
     cache={}
@@ -195,13 +197,14 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
         if key not in cache:
             cache.clear()
             if key[0]=='4h':
-                cache[key]=prepare(preparation_config,data,funding,native_boundary_policy=policy)
+                cache[key]=prepare(preparation_config,window_data(data,start),funding,native_boundary_policy=policy)
             else:
                 # H1 bars come from the same decoded M15 rows; only the configured coins are needed.
                 from intraday.replay_v2.donchian_hourly import build
                 symbols=sorted(config.weights)
                 progress('Deriving H1 signal bars from native M15 and reproducing native H4: '+', '.join(symbols))
-                series,derivation=build(data,symbols,start,end,keep_h4=bool(key[3]))
+                series,derivation=build(data,symbols,start,end,keep_h4=bool(key[3]),
+                                        warmup_hours=key[5] if key[5]!=484 else None)
                 cache[key]=prepare(config,series,{s:funding[s] for s in symbols},derivation=derivation)
                 del series
         return cache[key]
@@ -266,6 +269,13 @@ def markdown(receipt):
         s=item['summary'];net=s['net_pnl'];ret=s['net_return_pct']
         lines.append(f"| {item['variant']} | {s['final_equity_known']:.2f} | {net if net is not None else 'UNKNOWN'} | "
                      f"{ret if ret is not None else 'UNKNOWN'} | {s['max_drawdown_known_pct']:.2f} | {s['closed_trades']} |")
+    if receipt['preset']=='donchian-setup2-h1-slowregime':
+        lines += ['', 'ETH-NEAR-SOL equal thirds, Spot60/Short40, Short1x, ATR14 sizing, combined UTC daily3%, fresh account',
+                  'at the window start. H4 is the frozen Setup-2 control; H1 the baseline with every window in H1 bars.',
+                  'REGIME reads EMA200/50 and ADX/DMI14 from the last closed H4 bar; SLOWREGIME computes the same clock',
+                  'lengths on H1 bars (EMA800/200, ADX/DMI56) with triggers, volume, profile and stops unchanged.',
+                  'cost2x doubles fees and slippage. Seen data: a pass is grounds for a new frozen prospective test only.']
+        return '\n'.join(lines)+'\n'
     if receipt['preset']=='donchian-wide-slots':
         lines += ['', 'Wide basket from the current Binance USDT-M volume ranking (survivorship bias); five shared slots of one',
                   'realized pool, each 1/5 of the pool times the ATR multiplier; Spot long or Perp short 1x, one position per coin.',
@@ -319,21 +329,25 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description='Local five-case A4 ADX exploration; no models or trading')
     parser.add_argument('--report-root',required=True)
     parser.add_argument('--inputs')
-    parser.add_argument('--universe',choices=('three','five','setups','baskets','h1','h1-family','wide-slots'),default='three')
+    parser.add_argument('--universe',choices=('three','five','setups','baskets','h1','h1-family','h1-slowregime','wide-slots'),
+                        default='three')
+    parser.add_argument('--only',help='comma-separated case names (wide-slots only), e.g. WIDE-H4,WIDE-H1-SLOWREGIME')
     parser.add_argument('--early-inputs');parser.add_argument('--late-inputs')
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--start',help='ISO UTC date inside the frozen window; replay from there with a fresh account')
     args=parser.parse_args(argv)
     root=Path(args.report_root).expanduser().resolve()
     source=args.inputs
-    if args.universe in ('five','setups','baskets','h1','h1-family','wide-slots') and source is None:
-        parser.error('--universe five/setups/baskets/h1/h1-family/wide-slots requires a validated --inputs manifest')
+    if args.universe in ('five','setups','baskets','h1','h1-family','h1-slowregime','wide-slots') and source is None:
+        parser.error('--universe five/setups/baskets/h1/h1-family/h1-slowregime/wide-slots requires a validated --inputs manifest')
     if source is None:
         if not args.early_inputs or not args.late_inputs:parser.error('supply --inputs or both parent inputs')
         source=root/'data'/'inputs.json'
         if not source.exists():source=collect_join(args.early_inputs,args.late_inputs,root/'data')
         elif not args.resume:raise FileExistsError(source)
-    run_study(source,root/'runs',resume=args.resume,universe=args.universe,window_start=args.start)
+    only=[n for n in args.only.split(',') if n] if args.only else None
+    if only is not None and args.universe != 'wide-slots':parser.error('--only applies to --universe wide-slots')
+    run_study(source,root/'runs',resume=args.resume,universe=args.universe,window_start=args.start,only=only)
 
 
 if __name__=='__main__':

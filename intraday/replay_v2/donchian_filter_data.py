@@ -224,7 +224,9 @@ def decode_snapshot(payload):
     return SparseMarkSnapshot.model_validate(payload)
 
 
-def decode_bundle(config, raw):
+def decode_bundle(config, raw, *, m15_warmup=None):
+    """`m15_warmup` admits a bundle whose M15 snapshots start earlier than the default warmup."""
+    warmup = {**WARMUP, '15m': m15_warmup} if m15_warmup else WARMUP
     from intraday.replay_v2.donchian_five_policy import POLICY as FIVE_POLICY
     if raw.get('bundle_checksum') != fingerprint({k:v for k,v in raw.items() if k != 'bundle_checksum'}):
         raise ValueError('filter input bundle checksum mismatch')
@@ -245,7 +247,7 @@ def decode_bundle(config, raw):
         for tag, payload in payloads.items():
             snap = decode_snapshot(payload)
             interval = '4h' if tag.endswith('4h') else '15m'
-            first = config.start if tag == 'mark15m' else config.start-WARMUP[interval]
+            first = config.start if tag == 'mark15m' else config.start-warmup[interval]
             market = 'spot' if tag.startswith('spot') else 'mark' if tag == 'mark15m' else 'perp'
             if (snap.symbol, snap.market, snap.interval, snap.coverage_start, snap.coverage_end) != (
                     s, market, interval, first, config.end):

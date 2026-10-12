@@ -14,8 +14,8 @@ def ema_keys(ema_fast=50, ema_slow=200):
     return 'ema_fast', 'prior_ema_fast', 'ema_slow'
 
 
-def indicator_series(rows, *, ema_fast=50, ema_slow=200):
-    """EMA SMA seeds; ATR simple TR14 (legacy sizing); DMI/ADX Wilder14."""
+def indicator_series(rows, *, ema_fast=50, ema_slow=200, adx_period=14):
+    """EMA SMA seeds; ATR simple TR14 (legacy sizing); DMI/ADX Wilder (`adx_period`, default 14)."""
     fast_key, prior_key, slow_key = ema_keys(ema_fast, ema_slow)
     result, trs, ups, downs, dxs = [], [], [], [], []
     ema50 = ema200 = tr_rma = up_rma = down_rma = adx = None
@@ -37,20 +37,20 @@ def indicator_series(rows, *, ema_fast=50, ema_slow=200):
             trs.append(tr)
             ups.append(up if up > down and up > 0 else ZERO)
             downs.append(down if down > up and down > 0 else ZERO)
-            if len(trs) == 14:
-                tr_rma, up_rma, down_rma = (sum(v, ZERO)/14 for v in (trs, ups, downs))
+            if len(trs) == adx_period:
+                tr_rma, up_rma, down_rma = (sum(v, ZERO)/adx_period for v in (trs, ups, downs))
             elif tr_rma is not None:
-                tr_rma += (tr-tr_rma)/14
-                up_rma += (ups[-1]-up_rma)/14
-                down_rma += (downs[-1]-down_rma)/14
+                tr_rma += (tr-tr_rma)/adx_period
+                up_rma += (ups[-1]-up_rma)/adx_period
+                down_rma += (downs[-1]-down_rma)/adx_period
             if tr_rma is not None:
                 plus, minus = (100*up_rma/tr_rma, 100*down_rma/tr_rma) if tr_rma else (ZERO, ZERO)
                 dx = 100*abs(plus-minus)/(plus+minus) if plus+minus else ZERO
                 dxs.append(dx)
-                if len(dxs) == 14:
-                    adx = sum(dxs, ZERO)/14
+                if len(dxs) == adx_period:
+                    adx = sum(dxs, ZERO)/adx_period
                 elif adx is not None:
-                    adx += (dx-adx)/14
+                    adx += (dx-adx)/adx_period
         result.append(dict(close=bar.close, volume=bar.volume,
             volume_ma=sum((b.volume for b in rows[i-20:i]), ZERO)/20 if i >= 20 else None,
             atr=sum(trs[-14:], ZERO)/14 if len(trs) >= 14 else None,

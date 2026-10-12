@@ -117,3 +117,12 @@ survivorship bias (PAXG, a gold token, is included because Binance tags it as CO
 not adoptable as run (drawdown 30.6%), but the ranking effect is the most interesting finding and is
 the natural thing to test next, together with a smaller slot size or a exposure cap that brings the
 drawdown inside the live limit. Both would be new, pre-registered experiments.
+
+## Addendum: re-collection with longer M15 history (2026-10-12)
+
+The slow H1 regime candidate (see `setup2-h1-research.md`, third round) needs 1,000 hours of M15
+before the window start. The collector gained `--m15-warmup-hours` (default 484, recorded in the
+manifest as `m15_warmup_hours`); the 30 coins are collected again into a new directory with 1,000.
+The H4 and `H1-REGIME` cases are re-run from it and must reproduce the earlier report exactly, since
+every other series is cut back to its fixed warmup before use. Only `H1-SLOWREGIME` reads the extra
+history. Case subsets run with `donchian_adx_study --only`.

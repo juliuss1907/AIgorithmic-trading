@@ -261,3 +261,30 @@ Why this is not grounds to change anything:
 Per the pre-registered rule a pass is at most grounds to propose a new frozen prospective test.
 The recommendation is not to, because no statistical separation exists and the mechanism differs
 from the one Setup-2 was chosen for. ADR-005 (ETH-NEAR-SOL H4) stays the only frozen candidate.
+
+## Third round: the slow regime on H1 bars (pre-registered 2026-10-12)
+
+`H1-REGIME` is a hybrid: its EMA200/50 and ADX/DMI14 come from native **H4** bars while the trigger,
+volume, profile, ATR and stops run on H1 (the other H1 candidates compute everything on H1). The
+operator asked for the pure counterpart. `H1-SLOWREGIME` keeps H1 baseline and changes one concept:
+the regime filter is computed on H1 bars with the same clock length as the H4 one.
+
+| Element | `H1-REGIME` (hybrid) | `H1-SLOWREGIME` (pure H1) |
+|---|---|---|
+| EMA trend / momentum | EMA200 / EMA50 of H4 (33 / 8 days) | EMA800 / EMA200 of H1 (33 / 8 days) |
+| ADX/DMI | period 14 of H4 (56 hours) | period 56 of H1 (56 hours) |
+| ADX threshold | > 20 and rising | > 20 and rising (inherited, not tuned; ADX 56 is smoother, so the same number is stricter) |
+| Everything else | H1 baseline | H1 baseline |
+
+Data needs: EMA800 seeds at the 800th bar, so this case requires 1,000 hours of H1 history before the
+window start (other cases keep 484 hours and their results are untouched). That is why it runs on the
+2026 windows only: the 2022 manifest has just 484 M15 hours before 2022-01-01. Windows: ETH-NEAR-SOL
+2026-01-01 → 2026-10-02 (8 cases with H4, H1 baseline and H1-REGIME at both costs) and the 30-coin
+five-slot basket 2026-01-01 → 2026-10-11 (6 cases: H4, H1-REGIME, H1-SLOWREGIME at both costs, from a
+re-collection with `--m15-warmup-hours 1000`).
+
+**Prediction (before the run):** fewer trades than the H1 baseline and better than it, close to the
+hybrid, below H4, no case meeting the five criteria. The point is to learn whether the hybrid's edge
+comes from a slow regime or from the H4 candles themselves.
+
+This is a seventh look at the same seen data; a pass would only support proposing a prospective test.

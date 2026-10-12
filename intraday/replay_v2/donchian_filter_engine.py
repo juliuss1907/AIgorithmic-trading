@@ -37,7 +37,8 @@ OBSERVED_PAIRS = PAIRS+((30,40),)  # The extra pair serves the H1 geometry candi
 
 def indicator_settings(config):
     return (getattr(config,'bar_interval','4h'), getattr(config,'ema_fast',50),
-            getattr(config,'ema_slow',200), getattr(config,'regime_interval',None))
+            getattr(config,'ema_slow',200), getattr(config,'regime_interval',None),
+            getattr(config,'adx_period',14), getattr(config,'warmup_hours',484))
 
 
 @dataclass
@@ -62,6 +63,8 @@ class Prepared:
     derivation: dict | None = None
     ema_periods: tuple = (50, 200)  # (fast, slow)
     regime_interval: str | None = None  # '4h': EMA/ADX/DMI come from the last closed H4 bar.
+    adx_period: int = 14  # Wilder smoothing of DMI/ADX only; ATR14 and volume MA20 never move.
+    warmup_hours: int = 484  # H1 bars before the window start; H4 and M15 warmups are fixed.
 
 
 SIGNAL_HOURS = {'4h': 4, '1h': 1}
@@ -77,9 +80,12 @@ def prepare(config, data, funding, *, native_boundary_policy=None, derivation=No
         raise ValueError('hourly signal bars require an audited M15 derivation and no H4 boundary policy')
     lookback = timedelta(hours=PROFILE_BARS*SIGNAL_HOURS[signal])
     profile_m15 = int(lookback/timedelta(minutes=15))
-    _, ema_fast, ema_slow, regime = indicator_settings(config)
-    if regime not in (None, '4h') or (regime and (signal != '1h' or (ema_fast, ema_slow) != (50, 200))):
-        raise ValueError('an H4 regime gate needs H1 bars with the default EMA pair')
+    _, ema_fast, ema_slow, regime, adx_period, warmup_hours = indicator_settings(config)
+    if regime not in (None, '4h') or (regime and (signal != '1h' or (ema_fast, ema_slow) != (50, 200) or adx_period != 14)):
+        raise ValueError('an H4 regime gate needs H1 bars with the default indicator settings')
+    if signal == '4h' and warmup_hours != 484:
+        raise ValueError('H4 signal bars use the fixed warmup')
+    warmup = {**WARMUP_BY_INTERVAL, '1h': timedelta(hours=warmup_hours)}
     extra = {'spot4h','perp4h'} if regime else set()
     symbols = set(config.weights) | set(market_weights(config, 'perp'))
     if set(data) != symbols or set(funding) != symbols:
@@ -98,7 +104,7 @@ def prepare(config, data, funding, *, native_boundary_policy=None, derivation=No
             if not rows:
                 raise ValueError('missing native filter study series rows')
             interval = '15m' if tag.endswith('15m') else tag[-2:]
-            first = config.start if tag == 'mark15m' else config.start-WARMUP_BY_INTERVAL[interval]
+            first = config.start if tag == 'mark15m' else config.start-warmup[interval]
             if tag == 'spot15m' and s in gap_policy:
                 checker=five_policy.spot_candles if isinstance(rows[0],five_policy.FiveSpotCandle) else spot_candles
                 checker([b.row() for b in rows], s, first, config.end)
@@ -121,7 +127,7 @@ def prepare(config, data, funding, *, native_boundary_policy=None, derivation=No
                 checker=five_policy.verify_five_boundaries
             if signal == '4h':  # Hourly bars are built from these same M15 rows, so the check would be circular.
                 checker(s, large, small, config.start, config.end, market+' H4/M15')
-            indicators = indicator_series(large, ema_fast=ema_fast, ema_slow=ema_slow)
+            indicators = indicator_series(large, ema_fast=ema_fast, ema_slow=ema_slow, adx_period=adx_period)
             if regime:
                 gate = series[market+'4h']
                 gate_features, gate_times = indicator_series(gate), [b.available_at for b in gate]
@@ -182,11 +188,12 @@ def prepare(config, data, funding, *, native_boundary_policy=None, derivation=No
     if native_boundary_policy: identity['native_boundary_policy']=native_boundary_policy
     if signal != '4h': identity.update(bar_interval=signal, derivation=derivation)
     if (ema_fast, ema_slow) != (50, 200) or regime: identity.update(ema_periods=[ema_fast, ema_slow], regime_interval=regime)
+    if adx_period != 14 or warmup_hours != 484: identity.update(adx_period=adx_period, warmup_hours=warmup_hours)
     checksum=fingerprint(identity)
     return Prepared(config.start, config.end, features, observations, h4, opens, closes,
                     settlements, timeline, checksum, audit, gap_policy, mark_policy, reference_times,native_boundary_policy,
                     frozenset(s for s,tags in data.items() if isinstance(tags['spot15m'][0],five_policy.FiveSpotCandle)),
-                    signal, derivation, (ema_fast, ema_slow), regime)
+                    signal, derivation, (ema_fast, ema_slow), regime, adx_period, warmup_hours)
 
 
 def position(book, market, symbol):
@@ -222,7 +229,8 @@ def check_stops(book, at, bars, closed, *, opening):
 def simulate(config, prepared):
     if (config.start, config.end) != (prepared.start,prepared.end):
         raise ValueError('prepared features belong to another window')
-    if indicator_settings(config) != (prepared.bar_interval, *prepared.ema_periods, prepared.regime_interval):
+    if indicator_settings(config) != (prepared.bar_interval, *prepared.ema_periods, prepared.regime_interval,
+                                      prepared.adx_period, prepared.warmup_hours):
         raise ValueError('prepared features belong to another indicator configuration')
     slots = getattr(config, 'slots', None)
     book = SlotBook(config) if slots else FilterBook(config)
@@ -491,6 +499,10 @@ def result(config, prepared, book):
         variant['donchian_entry_exit'] = [config.entry_window, config.exit_window]
     if prepared.ema_periods != (50, 200):
         variant['ema_fast_slow'] = list(prepared.ema_periods)
+    if prepared.adx_period != 14:
+        variant['adx_dmi_period'] = prepared.adx_period
+    if prepared.warmup_hours != 484:
+        variant['h1_warmup_hours'] = prepared.warmup_hours
     if getattr(config, 'slots', None):
         variant['slots'] = dict(count=config.slots, ranker=getattr(config, 'ranker', 'adx_volume'),
                                 seed=getattr(config, 'seed', None) if getattr(config, 'ranker', '') == 'random' else None)

@@ -161,6 +161,16 @@ class H1Adx30Config(H1BasketConfig):
         return {'adx_by_market': {m: dict.fromkeys(self.weights, 30) for m in ('spot', 'perp')}}
 
 
+class H1SlowRegimeConfig(H1BasketConfig):
+    """The H4 regime filter re-expressed on H1 bars with the same clock length: EMA200/EMA50 of H4 become
+    EMA800/EMA200 and ADX/DMI14 becomes 56. Triggers, volume, profile and stops stay as in the H1 baseline.
+    Needs 1,000 h of H1 history before the window start."""
+    ema_fast: Literal[200] = 200
+    ema_slow: Literal[800] = 800
+    adx_period: Literal[56] = 56
+    warmup_hours: Literal[1000] = 1000
+
+
 def _stress(cls):
     class Stressed(cls):
         cost_multiplier: Literal[2] = 2
@@ -172,6 +182,7 @@ H1GeometryStressConfig = _stress(H1GeometryConfig)
 H1RegimeStressConfig = _stress(H1RegimeConfig)
 H1FastEmaStressConfig = _stress(H1FastEmaConfig)
 H1Adx30StressConfig = _stress(H1Adx30Config)
+H1SlowRegimeStressConfig = _stress(H1SlowRegimeConfig)
 
 
 def basket_name(basket):
@@ -217,6 +228,17 @@ def h1_family_cases(start, end):
             cases.append((f'{name}-{label}{suffix}',
                           cls(start=start, end=end, basket=H1_BASKET, **{**spec, **override})))
     return cases
+
+
+def h1_slowregime_cases(start, end):
+    """H4 control, H1 baseline, the hybrid H4-regime candidate and its pure-H1 counterpart, each at two costs."""
+    spec = basket_specification(H1_BASKET)
+    name = basket_name(H1_BASKET)
+    rows = [('H4', BasketConfig, BasketStressConfig), ('H1', H1BasketConfig, H1BasketStressConfig),
+            ('H1-REGIME', H1RegimeConfig, H1RegimeStressConfig),
+            ('H1-SLOWREGIME', H1SlowRegimeConfig, H1SlowRegimeStressConfig)]
+    return [(f'{name}-{label}{suffix}', cls(start=start, end=end, basket=H1_BASKET, **spec))
+            for label, normal, stressed in rows for suffix, cls in (('', normal), ('-cost2x', stressed))]
 
 
 def setup_cases(start, end):

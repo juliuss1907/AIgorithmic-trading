@@ -84,18 +84,29 @@ def h4_reproduction(large, small, *, missing_opens=()):
     return dict(compared=compared, skipped_incomplete=skipped, disagreements=disagreements)
 
 
-def build(data, symbols, start, end, *, keep_h4=False):
+def build(data, symbols, start, end, *, keep_h4=False, warmup_hours=None):
     """Replace H4 with H1 for `symbols`; return the series bundle and an auditable derivation.
 
-    `keep_h4` retains the native H4 candles for a regime gate that reads them next to the H1 bars."""
-    first = start-WARMUP['15m']
+    `keep_h4` retains the native H4 candles for a regime gate that reads them next to the H1 bars.
+    `warmup_hours` lengthens only the H1 series (default: the M15 warmup); the other series keep
+    their fixed warmups, so a longer H1 history never changes the other cases' inputs."""
+    warmup = timedelta(hours=warmup_hours) if warmup_hours else WARMUP['15m']
+    first = start-warmup
+    floors = {'4h': start-WARMUP['4h'], '15m': start-WARMUP['15m']}
     hourly, derivation = {}, {}
     for symbol in sorted(symbols):
-        hourly[symbol] = {tag: rows for tag, rows in data[symbol].items() if keep_h4 or not tag.endswith('4h')}
+        hourly[symbol] = {}
+        for tag, rows in data[symbol].items():
+            if tag.endswith('4h') and not keep_h4:
+                continue
+            floor = start if tag == 'mark15m' else floors['4h' if tag.endswith('4h') else '15m']
+            hourly[symbol][tag] = tuple(r for r in rows if r.opened_at >= floor)
         derivation[symbol] = {}
         for market in ('spot', 'perp'):
             missing = GAP_OPENS if market == 'spot' else ()
-            small = data[symbol][market+'15m']
+            small = tuple(r for r in data[symbol][market+'15m'] if r.opened_at >= first)
+            if not small or small[0].opened_at > first:
+                raise ValueError(f'{symbol} {market}: M15 history is shorter than the {warmup_hours or 484}h warmup')
             bars, gaps = hourly_series(small, first, end, missing_opens=missing)
             check = h4_reproduction(data[symbol][market+'4h'], small, missing_opens=missing)
             unexpected = set(check['disagreements'])-(KNOWN_PERP_H4_DISAGREEMENTS if market == 'perp' else frozenset())

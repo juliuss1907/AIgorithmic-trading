@@ -4,6 +4,15 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-12 — H1-SLOWREGIME: bộ lọc chế độ chậm tính hoàn toàn trên H1 (đăng ký trước)
+
+Nhánh: `research/h1-slowregime` (từ `research/wide-basket-slots`). Julius hỏi liệu mọi ứng viên H1 đều tính chỉ báo ở H1. Không: `H1-REGIME` lấy EMA200/50 và ADX/DMI14 từ nến H4 (ứng viên lai). Julius chọn thêm bản thuần H1.
+
+- **Ứng viên:** EMA800/EMA200 và ADX/DMI56 trên nến H1 (cùng độ dài thời gian với EMA200/50 và ADX14 của H4); Donchian, volume, profile và stop giữ như H1 baseline. Ngưỡng ADX 20 kế thừa, không tối ưu. Dự đoán ghi trước: ít lệnh hơn và tốt hơn baseline, gần bản lai, dưới H4.
+- **Code:** `adx_period` trong `indicator_series` (mặc định 14, ATR và volume MA không đổi), cặp EMA (200,800), `warmup_hours` theo cấu hình, `build(..., warmup_hours)` (các chuỗi khác giữ warmup cố định), cắt dữ liệu theo từng cấu hình trong `run_study`, `decode_bundle(m15_warmup)`, collector `--m15-warmup-hours`, `--only` và `--universe h1-slowregime`.
+- **Phạm vi:** chỉ cửa sổ 2026 (manifest 2022 chỉ có 484 giờ M15 trước ngày bắt đầu): rổ ETH-NEAR-SOL 8 ca và rổ 30 coin 6 ca.
+- **Kiểm thử:** 6 test mới.
+
 ## 2026-10-11 — Họ Setup-2 trên rổ 30 coin, 5 slot chung (đăng ký trước)
 
 Nhánh: `research/wide-basket-slots` (từ `research/setup2-h1`). Julius muốn thử các ứng viên trên rổ 30 coin top, tối đa 5 vị thế mở cùng lúc, thêm bước chọn coin. Chi tiết: [wide-basket-slots-research](docs/wide-basket-slots-research.md).

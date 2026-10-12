@@ -86,7 +86,8 @@ def evaluate(receipt, candidate='H1', prefix=None):
                 note='Seen data; a pass proposes a new frozen prospective test, never activation.')
 
 
-WIDE_FAMILY = ('H1', 'H1-GEOM', 'H1-ADX30', 'H1-EMA50-20', 'H1-REGIME')
+WIDE_FAMILY = ('H1', 'H1-GEOM', 'H1-ADX30', 'H1-EMA50-20', 'H1-REGIME', 'H1-SLOWREGIME')
+SLOWREGIME_SET = ('H1', 'H1-REGIME', 'H1-SLOWREGIME')
 
 
 def slot_profile(report_directory, window_hours):
@@ -117,23 +118,40 @@ def evaluate_wide(receipt):
     hours = (datetime.fromisoformat(window['end'])-datetime.fromisoformat(window['start'])).total_seconds()/3600
     result = {}
     for candidate in WIDE_FAMILY:
+        if f'WIDE-{candidate}-cost2x' not in by_name or f'WIDE-{candidate}' not in by_name:
+            continue  # A subset run (`--only`) evaluates what it contains.
         entry = evaluate(receipt, candidate, prefix='WIDE')
         entry['hold_profile'] = hold_profile(by_name[f'WIDE-{candidate}']['report_directory'])
         entry['slot_profile'] = slot_profile(by_name[f'WIDE-{candidate}']['report_directory'], hours)
         result[candidate] = entry
     control = by_name['WIDE-H4']
-    random_control = by_name['WIDE-H4-random']
     result['H4'] = dict(hold_profile=hold_profile(control['report_directory']),
                         slot_profile=slot_profile(control['report_directory'], hours),
                         net_return_pct=control['summary']['net_return_pct'],
                         max_drawdown_pct=control['summary']['max_drawdown_known_pct'])
-    result['H4-random'] = dict(net_return_pct=random_control['summary']['net_return_pct'],
-                               max_drawdown_pct=random_control['summary']['max_drawdown_known_pct'],
-                               trades=random_control['summary']['closed_trades'],
-                               ranked_minus_random_pp=control['summary']['net_return_pct']-random_control['summary']['net_return_pct'],
-                               cost2x_net_return_pct=by_name['WIDE-H4-random-cost2x']['summary']['net_return_pct'])
-    return dict(candidates=result, advancing=[c for c in WIDE_FAMILY if result[c]['advance']],
+    random_control = by_name.get('WIDE-H4-random')
+    if random_control:
+        result['H4-random'] = dict(net_return_pct=random_control['summary']['net_return_pct'],
+            max_drawdown_pct=random_control['summary']['max_drawdown_known_pct'],
+            trades=random_control['summary']['closed_trades'],
+            ranked_minus_random_pp=control['summary']['net_return_pct']-random_control['summary']['net_return_pct'],
+            cost2x_net_return_pct=by_name['WIDE-H4-random-cost2x']['summary']['net_return_pct'])
+    return dict(candidates=result, advancing=[c for c in WIDE_FAMILY if c in result and result[c]['advance']],
                 note='Wide basket, five slots, deterministic ranking standing in for Jev; seen-data research, never activation.')
+
+
+def evaluate_slowregime(receipt):
+    """Baseline, hybrid H4 regime and the pure-H1 clock-length regime against the same H4 control."""
+    name = basket_name(H1_BASKET)
+    by_name = {item['variant']: item for item in receipt['results']}
+    result = {}
+    for candidate in SLOWREGIME_SET:
+        entry = evaluate(receipt, candidate)
+        entry['hold_profile'] = hold_profile(by_name[f'{name}-{candidate}']['report_directory'])
+        result[candidate] = entry
+    result['H4'] = dict(hold_profile=hold_profile(by_name[f'{name}-H4']['report_directory']))
+    return dict(candidates=result, advancing=[c for c in SLOWREGIME_SET if result[c]['advance']],
+                note='Seen data; the slow regime is the pure-H1 counterpart of the H4-regime hybrid.')
 
 
 def evaluate_family(receipt):
@@ -156,6 +174,7 @@ def main(argv=None):
     receipt = json.loads(path.read_text())
     preset = receipt.get('preset')
     verdict = (evaluate_wide(receipt) if preset == 'donchian-wide-slots'
+               else evaluate_slowregime(receipt) if preset == 'donchian-setup2-h1-slowregime'
                else evaluate_family(receipt) if preset == 'donchian-setup2-h1-family' else evaluate(receipt))
     output = path.with_name('verdict.json')
     text = json.dumps(verdict, indent=2, sort_keys=True)+'\n'

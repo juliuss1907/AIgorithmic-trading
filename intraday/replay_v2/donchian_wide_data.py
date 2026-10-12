@@ -124,10 +124,10 @@ def _funding_complete(snapshot, start, end):
         raise ValueError('funding history is incomplete')
 
 
-def fetch_coin(symbol, start, end, *, spot_fetch=fetch_spot_snapshot, perp_fetch=fetch_candle_snapshot,
-               funding_fetch=fetch_funding_snapshot):
+def fetch_coin(symbol, start, end, *, m15_warmup=None, spot_fetch=fetch_spot_snapshot,
+               perp_fetch=fetch_candle_snapshot, funding_fetch=fetch_funding_snapshot):
     """All six series for one coin, validated against each other; raises ValueError on any weakness."""
-    first = {'4h': start-WARMUP['4h'], '15m': start-WARMUP['15m']}
+    first = {'4h': start-WARMUP['4h'], '15m': start-(m15_warmup or WARMUP['15m'])}
     snaps = {
         'spot4h': spot_fetch(symbol, '4h', first['4h'], end),
         'spot15m': spot_fetch(symbol, '15m', first['15m'], end),
@@ -144,7 +144,7 @@ def fetch_coin(symbol, start, end, *, spot_fetch=fetch_spot_snapshot, perp_fetch
     return snaps, funding
 
 
-def collect(root, universe, start, end, *, want=30, progress=print, **fetchers):
+def collect(root, universe, start, end, *, want=30, m15_warmup=None, progress=print, **fetchers):
     """Collect candidates in rank order until `want` coins validate; write snapshots once and a manifest."""
     root = Path(root).expanduser().resolve()
     root.mkdir(parents=True, mode=0o700, exist_ok=False)
@@ -154,7 +154,7 @@ def collect(root, universe, start, end, *, want=30, progress=print, **fetchers):
             break
         symbol = candidate['symbol']
         try:
-            snaps, funding = fetch_coin(symbol, start, end, **fetchers)
+            snaps, funding = fetch_coin(symbol, start, end, m15_warmup=m15_warmup, **fetchers)
         except FETCH_ERRORS as error:
             rejected.append(dict(symbol=symbol, stage='collection', reason=str(error)[:300]))
             progress(f'excluded {symbol}: {error}')
@@ -170,6 +170,7 @@ def collect(root, universe, start, end, *, want=30, progress=print, **fetchers):
     if len(accepted) < want:
         raise ValueError(f'only {len(accepted)} of {want} coins validated; see {root}')
     manifest = dict(schema_version=SCHEMA, window=dict(start=start.isoformat(), end=end.isoformat()),
+                    m15_warmup_hours=int((m15_warmup or WARMUP['15m']).total_seconds()//3600),
                     symbols=sorted(accepted), rank_order=accepted, files=files, method=METHOD,
                     universe=universe, rejected=rejected,
                     created_at=datetime.now(timezone.utc).isoformat())
@@ -185,7 +186,8 @@ def read_wide_manifest(path):
             fingerprint({k: v for k, v in manifest.items() if k != 'manifest_checksum'})):
         raise ValueError('wide manifest checksum/schema mismatch')
     raw = dict(schema_version='donchian-filters-1', window=manifest['window'], source_files_sha256={},
-               candles={}, funding={}, reuse_lineage={})
+               candles={}, funding={}, reuse_lineage={},
+               m15_warmup_hours=manifest.get('m15_warmup_hours', 484))
     for symbol in manifest['symbols']:
         raw['candles'][symbol], raw['reuse_lineage'][symbol] = {}, {}
         for tag, ref in manifest['files'][symbol].items():
@@ -210,13 +212,16 @@ def main(argv=None):
     parser.add_argument('--start', default='2026-01-01T00:00:00+00:00')
     parser.add_argument('--end', help='aligned H4 boundary; default: latest completed H4 boundary')
     parser.add_argument('--want', type=int, default=30)
+    parser.add_argument('--m15-warmup-hours', type=int, default=484,
+                        help='M15 history before the window start; 1000 serves the slow H1 regime candidate')
     args = parser.parse_args(argv)
     now = datetime.now(timezone.utc)
     start = datetime.fromisoformat(args.start)
     end = datetime.fromisoformat(args.end) if args.end else floor_h4(now)-timedelta(hours=4)
     universe = select_universe(warmup_start=start-WARMUP['4h'], now=now)
     print(f"{len(universe['candidates'])} candidates, {len(universe['excluded'])} excluded before collection")
-    print(collect(args.output_root, universe, start, end, want=args.want))
+    print(collect(args.output_root, universe, start, end, want=args.want,
+                  m15_warmup=timedelta(hours=args.m15_warmup_hours)))
 
 
 if __name__ == '__main__':
