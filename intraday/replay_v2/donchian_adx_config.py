@@ -47,6 +47,9 @@ def cases(start=START, end=END, *, universe='three'):
     if universe == 'rotation':
         from intraday.replay_v2.donchian_rotation_config import rotation_cases
         return rotation_cases(start, end)
+    if universe == 'rotation-window':
+        from intraday.replay_v2.donchian_rotation_config import rotation_window_cases
+        return rotation_window_cases(start, end)
     if universe == 'h1':
         from intraday.replay_v2.donchian_adx_setups import h1_cases
         return h1_cases(start, end)

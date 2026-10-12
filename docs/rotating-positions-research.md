@@ -198,3 +198,37 @@ How to read it:
 - **The four-coin edge is ZEC's 2026, not HYPE and not the mechanism.** Spot carried it (+301 USDT against +39 USDT for Perp),
   and the limit of three positions and rotation add nothing: `NOLIMIT` +33,2%, `NOROT` +33,1%, `ROT` +34,0%.
 - **Most of the profit is in the second half** of the window in every case (first half +23 USDT, second +157 USDT for `ROT`).
+
+## Donchian entry 25 and 20, and three positions per sleeve (registered before the run)
+
+Julius asked to try the entry window at 25 and 20 (exit stays 10, as in the A4 `20/10` and `30/10` pairs) and a limit of three
+positions in each sleeve (six at most) in place of three in total. Base design: the slot-capped `ROT-SLOT` (a position at
+most a third of its sleeve, 5% stop, open-book PnL gate, rotation with a 5-point ADX margin). Universe `rotation-window`.
+
+**The per-sleeve limit** counts positions per sleeve and drops the one-position-per-coin rule across sleeves, so a coin may
+hold Spot long and Perp short together. Three coins can then reach six positions only if every coin is long in Spot and short in
+Perp at once, which opposite trends almost rule out. With four coins the per-sleeve limit mainly lifts the ceiling from three to four.
+Exposure is up to 100% of capital instead of about 50%.
+
+Thirty cases per window (2022-01-01 → 2026-10-02 and 2026 only), all H4:
+
+| Group | Cases |
+|---|---|
+| Controls at window 30 | `H4` 60/40 and `FIXED5050`, normal and cost ×2 |
+| Fixed-thirds window controls | `FIXED5050` at 25 and 20, normal cost |
+| ETH-NEAR-SOL and ETH-NEAR-SOL-ZEC | `ROT-SLOT` (three in total) and `ROT-SLOT6` (three per sleeve) × windows 30, 25, 20, each normal and cost ×2 |
+
+Controls for the five criteria: a design at 25 or 20 against the same design at 30; `ROT-SLOT6` at 30 against `ROT-SLOT` at 30;
+`ROT-SLOT` at 30 against `FIXED5050` on three coins. Descriptive extras: trades, costs, rotations, gate and limit blocks, and
+the most positions open at once per sleeve.
+
+Predictions, written before the run:
+
+- The 30 cases reproduce the earlier numbers exactly: `H4` +81,75% / 11,58% / 423; `ROT-SLOT` three coins +73,24% / 9,93% / 438
+  (2026: +15,51% / 9,49% / 64) and with ZEC +88,72% / 9,40% / 548 (2026: +22,81% / 9,43% / 82).
+- Shorter entry windows add trades (15 to 40%) and costs and do **not** beat 30 on the full window, as A4 `20/10` did not on
+  2022-2024 (+33,07% against +34,87%, DD 11,75% against 10,47%). In 2026 the differences stay inside the noise.
+- Three coins: `ROT-SLOT6` equals `ROT-SLOT` apart from the freed one-per-coin rule, because the limit never binds. With ZEC
+  it earns more and draws down more, since exposure can double.
+- Six simultaneous positions practically never occur; the observed peak is three Spot or three Perp.
+- Rotation stays rare.

@@ -32,14 +32,15 @@ def equal_weights(basket):
 class RotationConfig(HistoricalConfig):
     universe: Literal['rotation'] = 'rotation'
     basket: tuple[str, ...]
-    max_positions: Literal[3, 4] = 3  # Open positions across both sleeves and all coins; one per coin.
+    max_positions: Literal[3, 4] = 3  # Open positions in the limit's scope.
+    limit_scope: Literal['total', 'sleeve'] = 'total'  # One pool of positions, or a limit per sleeve (max 6).
     position_cap: Literal['none', 'slot'] = 'none'  # 'slot': one position at most 1/max_positions of its sleeve.
     rotation: Literal['off', 'adx'] = 'adx'  # How a full book makes room for a new signal.
     rotation_margin: Literal[5] = 5  # ADX points the candidate must beat the weakest open position by.
     pnl_gate: bool = True  # New entries only when nothing is open or the open book is in profit.
     hard_stop_pct: D | None = HARD_STOP
     filter_level: Literal[4] = 4
-    entry_window: Literal[30] = 30
+    entry_window: Literal[20, 25, 30] = 30
     exit_window: Literal[10] = 10
     adx_threshold: Literal[20] = 20
     entry_cap: D = SPLIT
@@ -79,6 +80,7 @@ class SplitBasketConfig(BasketConfig):
     """The frozen fixed-thirds basket with only the Spot/Perp split moved from 60/40 to 50/50."""
     entry_cap: D = SPLIT
     perp_cap: D = SPLIT
+    entry_window: Literal[20, 25, 30] = 30
 
     def locked_overrides(self):
         return {'entry_cap': SPLIT, 'perp_cap': SPLIT}
@@ -122,4 +124,38 @@ def rotation_cases(start, end):
     for label, change in (('ROT-NOLIMIT', dict(max_positions=4)), ('ROT-NOROT', dict(rotation='off')),
                           ('ROT-BARE', dict(pnl_gate=False, hard_stop_pct=None))):
         single(label, FOUR_COINS, four, **change)
+    return cases
+
+
+def rotation_window_cases(start, end):
+    """Pre-registered: Donchian entry windows 30 (reference), 25 and 20 with the exit fixed at 10, each design with the
+    position limit pooled (3 in total) and per sleeve (3 each, at most 6), on ETH-NEAR-SOL and the four-coin basket.
+    Fixed-thirds controls at the same windows separate the entry window from the mechanisms. All H4, ordered so one
+    indicator preparation serves every case."""
+    spec = basket_specification(H1_BASKET)
+    name = basket_name(H1_BASKET)
+    four = basket_name(FOUR_COINS)
+    cases = []
+    for suffix, normal, stressed in (('H4', BasketConfig, BasketStressConfig),
+                                     ('FIXED5050', SplitBasketConfig, SplitBasketStressConfig)):
+        change = dict(entry_cap=SPLIT, perp_cap=SPLIT) if suffix == 'FIXED5050' else {}
+        for window in (30, 25, 20):
+            if suffix == 'H4' and window != 30:
+                continue  # The 60/40 ADR-005 control is only the reference.
+            label = suffix if window == 30 else f'{suffix}-W{window}'
+            extra = {} if window == 30 else dict(entry_window=window)
+            for tail, cls in (('', normal), ('-cost2x', stressed)):
+                if window != 30 and tail:
+                    continue  # Window controls at normal cost only.
+                cases.append((f'{name}-{label}{tail}', cls(
+                    start=start, end=end, basket=H1_BASKET, **{**spec, **change, **extra})))
+    for basket, prefix in ((H1_BASKET, name), (FOUR_COINS, four)):
+        w = equal_weights(basket)
+        shared = dict(weights=w, perp_weights=dict(w), position_cap='slot')
+        for window in (30, 25, 20):
+            for scope, scope_label in (('total', 'ROT-SLOT'), ('sleeve', 'ROT-SLOT6')):
+                label = scope_label if window == 30 else f'{scope_label}-W{window}'
+                for tail, cls in (('', RotationConfig), ('-cost2x', RotationStressConfig)):
+                    cases.append((f'{prefix}-{label}{tail}', cls(
+                        start=start, end=end, basket=basket, entry_window=window, limit_scope=scope, **shared)))
     return cases

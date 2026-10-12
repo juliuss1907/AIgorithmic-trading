@@ -24,7 +24,7 @@ def coins(basket):
     return tuple(c+'USDT' for c in basket)
 
 
-def market_data(basket, *, days=1, jumps=None, boost=None, drift=None, dip=None, side=None):
+def market_data(basket, *, days=1, jumps=None, boost=None, drift=None, dip=None, side=None, spike=None, size=None):
     """Spot jumps up and Perp jumps down on H4 bar `jumps[coin]` (default -1, so START is the first entry bar).
 
     `side[coin]`: 'spot' or 'perp' breaks out, the other market stays flat (default: both, which is not a
@@ -33,6 +33,7 @@ def market_data(basket, *, days=1, jumps=None, boost=None, drift=None, dip=None,
     `boost[coin]`: extra volume on the trigger bar, which raises that coin's rank.
     H4 candles are aggregated from the M15 path, so the two always agree."""
     jumps, boost, drift, dip, side = jumps or {}, boost or {}, drift or {}, dip or {}, side or {}
+    spike, size = spike or {}, size or {}  # spike[coin] = (bar, level) in Spot; size[coin] = breakout height.
     data, funding = {}, {}
     end = START+timedelta(days=days)
     for symbol in coins(basket):
@@ -42,11 +43,13 @@ def market_data(basket, *, days=1, jumps=None, boost=None, drift=None, dip=None,
         for market, up in (('spot', 1), ('perp', -1)):
             def level(j):
                 bar = j//16
-                if side.get(coin, market) != market:
+                if side.get(coin, market) not in (market, 'both'):
                     return D(100)
+                if coin in spike and market == 'spot' and bar == spike[coin][0]:
+                    return D(spike[coin][1])
                 if coin in dip and bar >= 1 and market == 'spot':
                     return D(dip[coin])
-                price = D(100)+up*10 if bar >= jump else D(100)
+                price = D(100)+up*size.get(coin, 10) if bar >= jump else D(100)
                 if coin in drift and bar >= 1:
                     price += up*5
                 return price
@@ -260,3 +263,86 @@ def test_verdict_applies_the_five_criteria_against_the_named_control(tmp_path):
     failed = evaluate_rotation(dict(window=receipt['window'], results=list(names.values())))
     assert not failed['candidates']['ETH-NEAR-SOL-ROT']['advance'] and failed['advancing'] == []
     assert mechanism_profile(names['ETH-NEAR-SOL-ROT']['report_directory'])['rotations'] == 1
+
+
+def test_a_shorter_entry_window_enters_a_breakout_the_longer_one_still_sees_as_inside_its_range():
+    basket = ('ETH', 'NEAR', 'SOL')
+    side = {'ETH': 'spot', 'NEAR': 'perp', 'SOL': 'perp'}
+    kw = dict(basket=basket, side=side, size={'ETH': 6}, spike={'ETH': (-28, 108)}, change=dict(pnl_gate=False))
+    # Spot breaks out to 106 and a 108 high sits 28 bars back: inside a 30-bar channel, outside 25.
+    _, wide = run(**{**kw, 'change': dict(pnl_gate=False, entry_window=30)})
+    _, short = run(**{**kw, 'change': dict(pnl_gate=False, entry_window=25)})
+    assert 'ETHUSDT' not in {e['symbol'] for e in events(wide, 'entry')}
+    assert 'ETHUSDT' in {e['symbol'] for e in events(short, 'entry')}
+    assert short['config']['entry_window'] == 25
+
+
+def test_a_per_sleeve_limit_takes_a_fourth_position_in_the_other_sleeve_and_blocks_a_fourth_in_the_same_one():
+    side = {'ETH': 'spot', 'NEAR': 'spot', 'SOL': 'spot', 'ZEC': 'perp'}
+    _, pooled = run(side=side, change=dict(pnl_gate=False, position_cap='slot'))
+    _, per_sleeve = run(side=side, change=dict(pnl_gate=False, position_cap='slot', limit_scope='sleeve'))
+    assert {e['symbol'] for e in events(pooled, 'entry')} == {'ETHUSDT', 'NEARUSDT', 'SOLUSDT'}
+    assert {e['symbol'] for e in events(per_sleeve, 'entry')} == {'ETHUSDT', 'NEARUSDT', 'SOLUSDT', 'ZECUSDT'}
+    four_spot = {c: 'spot' for c in ('ETH', 'NEAR', 'SOL', 'ZEC')}
+    _, full = run(side=four_spot, change=dict(pnl_gate=False, position_cap='slot', limit_scope='sleeve'))
+    assert len(events(full, 'entry')) == 3
+    assert [e['symbol'] for e in events(full, 'entry_blocked', 'position_limit')] == ['ZECUSDT']
+
+
+def test_one_coin_may_hold_both_sleeves_under_a_per_sleeve_limit_up_to_six_positions():
+    basket = ('ETH', 'NEAR', 'SOL')
+    _, pooled = run(basket=basket, change=dict(pnl_gate=False, position_cap='slot'))
+    _, per_sleeve = run(basket=basket, change=dict(pnl_gate=False, position_cap='slot', limit_scope='sleeve'))
+    assert len(events(pooled, 'entry')) == 3
+    entered = events(per_sleeve, 'entry')
+    assert len(entered) == 6 and {(e['market'], e['symbol']) for e in entered} == {
+        (m, c+'USDT') for m in ('spot', 'perp') for c in basket}
+
+
+def test_rotation_under_a_per_sleeve_limit_only_replaces_a_position_in_the_same_sleeve():
+    side = {'ETH': 'both', 'NEAR': 'spot', 'SOL': 'spot', 'ZEC': 'spot'}
+    inject = {}
+    for market, coin, adx in (('spot', 'ETH', 30), ('spot', 'NEAR', 40), ('spot', 'SOL', 50), ('spot', 'ZEC', 60),
+                              ('perp', 'ETH', 5)):
+        di = (30, 10) if market == 'spot' else (10, 30)
+        inject[(market, coin, LATE)] = dict(adx=D(adx), prior_adx=D(adx)-1, plus_di=D(di[0]), minus_di=D(di[1]))
+    _, report = run(jumps={'ZEC': 2}, side=side, days=2, inject=inject,
+                    change=dict(pnl_gate=False, position_cap='slot', limit_scope='sleeve'))
+    rotation = events(report, 'rotation')
+    assert len(rotation) == 1
+    assert (rotation[0]['closed_market'], rotation[0]['closed_symbol']) == ('spot', 'ETHUSDT')
+    assert rotation[0]['symbol'] == 'ZECUSDT'
+    perp_eth = [t for t in report['trades'] if t['market'] == 'perp' and t['symbol'] == 'ETHUSDT']
+    assert perp_eth and perp_eth[0]['exit_reason'] != 'rotation_exit'
+
+
+def test_window_verdict_picks_the_same_design_at_thirty_as_the_control_and_reports_concurrency(tmp_path):
+    import json
+    from intraday.replay_v2.donchian_rotation_verdict import concurrency, evaluate_window
+    trades = [dict(opened_at='2024-01-01T00:00:00+00:00', closed_at='2024-01-02T00:00:00+00:00', market='spot'),
+              dict(opened_at='2024-01-01T04:00:00+00:00', closed_at='2024-01-03T00:00:00+00:00', market='perp'),
+              dict(opened_at='2024-01-02T00:00:00+00:00', closed_at='2024-01-04T00:00:00+00:00', market='spot')]
+    names = {
+        'ETH-NEAR-SOL-FIXED5050': _item(tmp_path, 'fx', 60.0, 10.0),
+        'ETH-NEAR-SOL-ROT-SLOT': _item(tmp_path, 'a', 65.0, 9.0),
+        'ETH-NEAR-SOL-ROT-SLOT-cost2x': _item(tmp_path, 'ac', 40.0, 9.0),
+        'ETH-NEAR-SOL-ROT-SLOT-W25': _item(tmp_path, 'b', 50.0, 9.0),
+        'ETH-NEAR-SOL-ROT-SLOT-W25-cost2x': _item(tmp_path, 'bc', 30.0, 9.0),
+        'ETH-NEAR-SOL-ROT-SLOT6': _item(tmp_path, 'c', 70.0, 12.0),
+        'ETH-NEAR-SOL-ROT-SLOT6-cost2x': _item(tmp_path, 'cc', 45.0, 12.0),
+    }
+    for name, item in names.items():
+        item['variant'] = name
+        (tmp_path/item['report_directory'].split('/')[-1]/'trades.jsonl').write_text(
+            '\n'.join(json.dumps(t) for t in trades))
+    receipt = dict(window=dict(start='2022-01-01T00:00:00+00:00', end='2026-10-02T00:00:00+00:00'),
+                   results=list(names.values()))
+    verdict = evaluate_window(receipt)['candidates']
+    assert verdict['ETH-NEAR-SOL-ROT-SLOT']['criteria'][0]['control_case'] == 'ETH-NEAR-SOL-FIXED5050'
+    assert verdict['ETH-NEAR-SOL-ROT-SLOT-W25']['criteria'][0]['control_case'] == 'ETH-NEAR-SOL-ROT-SLOT'
+    assert not verdict['ETH-NEAR-SOL-ROT-SLOT-W25']['advance']          # 50 < 65
+    assert verdict['ETH-NEAR-SOL-ROT-SLOT6']['criteria'][0]['control_case'] == 'ETH-NEAR-SOL-ROT-SLOT'
+    assert verdict['ETH-NEAR-SOL-ROT-SLOT6']['advance']
+    # The first Spot trade closes at the instant the third opens, so they never overlap.
+    assert verdict['ETH-NEAR-SOL-ROT-SLOT']['concurrency'] == dict(spot=1, perp=1, total=2)
+    assert concurrency(names['ETH-NEAR-SOL-ROT-SLOT']['report_directory'])['total'] == 2

@@ -88,9 +88,73 @@ def evaluate_rotation(receipt):
     return result
 
 
+def concurrency(report_directory):
+    """Most positions open at once, in total and per market (descriptive)."""
+    points = []
+    with open(Path(report_directory)/'trades.jsonl') as stream:
+        for line in stream:
+            trade = json.loads(line)
+            points.append((trade['opened_at'], 1, trade['market']))
+            points.append((trade['closed_at'], -1, trade['market']))
+    points.sort(key=lambda p: (p[0], p[1]))  # Closes first at equal timestamps.
+    live, peak = Counter(), Counter()
+    for _, step, market in points:
+        live[market] += step
+        peak[market] = max(peak[market], live[market])
+        peak['total'] = max(peak['total'], sum(live.values()))
+    return dict(peak)
+
+
+WINDOWS = ((30, ''), (25, '-W25'), (20, '-W20'))
+DESIGNS = ('ROT-SLOT', 'ROT-SLOT6')
+
+
+def evaluate_window(receipt):
+    """Entry windows 25 and 20 against 30, and the per-sleeve limit against the pooled limit.
+
+    Controls: a design at W25/W20 against the same design at 30; `ROT-SLOT6` at 30 against `ROT-SLOT` at 30;
+    `ROT-SLOT` at 30 against `FIXED5050` on three coins (the four-coin pooled design was judged earlier)."""
+    by_name = {item['variant']: item for item in receipt['results']}
+    result = dict(reference={}, candidates={}, fixed_windows={})
+    for label in (f'{THREE}-H4', f'{THREE}-FIXED5050'):
+        if label in by_name:
+            result['reference'][label] = describe(by_name[label])
+    for suffix in ('', '-W25', '-W20'):
+        name = f'{THREE}-FIXED5050{suffix}'
+        if name in by_name:
+            result['fixed_windows'][name] = describe(by_name[name])
+    for prefix in (THREE, FOUR):
+        for design in DESIGNS:
+            for window, tail in WINDOWS:
+                name = f'{prefix}-{design}{tail}'
+                if name not in by_name or name+'-cost2x' not in by_name:
+                    continue
+                if tail:
+                    control = f'{prefix}-{design}'
+                elif design == 'ROT-SLOT6':
+                    control = f'{prefix}-ROT-SLOT'
+                else:
+                    control = f'{THREE}-FIXED5050' if prefix == THREE else None
+                entry = describe(by_name[name])
+                entry['entry_window'] = window
+                entry['concurrency'] = concurrency(by_name[name]['report_directory'])
+                if control and control in by_name:
+                    entry.update(judge(receipt, by_name[name], by_name[name+'-cost2x'], by_name[control]))
+                else:
+                    entry.update(advance=None, criteria=[], note='reference only; judged in the earlier rotation study')
+                result['candidates'][name] = entry
+    result['advancing'] = [n for n, v in result['candidates'].items() if v['advance']]
+    result['note'] = ('Seen data. Three coins cannot bind a per-sleeve limit of three; ZEC stands in for HYPE. '
+                      'A pass proposes a frozen prospective test, never activation.')
+    return result
+
+
 def main(argv=None):
-    path = Path((argv or sys.argv[1:])[0])
-    print(json.dumps(evaluate_rotation(json.loads(path.read_text())), indent=2, default=str))
+    args = list(argv or sys.argv[1:])
+    window = '--window' in args
+    path = Path([a for a in args if not a.startswith('--')][0])
+    receipt = json.loads(path.read_text())
+    print(json.dumps((evaluate_window if window else evaluate_rotation)(receipt), indent=2, default=str))
 
 
 if __name__ == '__main__':

@@ -32,7 +32,7 @@ from intraday.replay_v2.donchian_adx_setups import market_weights, adx_threshold
 VERSION = 'historical-donchian-filter-study-v1.1'
 MS = timedelta(milliseconds=1)
 PAIRS = ((20,8),(20,10),(30,8),(30,10))
-OBSERVED_PAIRS = PAIRS+((30,40),)  # The extra pair serves the H1 geometry candidate; PAIRS keeps the 20-case matrix.
+OBSERVED_PAIRS = PAIRS+((30,40),(25,10))  # Extra pairs: the H1 geometry candidate and the 25-bar entry study; PAIRS keeps the 20-case matrix.
 
 
 def indicator_settings(config):
@@ -237,6 +237,7 @@ def simulate(config, prepared):
         raise ValueError('prepared features belong to another indicator configuration')
     slots = getattr(config, 'slots', None)
     rotating = getattr(config, 'max_positions', None)
+    scope = getattr(config, 'limit_scope', 'total')  # 'total': one pool of positions; 'sleeve': a limit per sleeve.
     hard_stop = getattr(config, 'hard_stop_pct', None)
     book = RotationBook(config) if rotating else SlotBook(config) if slots else FilterBook(config)
     label = 'h4' if prepared.bar_interval == '4h' else 'h1'
@@ -275,7 +276,8 @@ def simulate(config, prepared):
         for s in sorted(active[market]):
             if s not in opening[market] or position(book,market,s).quantity or (market,s) in closed:
                 continue
-            if (slots or rotating) and any(position(book,m,s).quantity for m in ('spot','perp') if m != market):
+            if (slots or (rotating and scope == 'total')) and any(
+                    position(book,m,s).quantity for m in ('spot','perp') if m != market):
                 continue  # One position per coin across both markets.
             obs = prepared.observations[market][s][at][(config.entry_window,config.exit_window)]
             if not obs['long_entry' if side > 0 else 'short_entry']:
@@ -373,23 +375,29 @@ def simulate(config, prepared):
             return (f['adx'] if f['adx'] is not None else ZERO), ratio
 
         order = sorted(entries,key=lambda e:(-rank(e)[0],-rank(e)[1],e[1],e[0]))
-        free = max(0, config.max_positions-len(held))
+        def bucket(market):
+            return 'all' if scope == 'total' else market
+
+        free = {b: max(0, config.max_positions-sum(1 for hm,_ in held if bucket(hm) == b))
+                for b in {bucket(m) for m in ('spot','perp')}}
         taken, rotated, decisions = set(), [], []
         for m,s,mult in order:
-            if s in taken:
+            key = s if scope == 'total' else (m,s)
+            if key in taken:
                 book.event(at,'entry_blocked','one_position_per_coin',market=m,symbol=s)
                 continue
             candidate = rank((m,s,mult))[0]
-            if free > 0:
-                free -= 1
+            if free[bucket(m)] > 0:
+                free[bucket(m)] -= 1
                 granted[m][s] = mult
-                taken.add(s)
+                taken.add(key)
                 decisions.append(dict(market=m,symbol=s,adx=str(candidate),action='free_position'))
                 continue
             if config.rotation == 'off':
                 book.event(at,'entry_blocked','position_limit',market=m,symbol=s)
                 continue
-            victims = [(hm,hs) for hm,hs in held if (hm,hs) not in rotated and hs in opening[hm]]
+            victims = [(hm,hs) for hm,hs in held if (hm,hs) not in rotated and hs in opening[hm]
+                       and bucket(hm) == bucket(m)]
             if not victims:
                 book.event(at,'entry_blocked','position_limit',market=m,symbol=s)
                 continue
@@ -412,10 +420,11 @@ def simulate(config, prepared):
                 risk(at)
                 return {'spot':{}, 'perp':{}}
             granted[m][s] = mult
-            taken.add(s)
+            taken.add(key)
             decisions.append(dict(market=m,symbol=s,adx=str(candidate),action='rotated',
                                   closed=f'{weakest[0]}:{weakest[1]}'))
-        book.event(at,'selection','rotation_ranking',open_positions=len(held),open_book_pnl=str(pnl),decisions=decisions)
+        book.event(at,'selection','rotation_ranking',limit_scope=scope,open_positions=len(held),
+                   open_book_pnl=str(pnl),decisions=decisions)
         return granted
 
     for at in prepared.timeline:
@@ -603,8 +612,11 @@ def result(config, prepared, book):
     if getattr(config, 'slots', None):
         variant['slots'] = dict(count=config.slots, ranker=getattr(config, 'ranker', 'adx_volume'),
                                 seed=getattr(config, 'seed', None) if getattr(config, 'ranker', '') == 'random' else None)
+    if getattr(config, 'universe', None) in ('baskets', 'rotation') and config.entry_window != 30:
+        variant['donchian_entry_window'] = config.entry_window
     if getattr(config, 'max_positions', None):
         variant['rotation'] = dict(max_positions=config.max_positions, position_cap=config.position_cap,
+            limit_scope=getattr(config, 'limit_scope', 'total'),
             rotation=config.rotation, rotation_margin=config.rotation_margin, pnl_gate=config.pnl_gate,
             hard_stop_pct=str(config.hard_stop_pct) if config.hard_stop_pct is not None else None)
     if prepared.regime_interval:
@@ -619,8 +631,10 @@ def result(config, prepared, book):
                     **({'signal_bar_derivation':prepared.derivation} if hourly else {})),
         summary=summary,methodology=dict(
             allocation=(f'two separate realized sleeves, Spot {config.entry_cap*100}% and Perp {config.perp_cap*100}%; no per-coin '
-                        f'weights; at most {config.max_positions} open positions across both sleeves, one per coin; '
-                        f'a position uses '+('the free sleeve' if config.position_cap == 'none' else '1/'+str(config.max_positions)+' of its sleeve')+
+                        f'weights; at most {config.max_positions} open positions '+
+                        ('across both sleeves, one per coin; ' if getattr(config,'limit_scope','total') == 'total' else
+                         'in each sleeve, one per coin in that sleeve (a coin may hold both markets); ')+
+                        'a position uses '+('the free sleeve' if config.position_cap == 'none' else '1/'+str(config.max_positions)+' of its sleeve')+
                         ' times the ATR multiplier; entries ranked by ADX then volume ratio'
                         if getattr(config,'max_positions',None) else
                         f'{config.slots} shared slots of one realized pool ({len(config.weights)} coins); Spot long or Perp short1x, '

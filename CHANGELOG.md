@@ -4,6 +4,14 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-12 — Donchian 25/20 và giới hạn 3 vị thế mỗi túi (đăng ký trước)
+
+Nhánh: `research/rotating-slots`. Chỉ nghiên cứu offline; thiết kế, 30 ca mỗi cửa sổ, đối chứng và dự đoán nằm trong [rotating-positions-research](docs/rotating-positions-research.md).
+
+- **Thêm:** cửa sổ vào Donchian 25 và 20 (thoát giữ 10) và `limit_scope='sleeve'` (tối đa 3 vị thế mỗi túi, một coin được giữ cả Spot lẫn Perp); universe `rotation-window`; verdict `evaluate_window` kèm số vị thế mở đồng thời tối đa.
+- **Code:** `OBSERVED_PAIRS` thêm `(25,10)`; `RotationConfig.entry_window` và `limit_scope`; xoay vị thế chỉ trong cùng túi khi giới hạn theo túi. Cấu hình cũ giữ nguyên kết quả.
+- **Kiểm thử:** 5 test mới (cửa sổ 25, giới hạn theo túi, 6 vị thế, xoay trong cùng túi, verdict cửa sổ).
+
 ## 2026-10-12 — Nghiên cứu xoay vị thế: 2 túi, cổng PnL, stop 5%
 
 Nhánh: `research/rotating-slots`. Chỉ nghiên cứu offline, không đụng runtime hay VPS. Thiết kế đăng ký trước tại [rotating-positions-research](docs/rotating-positions-research.md).

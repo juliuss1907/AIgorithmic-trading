@@ -20,7 +20,7 @@ from intraday.replay_v2.portfolio_study import file_hash
 
 PRESETS = {'setups': 'donchian-adx-setups', 'baskets': 'donchian-basket3', 'h1': 'donchian-setup2-h1',
            'h1-family': 'donchian-setup2-h1-family', 'wide-slots': 'donchian-wide-slots',
-           'h1-slowregime': 'donchian-setup2-h1-slowregime', 'rotation': 'donchian-rotation'}
+           'h1-slowregime': 'donchian-setup2-h1-slowregime', 'rotation': 'donchian-rotation', 'rotation-window': 'donchian-rotation-window'}
 
 
 def calendar_periods(curve, start, end, capital):
@@ -152,7 +152,7 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
     if universe == 'wide-slots':
         from intraday.replay_v2.donchian_wide_data import read_wide_manifest
         raw=read_wide_manifest(source)
-    elif universe in ('five', 'setups', 'baskets', 'h1', 'h1-family', 'h1-slowregime', 'rotation'):
+    elif universe in ('five', 'setups', 'baskets', 'h1', 'h1-family', 'h1-slowregime', 'rotation', 'rotation-window'):
         from intraday.replay_v2.donchian_five_data import read_manifest
         raw=read_manifest(source)
     else:
@@ -162,7 +162,7 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
     if window_start is not None:
         # Same frozen candles, shorter account: replay starts later, earlier rows only warm the indicators.
         start=datetime.fromisoformat(window_start)
-        if universe not in ('baskets','h1','h1-family','h1-slowregime','rotation') or start.tzinfo is None or not bundle_start<start<end:
+        if universe not in ('baskets','h1','h1-family','h1-slowregime','rotation','rotation-window') or start.tzinfo is None or not bundle_start<start<end:
             raise ValueError('a later window start needs a basket universe and a date inside the frozen window')
     if universe == 'wide-slots':
         from intraday.replay_v2.donchian_wide_config import wide_cases
@@ -183,7 +183,7 @@ def run_study(inputs_path, report_root, *, resume=False, progress=print, univers
         root.mkdir(parents=True,mode=0o700)
         _write(root/'binding.json',encoded(binding))
     progress('Preparing shared causal features and native M15 volume profiles')
-    preparation_config = (config_type('five')(start=start,end=end) if universe in ('setups','baskets','h1','h1-family','h1-slowregime','rotation') else variants[0][1])
+    preparation_config = (config_type('five')(start=start,end=end) if universe in ('setups','baskets','h1','h1-family','h1-slowregime','rotation','rotation-window') else variants[0][1])
     m15_warmup = timedelta(hours=raw['m15_warmup_hours']) if raw.get('m15_warmup_hours', 484) != 484 else None
     data,funding=decode_bundle(config_type('five')(start=bundle_start,end=end) if window_start is not None else preparation_config,
                                raw,m15_warmup=m15_warmup)
@@ -329,7 +329,7 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description='Local five-case A4 ADX exploration; no models or trading')
     parser.add_argument('--report-root',required=True)
     parser.add_argument('--inputs')
-    parser.add_argument('--universe',choices=('three','five','setups','baskets','h1','h1-family','h1-slowregime','wide-slots','rotation'),
+    parser.add_argument('--universe',choices=('three','five','setups','baskets','h1','h1-family','h1-slowregime','wide-slots','rotation','rotation-window'),
                         default='three')
     parser.add_argument('--only',help='comma-separated case names (wide-slots only), e.g. WIDE-H4,WIDE-H1-SLOWREGIME')
     parser.add_argument('--early-inputs');parser.add_argument('--late-inputs')
@@ -338,8 +338,8 @@ def main(argv=None):
     args=parser.parse_args(argv)
     root=Path(args.report_root).expanduser().resolve()
     source=args.inputs
-    if args.universe in ('five','setups','baskets','h1','h1-family','h1-slowregime','wide-slots','rotation') and source is None:
-        parser.error('--universe five/setups/baskets/h1/h1-family/h1-slowregime/wide-slots/rotation requires a validated --inputs manifest')
+    if args.universe in ('five','setups','baskets','h1','h1-family','h1-slowregime','wide-slots','rotation','rotation-window') and source is None:
+        parser.error('--universe five/setups/baskets/h1/h1-family/h1-slowregime/wide-slots/rotation/rotation-window requires a validated --inputs manifest')
     if source is None:
         if not args.early_inputs or not args.late_inputs:parser.error('supply --inputs or both parent inputs')
         source=root/'data'/'inputs.json'
