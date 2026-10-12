@@ -4,6 +4,16 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-12 — Checklist đưa runtime 3 coin lên Binance Demo
+
+Nhánh: `feature/three-coin-runtime`. Chỉ là tài liệu, chưa thực hiện bước nào trên VPS: [checklist](docs/runbooks/three-coin-demo-rollout-checklist.md).
+
+- **Cấu hình Demo sẽ chạy:** Setup-2 H4, ADX 20 (hằng số trong `intraday/setup2.py`), ETH-NEAR-SOL chia đều, Spot 60% / Perp short 1x 40%, Jev xác nhận, stop chặn 10%.
+- **Sáu cổng duyệt riêng:** push nhánh, deploy, `active-set init`, bắt đầu soak, cấu hình và kích hoạt Demo, khởi động `demo-execution`.
+- **Phát hiện về thời gian:** replay gate v2 của Setup-2 bắt đầu từ `anchor + 600 nến H4` (2026-10-10) và cần ≥ 6 lệnh đóng cho từng route. Với khoảng 1 lệnh mỗi 25 ngày cho mỗi coin và thị trường, mốc này rơi vào khoảng tháng 3/2027, không phải hai tuần như soak 14 ngày gợi ý.
+- **Hiệu chỉnh:** leverage Perp mặc định 3x, phải đặt về 1x cho từng cặp trước khi cấu hình Demo.
+- **Chưa có credentialed acceptance** (order, stop, close, đối soát) trên Binance Demo; checklist ghi rõ các điểm chưa kiểm chứng.
+
 ## 2026-10-10 — Công cụ A/B offline: Jev nhận số hay nhận ký tự
 
 Nhánh: `feature/three-coin-runtime`. Câu hỏi của Julius sau khi đọc bài của alex saint: có nên đổi trạng thái Jev từ số sang ký tự. Chi tiết: [compact-state-ab](docs/compact-state-ab.md).
