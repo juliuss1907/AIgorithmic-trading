@@ -11,7 +11,14 @@ Nhánh: `research/rotating-slots`. Chỉ nghiên cứu offline, không đụng r
 - **Yêu cầu của Julius:** thêm HYPE, 50/50 Spot/Perp hai túi riêng, tái đầu tư, bỏ trọng số cố định theo coin, tối đa 3 vị thế mở, vị thế mới phải đóng một vị thế yếu nhất, chỉ vào lệnh khi sổ lệnh đang lãi, stop 5% mỗi vị thế.
 - **Phát hiện khi dựng thử nghiệm:** với 3 coin và một vị thế mỗi coin, giới hạn 3 vị thế không bao giờ chặn được, nên xoay vị thế chỉ có nghĩa với coin thứ 4. HYPE chưa có lịch sử trong dữ liệu đã đóng băng (Perp từ 2025-05-30, Spot từ 2026-09-24) nên dùng ZEC làm coin đại diện thứ 4.
 - **Code:** `RotationBook`, `RotationConfig`, nhánh xoay vị thế trong engine, stop cứng trong `ATRTrail` (mặc định không đổi), verdict `donchian_rotation_verdict`, universe `rotation`. 10 test mới; 243 test Donchian liên quan vẫn qua.
-- **18 ca**, tiêu chí cơ học và dự đoán đã ghi trước khi chạy.
+- **18 ca**, tiêu chí cơ học và dự đoán đã ghi trước khi chạy. **Kết quả:** không ca nào qua tiêu chí.
+  - Thiết kế đúng ý (không giới hạn vốn mỗi vị thế): +152,7% nhưng DD 19,2% và 20 lần dừng lỗ ngày; bản 4 coin +153,5% / DD 21,6% / 28 lần dừng.
+  - Bản slot 1/3 túi: +73,2% / DD 9,9% (3 coin) và +88,7% / DD 9,4% (4 coin).
+  - Lợi nhuận trên mỗi đơn vị DD gần như bằng nhau (7,1 đến 8,0): phần tăng thêm là do cỡ lệnh, không phải edge mới.
+  - Xoay vị thế gần như không hoạt động (6 lần trong 4,75 năm); giới hạn 3 vị thế làm giảm lợi nhuận (+184,7% khi bỏ giới hạn).
+  - Stop 5% giúp (+152,7% so với +131,3% khi bỏ), cổng PnL gần như trung tính.
+  - Dự đoán sai một điều: `ROT` không thua `FIXED5050` về lợi nhuận mà gần gấp đôi.
+- **Sự cố:** ổ đĩa đầy 100% làm study dừng ở ca 9; đã chạy `uv cache clean` (Julius duyệt) và `--resume`.
 
 ## 2026-10-12 — H1-SLOWREGIME: bộ lọc chế độ chậm tính hoàn toàn trên H1 (đăng ký trước)
 

@@ -82,3 +82,68 @@ Ablations are descriptive. A pass proposes a frozen prospective test; it never a
 
 Seen data, one window, a stand-in for HYPE, survivor coins chosen after the fact (the frozen basket was the
 second of ten on seen data). No Jev, so a runtime version differs by the confirmations Jev removes.
+
+## Results (2022-01-01 → 2026-10-02, seen data, 18 cases, all reproduced on a second run)
+
+Private root: `~/.local/state/aigorithmic-trading/reports/donchian-rotation-20261012/`. The study stopped once at
+case 9 when the disk filled and was resumed with `--resume` from the same binding; cases 1–8 were re-verified.
+
+ETH-NEAR-SOL (three coins, so the position limit cannot bind):
+
+| Case | Return | Max DD | Return/DD | Trades | Daily stops | Cost ×2 |
+|---|---:|---:|---:|---:|---:|---:|
+| `H4` 60/40 fixed thirds (ADR-005) | +81,75% | 11,58% | 7,06 | 423 | 0 | +57,4% |
+| `FIXED5050` fixed thirds | +78,72% | 10,40% | 7,57 | 424 | 1 | +55,7% |
+| `ROT` uncapped, gate, 5% stop | **+152,66%** | **19,17%** | 7,96 | 381 | **20** | +86,7% (DD 21,8%) |
+| `ROT-SLOT` | +73,24% | 9,93% | 7,38 | 438 | 1 | +50,6% |
+| `ROT-NOGATE` | +146,63% | 20,53% | 7,14 | 388 | 20 | |
+| `ROT-NOSTOP` | +131,25% | 24,20% | 5,42 | 365 | 22 | |
+| `ROT-BARE` | +138,59% | 24,20% | 5,73 | 385 | 20 | |
+
+ETH-NEAR-SOL-ZEC (four coins, limit of three binds; ZEC stands in for HYPE):
+
+| Case | Return | Max DD | Return/DD | Trades | Daily stops | Rotations | Cost ×2 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `ROT` | +153,50% | 21,57% | 7,12 | 483 | 28 | 6 | +115,3% |
+| `ROT-SLOT` | +88,72% | 9,40% | 9,44 | 548 | 2 | 8 | +59,1% |
+| `ROT-NOLIMIT` (four positions) | +184,75% | 22,50% | 8,21 | 491 | 28 | | |
+| `ROT-NOROT` (full book skips) | +157,02% | 21,57% | 7,28 | 480 | 29 | | |
+| `ROT-BARE` | +197,46% | 21,81% | 9,05 | 474 | 37 | 6 | |
+
+**Mechanical verdict: no case advances.** `ROT` fails criterion 2 (DD 19,17% and 21,57%, limit 15%). `ROT-SLOT`
+passes 2–5 and fails criterion 1: it earns less than its control (`FIXED5050`; in the four-coin family the
+registered control `ROT-NOLIMIT` is uncapped, so that comparison is not like for like).
+
+### Predictions scored
+
+| Prediction | Outcome |
+|---|---|
+| `H4` reproduces ADR-005 byte for byte | Yes (+81,745%, 11,58%, 423 trades) |
+| `FIXED5050` slightly below `H4` | Yes (+78,72% against +81,75%) |
+| `ROT` does not beat `FIXED5050` on return | **No**: +152,66% against +78,72% |
+| `ROT` drawdown above `ROT-SLOT` | Yes (19,17% against 9,93%) |
+| `ROT-NOLIMIT` ≥ `ROT` on return | Yes (+184,75% against +153,50%) |
+
+### What the numbers say
+
+- **The extra return of the uncapped design is size, not edge.** Return per drawdown is about the same
+  (7,1–8,0 across designs, 7,06 for the frozen basket). Letting one position use the whole sleeve roughly
+  doubles return and drawdown together.
+- **Uncapped size fights the daily-loss rule.** One full-size stop-out costs about 3% of the account, the
+  daily limit, so `ROT` hits 20 to 37 daily stops over 4,75 years against 0 to 2 for the capped designs.
+- **Rotation almost never acts.** Six rotations in 4,75 years (eight for the slot variant); the candidate fails
+  the 5-point margin 54 to 66 times. Skipping the signal (`NOROT`) earns slightly more than rotating.
+- **The three-position limit costs return**: +184,75% without it against +153,50% with it (+157,02% when
+  full books just skip), at the same drawdown. It is a concentration choice, not a return source.
+- **The 5% stop helped on three coins** (+152,7% against +131,3% without it, DD 19,2% against 24,2%), against the
+  H1-style expectation that it would clip the long tail. Holds over 48 h fell only from 197 to 186.
+- **The PnL gate is marginal**: +152,7% against +146,6% on three coins; with the fourth coin the bare design
+  earned more (+197,5% against +153,5%) at the same drawdown, so gate plus stop did not buy lower drawdown there.
+- **The four-coin result carries ZEC, not HYPE.** HYPE has no history; its Perp from 2025-05-30 and Spot from
+  2026-09-24 would need their own collection.
+
+### Consequence for the Demo design
+
+The design as asked (uncapped, three positions, no per-coin weight) would breach the runtime's 15% drawdown
+halt and its 3% daily stop repeatedly. The slot-capped variant keeps drawdown near 10% and costs roughly half
+the return. No frozen candidate changes; ADR-005 stays the only prospective test.
