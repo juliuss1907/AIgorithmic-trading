@@ -214,11 +214,20 @@ def main(argv=None):
     parser.add_argument('--want', type=int, default=30)
     parser.add_argument('--m15-warmup-hours', type=int, default=484,
                         help='M15 history before the window start; 1000 serves the slow H1 regime candidate')
+    parser.add_argument('--reuse-universe', help='manifest whose coin list is reused as is (no new ranking)')
     args = parser.parse_args(argv)
     now = datetime.now(timezone.utc)
     start = datetime.fromisoformat(args.start)
     end = datetime.fromisoformat(args.end) if args.end else floor_h4(now)-timedelta(hours=4)
-    universe = select_universe(warmup_start=start-WARMUP['4h'], now=now)
+    if args.reuse_universe:
+        previous = read_inputs(args.reuse_universe)
+        universe = dict(as_of=previous['universe']['as_of'], method=METHOD+' Coin list reused from an earlier manifest.',
+                        warmup_start=previous['universe']['warmup_start'], preselected=0, excluded=[],
+                        reused_from=str(Path(args.reuse_universe).resolve()),
+                        candidates=[dict(symbol=s, rank=i+1) for i, s in enumerate(previous['rank_order'])])
+        args.want = len(universe['candidates'])
+    else:
+        universe = select_universe(warmup_start=start-WARMUP['4h'], now=now)
     print(f"{len(universe['candidates'])} candidates, {len(universe['excluded'])} excluded before collection")
     print(collect(args.output_root, universe, start, end, want=args.want,
                   m15_warmup=timedelta(hours=args.m15_warmup_hours)))
