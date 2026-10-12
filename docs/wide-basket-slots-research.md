@@ -126,3 +126,21 @@ manifest as `m15_warmup_hours`); the 30 coins are collected again into a new dir
 The H4 and `H1-REGIME` cases are re-run from it and must reproduce the earlier report exactly, since
 every other series is cut back to its fixed warmup before use. Only `H1-SLOWREGIME` reads the extra
 history. Case subsets run with `donchian_adx_study --only`.
+
+### Result of the addendum (2026-10-12)
+
+Same 30 coins re-collected with 1,000 hours of M15 history (`donchian-wide-data-m15x1000-20261012`,
+no coin dropped). Six cases run from it (`donchian-wide-slots-slowregime-20261012`, engine commit
+`852787d`). H4 and `H1-REGIME` reproduce the 2026-10-11 report: summary, dataset checksum and the
+trade, equity and event journals are byte-identical; only the config payload gained two default-valued
+keys (`adx_period`, `warmup_hours`), so their config checksum and result id differ.
+
+| Case | Return % | DD % | Trades | Fees + slippage | Spot net | Perp net | Daily stops | Return at cost ×2 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| H4, ranked | **+23.40** | 30.59 | 328 | 146 | +287 | −53 | 7 | +9.85 |
+| H1-REGIME | −6.63 | 41.78 | 832 | 405 | +213 | −279 | 12 | −41.31 |
+| **H1-SLOWREGIME** | **−6.52** | **28.17** | 347 | 157 | +7 | −72 | 9 | −20.36 |
+
+`H1-SLOWREGIME` equals the hybrid on return but with 58% fewer trades, 61% lower costs and less
+drawdown (28.2% against 41.8%); it still fails every criterion (both halves negative, −41 and −24 USDT,
+one trade beyond 48 hours, 0.7 positions open on average). It does not approach H4.

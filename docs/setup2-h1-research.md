@@ -288,3 +288,30 @@ hybrid, below H4, no case meeting the five criteria. The point is to learn wheth
 comes from a slow regime or from the H4 candles themselves.
 
 This is a seventh look at the same seen data; a pass would only support proposing a prospective test.
+
+### Result of the third round (2026-10-12)
+
+Engine commit `852787d`. ETH-NEAR-SOL, fresh account at 2026-01-01 (report root
+`donchian-setup2-h1-slowregime-2026ytd-20261012`); the six reference cases (H4, H1, H1-REGIME at both
+costs) reproduce the earlier 2026 report exactly (`result_id`, dataset checksum, summary).
+
+| Case | Return % | DD % | Trades | Fees + slippage | Spot net | Perp net | Holds > 48 h | Median hold | Return at cost ×2 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| H4 control | **+14.23** | 10.46 | 65 | 26 | +86 | +56 | 38 | 58 h | +11.38 |
+| H1 baseline | +8.12 | 11.03 | 265 | 117 | +124 | −43 | 4 | 13.5 h | −3.79 |
+| H1-REGIME (H4 bars) | +8.12 | 7.36 | 140 | 62 | +40 | +41 | 3 | 13 h | +1.83 |
+| **H1-SLOWREGIME** (H1 bars) | **−0.73** | **4.69** | 60 | 25 | −43 | +36 | 0 | 12 h | −3.19 |
+
+`H1-SLOWREGIME` fails four of five criteria (return below H4, doubled costs negative, Spot negative, both
+halves negative at −4.1 and −3.1 USDT).
+
+**Prediction check.** Fewer trades than baseline: right (60 against 265). Better than baseline and
+close to the hybrid: wrong. It is worse than the baseline here (−0.7% against +8.1%) and well below
+the hybrid (+8.1%).
+
+What it says: the same regime computed on H1 bars at H4 clock length filters almost every long trend
+trade (no trade lasts beyond 48 hours; median hold 12 hours), so the cut in trades and drawdown comes
+with no profit left. The hybrid's edge in this window therefore does not come from "a slow regime" as
+such; it comes from the H4 bars, whose closes and ADX move differently from an H1 EMA800. All H1 cases
+still exit on H1 channels and H1 ATR stops, which is where the long tail is lost (see the second
+round). With one window and 60 trades this is descriptive only.

@@ -11,7 +11,9 @@ Nhánh: `research/h1-slowregime` (từ `research/wide-basket-slots`). Julius h�
 - **Ứng viên:** EMA800/EMA200 và ADX/DMI56 trên nến H1 (cùng độ dài thời gian với EMA200/50 và ADX14 của H4); Donchian, volume, profile và stop giữ như H1 baseline. Ngưỡng ADX 20 kế thừa, không tối ưu. Dự đoán ghi trước: ít lệnh hơn và tốt hơn baseline, gần bản lai, dưới H4.
 - **Code:** `adx_period` trong `indicator_series` (mặc định 14, ATR và volume MA không đổi), cặp EMA (200,800), `warmup_hours` theo cấu hình, `build(..., warmup_hours)` (các chuỗi khác giữ warmup cố định), cắt dữ liệu theo từng cấu hình trong `run_study`, `decode_bundle(m15_warmup)`, collector `--m15-warmup-hours`, `--only` và `--universe h1-slowregime`.
 - **Phạm vi:** chỉ cửa sổ 2026 (manifest 2022 chỉ có 484 giờ M15 trước ngày bắt đầu): rổ ETH-NEAR-SOL 8 ca và rổ 30 coin 6 ca.
-- **Kiểm thử:** 6 test mới.
+- **Kiểm thử:** 6 test mới (suite 1457 pass).
+- **Kết quả (commit `852787d`):** rổ ETH-NEAR-SOL 2026 — `H1-SLOWREGIME` −0,73%, DD 4,69%, 60 lệnh, không lệnh nào giữ quá 48 giờ, trượt 4/5 tiêu chí; bản lai `H1-REGIME` +8,12%, H4 +14,23%. Rổ 30 coin — `H1-SLOWREGIME` −6,52%, DD 28,17%, 347 lệnh (bản lai −6,63%, 832 lệnh), vẫn trượt mọi tiêu chí, H4 +23,40%. Dự đoán "tốt hơn baseline, gần bản lai" chỉ đúng ở phần ít lệnh hơn; trên rổ 3 coin nó kém baseline. Kết luận: lợi thế của bản lai không đến từ "chế độ chậm" mà từ nến H4; mọi ca H1 vẫn thoát bằng kênh và stop H1 nên mất đuôi dài.
+- **Ghi chú kỹ thuật:** lần chạy đầu lệch dataset checksum của ca H1 vì metadata tái tạo H4 đếm trên lịch sử dài hơn (kết quả không đổi); đã sửa và chạy lại, 6 ca tham chiếu trùng từng byte. Ở rổ rộng, chỉ config payload có thêm hai khoá mặc định nên config checksum khác, còn summary và ba journal trùng từng byte.
 
 ## 2026-10-11 — Họ Setup-2 trên rổ 30 coin, 5 slot chung (đăng ký trước)
 
