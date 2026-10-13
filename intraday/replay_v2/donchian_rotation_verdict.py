@@ -172,12 +172,35 @@ def evaluate_capacity(receipt):
     return result
 
 
+FIVE = 'BTC-ETH-NEAR-SOL-ZEC'
+
+
+def evaluate_five(receipt):
+    """Five coins for three positions against the measured four (ADR-007 stage 0), per entry window.
+
+    BTC stands in for HYPE, which has no Spot history: this is a mechanism check, not a HYPE result."""
+    by_name = {item['variant']: item for item in receipt['results']}
+    result = dict(reference={}, candidates={})
+    for tail in ('', '-W25'):
+        control, name = f'{FOUR}-ROT-SLOT{tail}', f'{FIVE}-ROT-SLOT{tail}'
+        if control not in by_name or name not in by_name or name+'-cost2x' not in by_name:
+            continue
+        result['reference'][control] = describe(by_name[control])
+        entry = describe(by_name[name])
+        entry['concurrency'] = concurrency(by_name[name]['report_directory'])
+        entry.update(judge(receipt, by_name[name], by_name[name+'-cost2x'], by_name[control]))
+        result['candidates'][name] = entry
+    result['note'] = ('Seen data; BTC stands in for HYPE. Whether five coins beat four is read from the control '
+                      'comparison, drawdown and daily stops, not from the mechanical pass alone.')
+    return result
+
+
 def main(argv=None):
     args = list(argv or sys.argv[1:])
     path = Path([a for a in args if not a.startswith('--')][0])
     receipt = json.loads(path.read_text())
     evaluate = (evaluate_window if '--window' in args else evaluate_capacity if '--capacity' in args
-                else evaluate_rotation)
+                else evaluate_five if '--five' in args else evaluate_rotation)
     print(json.dumps(evaluate(receipt), indent=2, default=str))
 
 

@@ -23,6 +23,9 @@ from intraday.replay_v2.historical_mixed import HistoricalConfig
 SPLIT = D('.5')  # Two separate sleeves, 50% Spot and 50% Perp.
 HARD_STOP = D('.05')
 FOUR_COINS = ('ETH', 'NEAR', 'SOL', 'ZEC')
+# ADR-007 runs five coins. HYPE has no Spot history, so BTC stands in as the fifth coin of the replay:
+# it tests five coins competing for three positions, not HYPE.
+FIVE_COINS = ('BTC', 'ETH', 'NEAR', 'SOL', 'ZEC')
 
 
 def equal_weights(basket):
@@ -64,9 +67,9 @@ class RotationConfig(HistoricalConfig):
 
     @model_validator(mode='after')
     def locked_rotation(self):
-        if (not 3 <= len(self.basket) <= 4 or list(self.basket) != sorted(set(self.basket))
+        if (not 3 <= len(self.basket) <= 5 or list(self.basket) != sorted(set(self.basket))
                 or not set(self.basket) <= set(CANDIDATES) or self.max_positions > len(self.basket)):
-            raise ValueError('rotation basket is three or four sorted distinct frozen coins, at least max_positions')
+            raise ValueError('rotation basket is three to five sorted distinct frozen coins, at least max_positions')
         if self.slot_divisor is not None and self.position_cap != 'slot':
             raise ValueError('slot_divisor sizes the slot design only')
         shared = equal_weights(self.basket)
@@ -180,4 +183,22 @@ def rotation_capacity_cases(start, end):
     for label, change in designs:
         for tail, cls in (('', RotationConfig), ('-cost2x', RotationStressConfig)):
             cases.append((f'{prefix}-{label}{tail}', cls(start=start, end=end, basket=basket, **shared, **change)))
+    return cases
+
+
+def rotation_five_cases(start, end):
+    """Pre-registered (ADR-007 stage 0): five coins competing for three positions, against the measured four.
+
+    Slot design (a third of a 50% sleeve, three positions, gate, 5% stop, rotation), entry 30 and 25, each at
+    normal cost and cost x2, on ETH-NEAR-SOL-ZEC and on the same four plus BTC."""
+    shared = lambda basket: dict(weights=equal_weights(basket), perp_weights=equal_weights(basket),
+                                 position_cap='slot')
+    cases = []
+    for basket in (FOUR_COINS, FIVE_COINS):
+        prefix = basket_name(basket)
+        for window in (30, 25):
+            label = 'ROT-SLOT' if window == 30 else f'ROT-SLOT-W{window}'
+            for tail, cls in (('', RotationConfig), ('-cost2x', RotationStressConfig)):
+                cases.append((f'{prefix}-{label}{tail}', cls(start=start, end=end, basket=basket,
+                                                             entry_window=window, **shared(basket))))
     return cases

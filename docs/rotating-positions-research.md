@@ -379,3 +379,23 @@ What the numbers say:
 
 Conclusion: keep three positions per sleeve (or three in total) at 1/3 of a sleeve. If a lower drawdown is wanted, shrinking the slot
 buys it at a proportional cost in return, not a better trade-off.
+
+## Five coins for three positions (ADR-007 stage 0, registered before the run)
+
+The runtime of [ADR-007](decisions/007-slot-rotation-five-coin-runtime.md) runs five coins (ETH, NEAR, SOL, ZEC, HYPE). Every
+measurement so far used at most four. HYPE has no Spot history (Spot from 2026-09-24), so it cannot be replayed; **BTC stands
+in as the fifth coin**. This tests five coins competing for three positions, not HYPE (BTC is far less volatile).
+
+Universe `rotation-five`: slot design (a third of a 50% sleeve, three positions, PnL gate, 5% stop, rotation), entry window
+30 and 25, normal cost and cost ×2, on ETH-NEAR-SOL-ZEC (the measured control) and on BTC-ETH-NEAR-SOL-ZEC. Eight cases, windows
+2022-01-01 → 2026-10-02 and 2026 only. Control for the five criteria: the four-coin case with the same entry window.
+
+Predictions, written before the run:
+
+- The four-coin cases reproduce: entry 30 +88,72% / 9,40% / 548 (2026 +22,81% / 9,43% / 82) and entry 25 +103,30% / 9,83% / 553
+  (2026 +22,34% / 9,51% / 83).
+- A fifth coin adds signals: trades rise 10% to 25% and rotations at least double (four coins: 8 and 8 in the full window).
+- Return within ±20% of the four-coin case and drawdown below 12% (the runtime halts at 15%); return per drawdown within ±1,5.
+  No improvement is expected: BTC adds signals but few large moves, and a third position is still the cap.
+- The peak of simultaneous positions stays three.
+- In 2026 the difference stays within a few points on about 80 to 100 trades (noise).

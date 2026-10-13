@@ -423,3 +423,27 @@ def test_pure_selection_matches_the_documented_order_and_rotation_rules():
     assert [s.kind for s in sleeve] == ['free', 'free']
     assert pnl_gate_blocks(1, D(0)) and not pnl_gate_blocks(0, D(-1)) and not pnl_gate_blocks(2, D(1))
     assert not pnl_gate_blocks(1, D(-1), pnl_gate=False)
+
+
+def test_five_coin_family_is_registered_and_judged_against_the_four_coin_control(tmp_path):
+    import json
+    from datetime import datetime, timezone
+    from intraday.replay_v2.donchian_rotation_config import FIVE_COINS, rotation_five_cases
+    from intraday.replay_v2.donchian_rotation_verdict import evaluate_five
+    cases = rotation_five_cases(datetime(2026, 1, 1, tzinfo=timezone.utc), datetime(2026, 10, 2, tzinfo=timezone.utc))
+    assert len(cases) == 8 and {len(c.basket) for _, c in cases} == {4, 5}
+    assert all(c.max_positions == 3 and c.position_cap == 'slot' for _, c in cases)
+    assert FIVE_COINS == ('BTC', 'ETH', 'NEAR', 'SOL', 'ZEC')
+    names = {}
+    for name, ret, dd in (('ETH-NEAR-SOL-ZEC-ROT-SLOT', 80.0, 9.0), ('BTC-ETH-NEAR-SOL-ZEC-ROT-SLOT', 85.0, 10.0)):
+        for tail, factor in (('', 1.0), ('-cost2x', .7)):
+            item = _item(tmp_path, name+tail, ret*factor, dd)
+            item['variant'] = name+tail
+            (tmp_path/item['report_directory'].split('/')[-1]/'trades.jsonl').write_text(json.dumps(dict(
+                opened_at='2024-01-01T00:00:00+00:00', closed_at='2024-01-02T00:00:00+00:00', market='spot')))
+            names[name+tail] = item
+    receipt = dict(window=dict(start='2022-01-01T00:00:00+00:00', end='2026-10-02T00:00:00+00:00'),
+                   results=list(names.values()))
+    verdict = evaluate_five(receipt)
+    five = verdict['candidates']['BTC-ETH-NEAR-SOL-ZEC-ROT-SLOT']
+    assert five['criteria'][0]['control_case'] == 'ETH-NEAR-SOL-ZEC-ROT-SLOT' and five['advance']
