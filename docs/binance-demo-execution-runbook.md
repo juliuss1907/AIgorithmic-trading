@@ -122,6 +122,24 @@ source paths are intentionally not silently interchangeable). Stop only this
 service for rollback; keep journal, keys and all soak data. No profile has been
 started as part of implementation.
 
+## Slot profile (`setup2_slots_v1`, ADR-007)
+
+`execution demo configure --from-active-set` follows the bound active-set version's `rule_profile`. With
+`setup2_slots_v1` the allocation is **not** a fixed weight per coin:
+
+- Two equal sleeves, Spot and Perp 50% each, with their own realized capital (initial split plus realized PnL,
+  net of fees and funding; unrealized profit is not reinvested).
+- A position takes at most one third of its sleeve times the ATR multiplier, bounded by the sleeve's free principal.
+  `preflight` reports that slot (a third of the 50% sleeve at the start).
+- At most **three open positions across both sleeves**, one per coin. Each H4 bar is ranked once: Donchian exits
+  first, then every rule-confirmed candidate by ADX (volume ratio as tie-break), a PnL gate (entries only while the
+  open book is in profit, or nothing is open) and rotation (a full book replaces its weakest position only for a
+  candidate more than 5 ADX points stronger, and only after the rule and Jev confirmed the candidate).
+- Stop is the nearer of the ATR×3 trail and 5% from entry, tightened only; the route's Spot emergency stop is 5%.
+- The portfolio journal records the last ranking under `slot_selection` (open positions, book PnL, one step per
+  candidate: `free`, `rotate` or `blocked` with the reason).
+- The route's champion rule must have the allocation's profile; a `setup2_v1` champion is refused.
+
 ## Legacy BTC-only compatibility path
 
 The sections below describe the retained original BTC Perp workflow, not the
