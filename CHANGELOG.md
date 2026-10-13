@@ -11,6 +11,11 @@ Nhánh: `research/rotating-slots`. Nghiên cứu offline; thiết kế và dự 
 - **Lý do:** lần chạy trước cho thấy giới hạn 3 vị thế mỗi túi không bao giờ chạm trần; với 3 coin nâng giới hạn lên bằng số coin chính là ca đã chạy, nên chỉ rổ 4 coin có gì mới (4 mỗi túi, tối đa 8 vị thế).
 - **Thêm:** `slot_divisor` (mặc định `max_positions`, ca cũ không đổi), universe `rotation-capacity` (4 thiết kế × chi phí thường/×2) và verdict `evaluate_capacity`. Slot tính bằng 1/`max_positions` nên nâng giới hạn 3 → 4 cũng thu nhỏ vị thế từ 1/3 xuống 1/4 túi; `slot_divisor` tách hai tác động.
 - **Kiểm thử:** 3 test mới; 252 test Donchian hiện có vẫn qua.
+- **Kết quả (4 coin có ZEC, 16 ca cả hai cửa sổ, đều tái hiện):**
+  - Nâng giới hạn lên 4 mỗi túi với slot giữ 1/3 chỉ thêm +1,5 điểm lợi nhuận và +1,1 điểm DD (+90,2% / 10,5% so với +88,7% / 9,4%); 2026 hoà (+22,9% so với +22,8%).
+  - Yêu cầu của Julius (4 mỗi túi, slot 1/4): +68,8% / DD 8,2%, thấp hơn đối chứng vì vị thế nhỏ hơn. Chỉ đổi cỡ (3 mỗi túi, slot 1/4): +68,9% / 7,3%, cùng lợi nhuận trên DD với đối chứng (9,50 so với 9,44).
+  - Cỡ slot là tham số thực sự; giới hạn bằng số coin biến thiết kế thành trọng số cố định theo coin (không xoay vị thế). Giữ 3 vị thế mỗi túi, slot 1/3.
+  - Hai dự đoán trượt: lợi nhuận của `THIRD` (dự +95–115%, ra +90,2%) và `4S` (dự trong ±15%, ra −22%).
 
 ## 2026-10-12 — Donchian 25/20 và giới hạn 3 vị thế mỗi túi (đăng ký trước)
 

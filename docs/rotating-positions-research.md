@@ -325,3 +325,57 @@ Predictions, written before the run:
 - `ROT-SLOT4S` lands between the two: return within ±15% of the control and DD within ±1,5 points. It is a diversification
   of the same per-sleeve exposure (4 × 1/4 against 3 × 1/3), not extra leverage, so return per drawdown stays near the control's.
 - In 2026 the differences stay inside the noise (a few points on about 80 trades).
+
+### Results: per-sleeve limit equal to the number of coins (four coins, 16 cases, all reproduced)
+
+Private roots: `…/donchian-rotation-capacity-20261013/` (2022-01-01 → 2026-10-02) and
+`…/donchian-rotation-capacity-2026ytd-20261013/` (2026 only). `ROT-SLOT6` reproduces +88,72% / 9,40% / 548 (2026: +22,81% / 9,43% / 82).
+
+Full window, return / max DD / return per DD / trades (cost ×2 return):
+
+| Case | Per sleeve | Slot | Return / DD | Ret/DD | Trades | Cost ×2 | Peak open |
+|---|---:|---:|---|---:|---:|---:|---:|
+| `ROT-SLOT6` (control) | 3 | 1/3 | +88,72% / 9,40% | 9,44 | 548 | +59,1% | 3 |
+| `ROT-SLOT4S` (Julius's request) | 4 | 1/4 | +68,81% / 8,24% | 8,35 | 568 | +48,0% | 4 |
+| `ROT-SLOT4S-THIRD` (limit alone) | 4 | 1/3 | +90,17% / 10,46% | 8,62 | 572 | +59,8% | 4 |
+| `ROT-SLOT6-QUARTER` (size alone) | 3 | 1/4 | +68,92% / 7,26% | 9,50 | 542 | +48,8% | 3 |
+
+2026 only:
+
+| Case | Return / DD | Ret/DD | Trades | Cost ×2 |
+|---|---|---:|---:|---:|
+| `ROT-SLOT6` | +22,81% / 9,43% | 2,42 | 82 | +19,4% |
+| `ROT-SLOT4S` | +17,13% / 8,18% | 2,09 | 87 | +14,5% |
+| `ROT-SLOT4S-THIRD` | +22,92% / 10,49% | 2,18 | 86 | +19,4% |
+| `ROT-SLOT6-QUARTER` | +17,06% / 7,20% | 2,37 | 82 | +14,6% |
+
+**Mechanical verdict.** `THIRD` advances in both windows (return ≥ control, DD < 15%, cost ×2 positive, both halves positive).
+`4S` and `QUARTER` fail criterion 1 in both windows: they earn less than the control, by construction, because every position is a
+quarter of a sleeve instead of a third. The `THIRD` pass is +1,5 points on the full window and +0,1 in 2026, which is no evidence.
+
+Predictions scored:
+
+| Prediction | Outcome |
+|---|---|
+| `ROT-SLOT6` reproduces | Yes, both windows |
+| Peak concurrency four in `4S`/`THIRD`, three in `QUARTER` | Yes; never more than four per sleeve, eight at once never happened |
+| `QUARTER` +65% to +80%, DD 7% to 9% | Yes (+68,92%, 7,26%) |
+| `THIRD` +95% to +115%, DD 10% to 13% | Return **no** (+90,17%); DD yes (10,46%) |
+| `4S` return within ±15% and DD within ±1,5 points of the control | Return **no** (−22%); DD yes (−1,2 points) |
+| 2026 differences a few points | `THIRD` yes (+0,1); the quarter-size cases −5,7 points, not noise on 82 trades |
+
+What the numbers say:
+
+- **Raising the limit to the number of coins adds almost nothing.** With the slot kept at 1/3 the extra position gives +1,5 points of
+  return and +1,1 points of drawdown (2026: +0,1 and +1,1). Return per drawdown falls (9,44 → 8,62).
+- **The slot size is the knob.** The quarter-size cases earn 20 points less and draw down 1 to 2 points less, with the same return per
+  drawdown as the control (`QUARTER` 9,50, control 9,44). `4S` is `QUARTER` plus the fourth slot: +68,81% against +68,92%.
+- **With limit = coins and slot = 1/coins, the design collapses into fixed per-coin weights.** A coin always has its own slot, so there is
+  no rotation (zero in `4S` and `THIRD`) and no position-limit block; what is left is the PnL gate and the 5% stop on 50/50 fixed
+  weights, which is the `FIXED5050` family of the first study.
+- **Daily stops fall from 2 to 0 with the quarter slot** on the full window; in 2026 there were none anywhere.
+- The 4S result is below what the earlier "limit never binds, so nothing changes" reading would give, because that reading missed that the slot
+  shrinks with the limit. The confound is why the study split size from limit.
+
+Conclusion: keep three positions per sleeve (or three in total) at 1/3 of a sleeve. If a lower drawdown is wanted, shrinking the slot
+buys it at a proportional cost in return, not a better trade-off.
