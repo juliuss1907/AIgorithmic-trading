@@ -10,7 +10,8 @@ from decimal import Decimal
 from intraday.replay_v2.donchian_filters import indicator_series, observation, volume_profile, entry_filters
 from intraday.replay_v2.donchian_filter_book import FilterBook, SlotBook, RotationBook, ATRTrail
 from intraday.replay_v2.donchian_filter_data import WARMUP
-from intraday.replay_v2.donchian_rotation_select import Candidate, Held, pnl_gate_blocks, select_entries
+from intraday.replay_v2.donchian_rotation_select import (Candidate, Held, adx_of, pnl_gate_blocks, select_entries,
+                                                         trend_strength, volume_ratio)
 from intraday.replay_v2.historical_data import validate_rows
 from intraday.replay_v2.historical_mixed import funding_audit, continuous_periods
 from intraday.replay_v2.intraday_data import verify_boundaries
@@ -339,10 +340,7 @@ def simulate(config, prepared):
 
     def strength(market, symbol, side, at):
         """Trend strength of a coin at this bar: ADX when DMI still points the position's way, else zero."""
-        f = prepared.features[market][symbol][at]
-        if f['adx'] is None or f['plus_di'] is None or f['minus_di'] is None:
-            return ZERO
-        return f['adx'] if side*(f['plus_di']-f['minus_di']) > 0 else ZERO
+        return trend_strength(prepared.features[market][symbol][at], side)
 
     def open_book_pnl():
         total = ZERO
@@ -372,8 +370,7 @@ def simulate(config, prepared):
 
         def candidate(entry):
             f = prepared.features[entry[0]][entry[1]][at]
-            ratio = f['volume']/f['volume_ma'] if f['volume_ma'] else ZERO
-            return Candidate(entry[0], entry[1], entry[2], f['adx'] if f['adx'] is not None else ZERO, ratio)
+            return Candidate(entry[0], entry[1], entry[2], adx_of(f), volume_ratio(f))
 
         def holding(m, s):
             p = position(book,m,s)

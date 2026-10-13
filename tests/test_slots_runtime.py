@@ -178,3 +178,11 @@ def test_activation_requires_the_rule_profile_of_the_allocation(tmp_path):
     run.source_factory = LegacyRule
     with pytest.raises(ValueError, match='only admits Setup-2 champions'):
         run.activate('ETHUSDT', 'spot', evaluation_id='ETHUSDT-spot-pass', now=NOW)
+
+
+def test_ranking_inputs_are_the_research_functions_for_every_missing_indicator_case():
+    from intraday.replay_v2.donchian_rotation_select import adx_of, trend_strength, volume_ratio
+    f = features(30, plus=25, minus=10)
+    assert (adx_of(f), volume_ratio(f), trend_strength(f, 1), trend_strength(f, -1)) == (D(30), D(2), D(30), D(0))
+    gone = dict(adx=None, plus_di=None, minus_di=None, volume=D(1), volume_ma=D(0))
+    assert (adx_of(gone), volume_ratio(gone), trend_strength(gone, 1)) == (0, 0, 0)

@@ -44,6 +44,23 @@ class Step:
     weakest: tuple | None = None         # rotation_margin: the weakest position that was not beaten
 
 
+def adx_of(features):
+    """ADX used to rank entries; a missing indicator ranks last."""
+    return features['adx'] if features.get('adx') is not None else ZERO
+
+
+def volume_ratio(features):
+    """Volume over its moving average, the ranking tie-break."""
+    return features['volume']/features['volume_ma'] if features.get('volume_ma') else ZERO
+
+
+def trend_strength(features, side):
+    """ADX while DMI still points the position's way (+1 long, -1 short), else zero."""
+    if features.get('adx') is None or features.get('plus_di') is None or features.get('minus_di') is None:
+        return ZERO
+    return features['adx'] if side*(features['plus_di']-features['minus_di']) > 0 else ZERO
+
+
 def select_entries(candidates, held, *, max_positions, limit_scope='total', rotation=True, margin=Decimal(5)):
     """Ordered steps. `limit_scope`: 'total' counts positions across both sleeves and allows one per coin;
     'sleeve' counts per market and lets a coin hold both. `rotation=False` skips a signal when full."""

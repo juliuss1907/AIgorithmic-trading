@@ -608,7 +608,8 @@ class MultiDemoRuntime:
     def _slots_cycle(self,p,plan,equity,spot_gross,perp_gross,markets,*,now):
         """Slot design (ADR-007): rank every confirmed candidate once per bar, fill free positions and
         rotate out the weakest only after the replacing entry is confirmed by the rule and Jev."""
-        from intraday.replay_v2.donchian_rotation_select import Candidate, Held, pnl_gate_blocks, select_entries
+        from intraday.replay_v2.donchian_rotation_select import (Candidate, Held, adx_of, pnl_gate_blocks,
+                                                                 select_entries, trend_strength, volume_ratio)
         results,observed,exited = [],{},False
         # 1. Evidence and Donchian exits first: an exit frees its position before the book is ranked.
         for route in p["routes"].values():
@@ -654,10 +655,7 @@ class MultiDemoRuntime:
             seen = observed.get((symbol,market))
             strength = Decimal(0)
             if seen is not None:
-                f = seen["observation"].features
-                if None not in (f.get("adx"),f.get("plus_di"),f.get("minus_di")):
-                    side = 1 if market == "spot" else -1
-                    strength = Decimal(f["adx"]) if side*(f["plus_di"]-f["minus_di"]) > 0 else Decimal(0)
+                strength = trend_strength(seen["observation"].features,1 if market == "spot" else -1)
             held.append(Held(market,symbol,strength,gain,seen is not None))
         # 3. Candidates: rule entry, one position per coin, fresh unconsumed Jev answer and an allowed gate.
         gate,sleeves,candidates,pool = self._gate_for(plan),self._sleeves(p,plan,markets,now=now),{},[]
@@ -689,11 +687,9 @@ class MultiDemoRuntime:
                 results.append({"symbol":symbol,"market":market,"status":"not_authorized",
                                 "reasons":list(auth.reason_codes)})
                 continue
-            f = observation.features
-            ratio = Decimal(f["volume"])/Decimal(f["volume_ma"]) if f.get("volume_ma") else Decimal(0)
             candidates[(symbol,market)] = candidate
             pool.append(Candidate(market,symbol,Decimal(str(observation.size_multiplier)),
-                                  Decimal(f["adx"]) if f.get("adx") is not None else Decimal(0),ratio))
+                                  adx_of(observation.features),volume_ratio(observation.features)))
         audit = dict(at=now.isoformat(),open_positions=len(held),open_book_pnl=str(book_pnl),steps=[])
         if pool and pnl_gate_blocks(len(held),book_pnl):
             for c in pool:
