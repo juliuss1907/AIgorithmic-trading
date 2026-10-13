@@ -399,3 +399,43 @@ Predictions, written before the run:
   No improvement is expected: BTC adds signals but few large moves, and a third position is still the cap.
 - The peak of simultaneous positions stays three.
 - In 2026 the difference stays within a few points on about 80 to 100 trades (noise).
+
+### Results: five coins for three positions (BTC stands in for HYPE; 8 cases, both windows)
+
+Private roots: `…/donchian-rotation-five-20261013/` and `…/donchian-rotation-five-2026ytd-20261013/`. The four-coin controls reproduce
+exactly (+88,72% / 9,40% / 548 and +103,30% / 9,83% / 553).
+
+| Window | Basket | Entry | Return / DD | Return/DD | Trades | Rotations | Cost ×2 |
+|---|---|---:|---|---:|---:|---:|---:|
+| 2022 → 2026 | ETH-NEAR-SOL-ZEC | 30 | +88,72% / 9,40% | 9,44 | 548 | 8 | +59,1% |
+| 2022 → 2026 | + BTC | 30 | +84,38% / 11,93% | 7,07 | 641 | 24 | +49,5% |
+| 2022 → 2026 | ETH-NEAR-SOL-ZEC | 25 | +103,30% / 9,83% | 10,51 | 553 | 8 | +71,0% |
+| 2022 → 2026 | + BTC | 25 | +96,58% / 11,35% | 8,51 | 647 | 24 | +59,0% |
+| 2026 | ETH-NEAR-SOL-ZEC | 30 | +22,81% / 9,43% | 2,42 | 82 | 1 | +19,4% |
+| 2026 | + BTC | 30 | +23,68% / 9,85% | 2,40 | 94 | 4 | +19,5% |
+| 2026 | ETH-NEAR-SOL-ZEC | 25 | +22,34% / 9,51% | 2,35 | 83 | 1 | +18,9% |
+| 2026 | + BTC | 25 | +21,99% / 9,85% | 2,23 | 97 | 4 | +17,7% |
+
+Mechanical verdict: the five-coin cases pass four of five criteria on the full window and fail criterion 1 (return below the
+four-coin control); in 2026 entry 30 passes and entry 25 fails it by 0,35 points. Peak simultaneous positions stay three.
+
+Predictions scored:
+
+| Prediction | Outcome |
+|---|---|
+| Four-coin cases reproduce | Yes |
+| Trades rise 10% to 25% | Yes (+17% on both entries; 2026 +15% and +17%) |
+| Rotations at least double | Yes (8 → 24 on the full window, 1 → 4 in 2026) |
+| Return within ±20%, drawdown below 12% | Yes (−5% and −7%; DD 11,93% and 11,35%, entry 30 only 0,07 below the line) |
+| Return per drawdown within ±1,5 | **No** on the full window (−2,4 and −2,0); yes in 2026 |
+| Peak of three simultaneous positions | Yes |
+| 2026 within a few points | Yes (+0,9 and −0,4 points) |
+
+What it says:
+
+- **A fifth coin adds churn, not return.** Rotations triple (24 against 8), return falls about 5% to 7% and drawdown rises 1,5 to 2,5
+  points on the full window, so return per drawdown drops by about 2. In 2026 the two baskets are indistinguishable.
+- **BTC is not HYPE.** BTC is low volatility with fewer large moves; a volatile coin such as HYPE may behave closer to ZEC. The
+  measurement tests the mechanism (five signals competing for three slots), not the coin.
+- **Entry 25 keeps its edge over entry 30 on the full window with five coins** (+12,2 points) and loses it in 2026 (−1,7 points), the
+  same pattern as with four coins.

@@ -56,10 +56,13 @@ Reference points: ADR-005 `H4` +81,7% / 11,6% (3 coins), and the same design at 
 - Every number above was measured on data the design was chosen on (27 cases on one window); a
   shorter entry window did not help on three coins (neutral at 25, worse at 20) and its gain on
   four coins comes from ZEC and NEAR while ETH gets worse.
-- **HYPE and the five-coin basket have no measurement.** HYPE has Perp history only from 2025-05-30
-  and Spot from 2026-09-24, so the design was never replayed with it. A pre-deployment replay of
-  five coins with HYPE Perp-only is part of this decision (Stage 0 of the build plan) and its result
-  is recorded before the Demo rollout, whatever it is.
+- **HYPE has no measurement.** HYPE has Perp history only from 2025-05-30 and Spot from 2026-09-24, so
+  the design was never replayed with it. Stage 0 replayed five coins for three positions with BTC as
+  the stand-in (2022 to 2026, entry 25): +96,6% / drawdown 11,4% / 24 rotations against +103,3% /
+  9,8% / 8 rotations for the four measured coins; return per drawdown 8,5 against 10,5. In 2026 the
+  two baskets are indistinguishable. A fifth coin triples the rotations and costs about two units of
+  return per drawdown on the full window, so adding it is a **choice**, not an improvement; BTC is
+  less volatile than HYPE, so this is a mechanism check, not a HYPE result.
 - **Jev changes the result.** Entries Jev vetoes are skipped, so live fills differ from the replay.
 - A per-sleeve position limit and a limit equal to the number of coins were measured and add
   nothing. Larger slots (a position up to a whole sleeve) were measured too: return roughly

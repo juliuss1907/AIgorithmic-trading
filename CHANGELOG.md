@@ -15,7 +15,8 @@ Nhánh: `feature/slot-runtime`. Julius chốt thiết kế 4 coin, slot 1/3 túi
 - **Mã dùng chung với nghiên cứu:** logic chọn lệnh tách thành `replay_v2/donchian_rotation_select.py` (cùng `adx_of`, `volume_ratio`, `trend_strength`); engine nghiên cứu và runtime gọi cùng một hàm.
 - **Hồi quy nghiên cứu (cửa sổ 2026):** 18/18 ca `rotation` giống từng byte `result_id` so với commit ngay trước refactor; 8/8 ca `capacity` giống lần chạy trước, cả sau khi tách hàm trợ giúp; ca `rotation-window` chỉ khác ở trường `slot_divisor` thêm vào `variant`.
 - **Kiểm thử:** 11 test runtime mới (xếp hạng, cổng PnL, xoay vị thế và Jev loại, tái đầu tư, profile quy tắc), 5 test active set và phân bổ, 5 test profile quy tắc và parity với nghiên cứu cho cửa sổ 25.
-- **Còn lại trước khi triển khai (Julius duyệt):** kết quả Stage 0 (`rotation-five`, BTC thay HYPE), sao lưu và deploy, `active-set init`, soak, cấu hình và kích hoạt Demo.
+- **Stage 0 (5 coin trên 3 vị thế, BTC thay HYPE, 8 ca, đều tái hiện ca 4 coin):** Donchian 25, cả cửa sổ: +96,6% / DD 11,4% / 24 lần xoay vị thế so với +103,3% / 9,8% / 8 lần của 4 coin; lợi nhuận trên DD 8,5 so với 10,5. 2026 không phân biệt được (+22,0% so với +22,3%). Thêm coin thứ năm làm số lần xoay tăng gấp ba và giảm khoảng 2 đơn vị lợi nhuận/DD ở cửa sổ đầy đủ: là một lựa chọn, không phải cải thiện. BTC không phải HYPE.
+- **Còn lại trước khi triển khai (Julius duyệt):** sao lưu và deploy, `active-set init`, soak, cấu hình và kích hoạt Demo.
 - **Chưa kiểm chứng:** HYPE (không có lịch sử Spot, không có số liệu nghiên cứu), hành vi thật của Binance Demo với ZEC và HYPE, và chênh lệch live so với replay do Jev và khớp lệnh.
 
 ## 2026-10-13 — Giới hạn mỗi túi bằng số coin (đăng ký trước)
