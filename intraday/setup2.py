@@ -22,6 +22,8 @@ STOP_CAP = Decimal('.10')
 ENTRY_WINDOWS = {'setup2_v1': ENTRY, 'setup2_slots_v1': 25}
 STOP_CAPS = {'setup2_v1': STOP_CAP, 'setup2_slots_v1': Decimal('.05')}
 EVALUATOR_VERSIONS = {'setup2_v1': EVALUATOR_VERSION, 'setup2_slots_v1': 'setup2-slots-live-v1'}
+# Slot design (ADR-007): positions across both sleeves, a position's share of its sleeve, rotation margin.
+SLOT_MAX_POSITIONS, SLOT_DIVISOR, ROTATION_MARGIN = 3, 3, Decimal(5)
 # Spot and Perp sleeve shares of capital per profile (60/40 of ADR-006; 50/50 slot design of ADR-007).
 SPLITS = {'setup2_v1': (Decimal('.6'), Decimal('.4')), 'setup2_slots_v1': (Decimal('.5'), Decimal('.5'))}
 ZERO, ONE = Decimal(0), Decimal(1)

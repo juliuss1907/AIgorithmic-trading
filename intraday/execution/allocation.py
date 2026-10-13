@@ -15,7 +15,7 @@ class DemoAllocation(ExecutionModel):
     spot_weights: dict[str, Decimal] = Field(default_factory=dict)
     perp_weights: dict[str, Decimal] = Field(default_factory=dict)
     # Setup-2 profile (ADR-006): sleeves follow the operator split and the bound active-set version.
-    profile: Literal["legacy", "setup2_v1"] = "legacy"
+    profile: Literal["legacy", "setup2_v1", "setup2_slots_v1"] = "legacy"
     spot_split: Decimal | None = Field(default=None, ge=0, le=1)
     perp_split: Decimal | None = Field(default=None, ge=0, le=1)
     active_set_version_id: str | None = None
@@ -45,8 +45,10 @@ class DemoAllocation(ExecutionModel):
         setup2 = (self.spot_split, self.perp_split, self.active_set_version_id)
         if self.profile == "legacy" and any(v is not None for v in setup2):
             raise ValueError("splits and active-set binding require the setup2 profile")
-        if self.profile == "setup2_v1" and (any(v is None for v in setup2) or self.spot_split + self.perp_split > 1):
+        if self.profile != "legacy" and (any(v is None for v in setup2) or self.spot_split + self.perp_split > 1):
             raise ValueError("setup2 allocation requires splits totalling at most one and an active-set version")
+        if self.profile == "setup2_slots_v1" and (self.spot_split, self.perp_split) != (Decimal(".5"), Decimal(".5")):
+            raise ValueError("the slot design splits capital 50/50")
         return self
 
     def split(self, market):
@@ -59,6 +61,19 @@ class DemoAllocation(ExecutionModel):
         if weights is None or symbol not in weights or weights[symbol] <= 0:
             raise ValueError("route has no positive operator weight")
         return self.capital * self.split(market) * weights[symbol]
+
+    @property
+    def is_slots(self):
+        return self.profile == "setup2_slots_v1"
+
+    def slot_cap(self, sleeve_equity, free_principal, size_multiplier):
+        """One position of the slot design (ADR-007): a third of its sleeve's realized capital times the ATR
+        multiplier, never more than the sleeve's free principal."""
+        from intraday import setup2
+        if not self.is_slots:
+            raise ValueError("slot sizing belongs to the slot profile")
+        wanted = sleeve_equity/setup2.SLOT_DIVISOR*Decimal(str(size_multiplier))
+        return max(Decimal(0), min(wanted, free_principal))
 
     def routes(self):
         return [(symbol, market) for market, weights in (("spot", self.spot_weights), ("perp",self.perp_weights))

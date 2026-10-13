@@ -88,7 +88,11 @@ def _allocation(arguments,source):
     if version is None:
         raise ValueError("no active set recorded in the source database")
     coins = version.plan.coins
-    return DemoAllocation(capital=arguments.capital,spot_emergency_stop_pct=stop,profile="setup2_v1",
+    profile = version.plan.rule_profile
+    if profile == "setup2_slots_v1":
+        from intraday import setup2
+        stop = setup2.stop_cap(profile)  # The slot design stops at 5%, Spot included.
+    return DemoAllocation(capital=arguments.capital,spot_emergency_stop_pct=stop,profile=profile,
                           spot_weights={s:c.spot_weight for s,c in coins.items() if c.spot_weight > 0},
                           perp_weights={s:c.perp_weight for s,c in coins.items() if c.perp_weight > 0},
                           spot_split=version.plan.spot_split,perp_split=version.plan.perp_split,

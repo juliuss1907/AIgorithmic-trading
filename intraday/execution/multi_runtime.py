@@ -4,12 +4,14 @@ The source database is read-only. Portfolio activation and allocation are explic
 operator actions, never consequences of connecting credentials or adding a coin.
 """
 
+import dataclasses
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_CEILING
 import hashlib
 import uuid
 
-from intraday.contracts import DecisionScope
+from intraday import setup2 as setup2_module
+from intraday.contracts import DecisionScope, is_setup2_profile
 from intraday.execution.allocation import DemoAllocation
 from intraday.execution.contracts import ExecutionUnavailable, OrderIntent
 from intraday.execution.journal import OrderCoordinator
@@ -68,6 +70,10 @@ class MultiDemoRuntime:
         if plan.profile == "legacy":
             return self.gate
         policy = ParentPortfolioPolicy.from_split(plan.spot_split,plan.perp_split,1,initial_equity=float(plan.capital))
+        if plan.is_slots:
+            # Positions are bounded by two 50% sleeves and three slots; the single-parent net-delta limit
+            # would count Perp gross as if it added to Spot (ADR-007).
+            policy = dataclasses.replace(policy,max_abs_net_delta_pct=float(plan.spot_split+plan.perp_split))
         return ScopedEntryGate(ParentPortfolioCoordinator(policy))
 
     def _bound_active_set(self,plan):
@@ -166,7 +172,7 @@ class MultiDemoRuntime:
                            sum((u.executed_quantity*(1 if i.side=="BUY" else -1) for i,u in recorded if i.symbol==symbol),Decimal(0)))
                     if qty:
                         raise ValueError("pause and flatten before changing allocation")
-            if plan.profile == "setup2_v1":
+            if plan.profile != "legacy":
                 self._check_active_set(plan)
             previous = self.journal.portfolio(self.account)
             if previous and (previous.get("paused") is not True or Decimal(previous["allocation"]["capital"]) != plan.capital):
@@ -208,7 +214,8 @@ class MultiDemoRuntime:
 
     def preflight(self,symbol,market,*,now):
         p = self._portfolio();plan = DemoAllocation.model_validate(p["allocation"])
-        cap = plan.target_cap(symbol,market)
+        cap = (plan.capital*plan.split(market)/setup2_module.SLOT_DIVISOR if plan.is_slots
+               else plan.target_cap(symbol,market))
         source = self.source_factory(symbol,market)
         if str(source.path) != p["source_database"]:
             raise ValueError("source differs from configured campaign")
@@ -228,12 +235,12 @@ class MultiDemoRuntime:
             report = self.preflight(symbol,market,now=now)
             source = self.source_factory(symbol,market)
             plan = DemoAllocation.model_validate(p["allocation"])
-            if plan.profile == "setup2_v1":
+            if plan.profile != "legacy":
                 version,scopes = self._check_active_set(plan)
                 if scopes[market] not in version.plan.scopes(symbol):
                     raise ValueError("route is not in the bound active set")
-                if getattr(source.rule().parameters,"entry_profile","donchian_v1") != "setup2_v1":
-                    raise ValueError("setup2 allocation only admits Setup-2 champions")
+                if getattr(source.rule().parameters,"entry_profile","donchian_v1") != plan.profile:
+                    raise ValueError("setup2 allocation only admits Setup-2 champions of its own profile")
             source.evaluation(evaluation_id,now=now)
             self._risk(p,now=now)
             venue = self.venue_factory(symbol,market)
@@ -243,12 +250,13 @@ class MultiDemoRuntime:
             if self._quantity(venue,market):
                 raise ValueError("route must be flat before explicit activation")
             # Allocated risk history is never reset by reactivation.
-            setup2 = getattr(source.rule().parameters,"entry_profile",None) == "setup2_v1"
+            profile = getattr(source.rule().parameters,"entry_profile",None)
+            setup2 = is_setup2_profile(profile)
             if setup2 and market == "perp" and self._leverage(symbol) != 1:
                 raise ValueError("Setup-2 Perp requires Isolated 1x for this pair")
             route = {"symbol":symbol,"market":market,"active":True,"evaluation_id":evaluation_id,
                      "rule_id":report["rule_id"],"stop_distance":float(DemoAllocation.model_validate(p["allocation"]).spot_emergency_stop_pct)
-                     if market=="spot" else .10 if setup2 else source.rule().parameters.stop_distance_pct,
+                     if market=="spot" else float(setup2_module.stop_cap(profile)) if setup2 else source.rule().parameters.stop_distance_pct,
                      "entry_id":None,"consumed_bar":None}
             previous = p["routes"].get(market+":"+symbol)
             if previous:
@@ -491,6 +499,245 @@ class MultiDemoRuntime:
                         pass
                 return {"status":"paused","reason":p["reason"]}
 
+    def _sleeves(self,p,plan,markets,*,now):
+        """Realized capital and used principal per sleeve (ADR-007); unrealized profit is never reinvested."""
+        spot_realized = spot_used = perp_realized = perp_used = Decimal(0)
+        perp_symbols = [s for (s,m) in markets if m == "perp"]
+        for (symbol,market),(venue,snapshot,quote) in markets.items():
+            if market == "spot":
+                owned = self.journal.spot_inventory(venue.account_ref,symbol)
+                spot_realized += owned["cash_flow"]+owned["cost_basis"]
+                spot_used += owned["cost_basis"]
+                continue
+            position = snapshot.position(symbol)
+            if position:
+                perp_used += abs(position.quantity)*position.entry_price
+        if perp_symbols:
+            venue = markets[(perp_symbols[0],"perp")][0]
+            since = datetime.fromisoformat(p["baseline_started"]["perp"])
+            funding = sum((markets[(s,"perp")][0].funding_since(since,now=now) for s in perp_symbols),Decimal(0))
+            perp_realized = self.journal.cash_pnl(venue.account_ref)+funding
+        return {"spot":(plan.capital*plan.spot_split+spot_realized,spot_used),
+                "perp":(plan.capital*plan.perp_split+perp_realized,perp_used)}
+
+    def _slot_authorization(self,p,plan,gate,candidate,equity,spot_gross,perp_gross,markets,sleeves,*,now):
+        """Cap and gate answer for one candidate against the current exposure; zero cap means no entry."""
+        symbol,market = candidate["symbol"],candidate["market"]
+        observation,decision,rule = candidate["observation"],candidate["decision"],candidate["rule"]
+        snapshot = markets[(symbol,market)][1]
+        state = ParentPortfolioState(initial_equity=float(plan.capital),realized_pnl=float(equity-plan.capital),
+            spot_quantity=float(spot_gross),spot_entry_price=1 if spot_gross else None,
+            perp_quantity=float(perp_gross),perp_entry_price=1 if perp_gross else None,
+            mark_price=1,spot_price=1,perp_mark_price=1,day_start_equity=float(p["day_start_equity"]),
+            high_water_mark=float(p["high_water_mark"]),entries_paused=False,paper_active=True,updated_at=now)
+        sleeve_equity,used = sleeves[market]
+        cap = plan.slot_cap(sleeve_equity,sleeve_equity-used,observation.size_multiplier)
+        gross_cap,perp_cap,margin_cap = self._envelope(plan)
+        cap = min(cap,max(Decimal(0),equity*gross_cap-spot_gross-perp_gross))
+        margin = self._perp_margin(markets)
+        if market == "perp":
+            cap = min(cap,max(Decimal(0),equity*perp_cap-perp_gross),
+                      max(Decimal(0),equity*margin_cap-margin)*snapshot.leverage)
+        projected_margin = float((margin+(cap/snapshot.leverage if market=="perp" else Decimal(0)))/equity)
+        multiplier = float(observation.size_multiplier)
+        auth = (gate.spot_entry(state,decision,rule.parameters,donchian_entry=observation.entry,
+                                size_multiplier=multiplier,scope=DecisionScope.SPOT_4H,
+                                projected_isolated_margin_pct=projected_margin) if market == "spot" else
+                gate.perp_setup2_entry(state,decision,rule.parameters,setup_entry=observation.entry,
+                                       size_multiplier=multiplier,projected_isolated_margin_pct=projected_margin))
+        if not auth.allowed or not auth.target_notional:
+            return auth,Decimal(0)
+        return auth,min(cap,abs(Decimal(str(auth.target_notional))))
+
+    def _place_slot_entry(self,p,candidate,cap,auth,venue,snapshot,*,now):
+        """Order placement of one confirmed entry; mirrors the legacy per-route path (same checks and protection)."""
+        symbol,market = candidate["symbol"],candidate["market"]
+        route,decision,observation,bar = candidate["route"],candidate["decision"],candidate["observation"],candidate["bar"]
+        self._account_check(venue,market,snapshot)
+        quote = venue.quote(symbol,now=self.clock())
+        rules = venue.instrument(symbol)
+        amount = rules.round_quantity(cap/quote.ask)
+        try:
+            rules.validate_quantity(amount,quote.ask)
+            stop_rules = venue.instrument(symbol,order_type="STOP_LOSS") if market=="spot" else rules
+            stop_rules.validate_quantity(stop_rules.round_quantity(amount*Decimal(".999") if market=="spot" else amount),
+                                         quote.mark*(1-Decimal(str(route["stop_distance"]))),reducing=market=="perp")
+        except ValueError:
+            return "rejected_quantity"
+        if market=="spot" and amount*quote.ask*Decimal("1.002")>snapshot.balance("USDT").free:
+            return "insufficient_balance"
+        if market=="perp" and amount*quote.ask*(Decimal(1)/snapshot.leverage+Decimal(".002"))>snapshot.available_balance:
+            return "insufficient_margin"
+        if market=="perp" and hasattr(venue,"leverage_limit") and snapshot.leverage > venue.leverage_limit(abs(amount*quote.ask)):
+            return "leverage_limit"
+        entry_id = identity(p["campaign_id"],symbol,market,decision.decision_id,"entry")
+        if self.journal.order(venue.account_ref,entry_id):
+            return "already_submitted"
+        if (self.clock()-quote.observed_at).total_seconds()>20:
+            return "stale_quote"
+        route.update(entry_id=entry_id,consumed_bar=bar,signal_atr=str(observation.atr),
+                     entered_at=self.clock().isoformat(),trail_stop=None)
+        self._save(p,"portfolio_entry_reserved")
+        intent = OrderIntent(intent_id=entry_id,account=venue.account_ref,symbol=symbol,market=market,
+                             side="BUY" if market=="spot" or auth.target_notional>0 else "SELL",quantity=amount,
+                             source_id=decision.decision_id,created_at=self.clock())
+        coordinator = OrderCoordinator(self.journal,venue)
+        update = coordinator.submit(intent)
+        if update.status in {"NEW","PARTIALLY_FILLED"}:
+            update = coordinator.cancel(intent)
+        self._reconcile(venue)
+        confirmed = venue.account_snapshot(now=self.clock())
+        observed = confirmed.position(symbol) if market=="perp" else None
+        if (market=="perp" and observed and update.status=="UNKNOWN" and self._quantity(venue,market)==0
+                and (observed.quantity>0)==(intent.side=="BUY") and abs(observed.quantity)<=intent.quantity):
+            self._protect(p,route,venue,confirmed,venue.quote(symbol,now=self.clock()),now=self.clock(),
+                          observed_perp_quantity=observed.quantity)
+            raise ExecutionUnavailable("uncertain Perp entry protected; reconcile required")
+        if self._quantity(venue,market):
+            try:
+                self._protect(p,route,venue,confirmed,venue.quote(symbol,now=self.clock()),now=self.clock())
+            except (ExecutionUnavailable,ValueError):
+                p.update(paused=True,reason="protection_failed")
+                self._save(p,"protection_failure")
+                self._close(p,route,venue,now=self.clock(),reason="protection_failure")
+                return "protection_failed"
+        if self._pending(venue):
+            raise ExecutionUnavailable("entry fill unconfirmed")
+        return update.status
+
+    def _slots_cycle(self,p,plan,equity,spot_gross,perp_gross,markets,*,now):
+        """Slot design (ADR-007): rank every confirmed candidate once per bar, fill free positions and
+        rotate out the weakest only after the replacing entry is confirmed by the rule and Jev."""
+        from intraday.replay_v2.donchian_rotation_select import Candidate, Held, pnl_gate_blocks, select_entries
+        results,observed,exited = [],{},False
+        # 1. Evidence and Donchian exits first: an exit frees its position before the book is ranked.
+        for route in p["routes"].values():
+            symbol,market = route["symbol"],route["market"]
+            if not route["active"] or (symbol,market) not in markets:
+                continue
+            venue = markets[(symbol,market)][0]
+            source = self.source_factory(symbol,market)
+            if str(source.path) != p["source_database"]:
+                raise ValueError("source database changed")
+            try:
+                rule = source.rule()
+                if rule.rule_id != route["rule_id"]:
+                    raise ExecutionUnavailable("champion_changed_requires_reactivation")
+                source.evaluation(route["evaluation_id"],now=now)
+                observation,bar = source.setup2_signal(now=now)
+            except (ValueError,KeyError,TypeError):
+                results.append({"symbol":symbol,"market":market,"status":"waiting_for_eligible_evidence"})
+                continue
+            if observation.exit and self._quantity(venue,market):
+                self._close(p,route,venue,now=now,reason="donchian_exit")
+                results.append({"symbol":symbol,"market":market,"status":"exit"})
+                exited = True
+                continue
+            observed[(symbol,market)] = dict(route=route,source=source,rule=rule,observation=observation,bar=bar)
+        if exited:
+            equity,spot_gross,perp_gross,markets = self._risk(p,now=self.clock())
+        # 2. The open book: strength of each position and its price PnL for the gate and the tie-break.
+        held,book_pnl,coins = [],Decimal(0),set()
+        for route in p["routes"].values():
+            symbol,market = route["symbol"],route["market"]
+            if (symbol,market) not in markets:
+                continue
+            venue,snapshot,quote = markets[(symbol,market)]
+            qty = self._quantity(venue,market)
+            if not qty:
+                continue
+            coins.add(symbol)
+            entry = (self.journal.spot_inventory(venue.account_ref,symbol,require_valued_fees=False)["entry_price"]
+                     if market == "spot" else snapshot.position(symbol).entry_price)
+            gain = qty*(quote.mark-entry)
+            book_pnl += gain
+            seen = observed.get((symbol,market))
+            strength = Decimal(0)
+            if seen is not None:
+                f = seen["observation"].features
+                if None not in (f.get("adx"),f.get("plus_di"),f.get("minus_di")):
+                    side = 1 if market == "spot" else -1
+                    strength = Decimal(f["adx"]) if side*(f["plus_di"]-f["minus_di"]) > 0 else Decimal(0)
+            held.append(Held(market,symbol,strength,gain,seen is not None))
+        # 3. Candidates: rule entry, one position per coin, fresh unconsumed Jev answer and an allowed gate.
+        gate,sleeves,candidates,pool = self._gate_for(plan),self._sleeves(p,plan,markets,now=now),{},[]
+        for (symbol,market),seen in observed.items():
+            observation = seen["observation"]
+            if symbol in coins or not observation.entry:
+                continue
+            route,source,rule,bar = seen["route"],seen["source"],seen["rule"],seen["bar"]
+            try:
+                research,decision,rule_id = source.latest_decision(now=self.clock())
+            except (ValueError,KeyError,TypeError):
+                results.append({"symbol":symbol,"market":market,"status":"waiting_for_eligible_evidence"})
+                continue
+            if rule_id != route["rule_id"]:
+                continue
+            if (self.clock()-decision.created_at).total_seconds() > 14400:
+                continue
+            if route.get("consumed_bar") == bar or int(decision.created_at.timestamp()*1000) < bar:
+                continue
+            venue = markets[(symbol,market)][0]
+            quote = venue.quote(symbol,now=self.clock())
+            price = Decimal(str(research.features["reference_price" if market=="spot" else "mark_price"]))
+            if abs(quote.mark/price-1) > Decimal(".01") or quote.ask/quote.bid-1 > Decimal(".001"):
+                continue
+            candidate = dict(symbol=symbol,market=market,route=route,rule=rule,decision=decision,
+                             observation=observation,bar=bar)
+            auth,cap = self._slot_authorization(p,plan,gate,candidate,equity,spot_gross,perp_gross,markets,sleeves,now=now)
+            if not cap:
+                results.append({"symbol":symbol,"market":market,"status":"not_authorized",
+                                "reasons":list(auth.reason_codes)})
+                continue
+            f = observation.features
+            ratio = Decimal(f["volume"])/Decimal(f["volume_ma"]) if f.get("volume_ma") else Decimal(0)
+            candidates[(symbol,market)] = candidate
+            pool.append(Candidate(market,symbol,Decimal(str(observation.size_multiplier)),
+                                  Decimal(f["adx"]) if f.get("adx") is not None else Decimal(0),ratio))
+        audit = dict(at=now.isoformat(),open_positions=len(held),open_book_pnl=str(book_pnl),steps=[])
+        if pool and pnl_gate_blocks(len(held),book_pnl):
+            for c in pool:
+                results.append({"symbol":c.symbol,"market":c.market,"status":"blocked","reason":"pnl_gate"})
+            pool = []
+        # 4. Ranking, rotation and execution in the research order.
+        steps = select_entries(pool,held,max_positions=setup2_module.SLOT_MAX_POSITIONS,limit_scope="total",
+                               rotation=True,margin=setup2_module.ROTATION_MARGIN)
+        for step in steps:
+            key = (step.symbol,step.market)
+            audit["steps"].append(dict(kind=step.kind,symbol=step.symbol,market=step.market,reason=step.reason,
+                                       victim=list(step.victim) if step.victim else None))
+            if step.kind == "blocked":
+                results.append({"symbol":step.symbol,"market":step.market,"status":"blocked","reason":step.reason})
+                continue
+            candidate = candidates[key]
+            if step.kind == "rotate":
+                victim_market,victim_symbol = step.victim   # select_entries names a position (market, symbol)
+                victim = next(r for r in p["routes"].values()
+                              if (r["symbol"],r["market"]) == (victim_symbol,victim_market))
+                self._close(p,victim,markets[(victim_symbol,victim_market)][0],now=self.clock(),
+                            reason="rotation_exit")
+                results.append({"symbol":victim["symbol"],"market":victim["market"],"status":"rotation_exit"})
+                equity,spot_gross,perp_gross,markets = self._risk(p,now=self.clock())
+                sleeves = self._sleeves(p,plan,markets,now=self.clock())
+            auth,cap = self._slot_authorization(p,plan,gate,candidate,equity,spot_gross,perp_gross,markets,sleeves,
+                                                now=self.clock())
+            if not cap:
+                results.append({"symbol":step.symbol,"market":step.market,"status":"not_authorized",
+                                "reasons":list(auth.reason_codes)})
+                continue
+            venue,snapshot,_ = markets[key]
+            status = self._place_slot_entry(p,candidate,cap,auth,venue,snapshot,now=self.clock())
+            results.append({"symbol":step.symbol,"market":step.market,"status":status})
+            if status == "protection_failed":
+                return {"status":"paused","reason":"protection_failed"}
+            # Recompute the shared exposure after every mutation before the next entry.
+            equity,spot_gross,perp_gross,markets = self._risk(p,now=self.clock())
+            sleeves = self._sleeves(p,plan,markets,now=self.clock())
+        p["slot_selection"] = audit
+        self._save(p,"portfolio_cycle")
+        return {"status":"running","equity":str(equity),"spot_gross":str(spot_gross),"perp_gross":str(perp_gross),
+                "routes":results}
+
     def _cycle(self,p,*,now):
         equity,spot_gross,perp_gross,markets = self._risk(p,now=now)
         plan = DemoAllocation.model_validate(p["allocation"])
@@ -511,7 +758,7 @@ class MultiDemoRuntime:
                for (symbol,market),(venue,snapshot,quote) in markets.items()):
             p.update(paused=True,reason="perp_settings_drift")
             self._save(p,"perp_settings_drift")
-        if not p["paused"] and plan.profile == "setup2_v1":
+        if not p["paused"] and plan.profile != "legacy":
             try:
                 self._check_active_set(plan)
             except ValueError:
@@ -521,6 +768,8 @@ class MultiDemoRuntime:
         if p["paused"]:
             self._save(p,"paused_reconciled")
             return {"status":"paused","reason":p["reason"]}
+        if plan.is_slots:
+            return self._slots_cycle(p,plan,equity,spot_gross,perp_gross,markets,now=now)
         results = []
         for route in p["routes"].values():
             if not route["active"]:
@@ -535,7 +784,7 @@ class MultiDemoRuntime:
                 if rule.rule_id != route["rule_id"]:
                     raise ExecutionUnavailable("champion_changed_requires_reactivation")
                 source.evaluation(route["evaluation_id"],now=now)
-                setup2 = getattr(rule.parameters,"entry_profile",None) == "setup2_v1"
+                setup2 = is_setup2_profile(getattr(rule.parameters,"entry_profile",None))
                 observation,bar = (source.spot_setup(now=now,rule=rule) if market=="spot" else
                                    source.setup2_signal(now=now) if setup2 else (None,None))
                 if (market=="spot" or setup2) and observation.exit and self._quantity(venue,market):
@@ -610,7 +859,7 @@ class MultiDemoRuntime:
             if (self.clock()-quote.observed_at).total_seconds()>20:
                 continue
             route.update(entry_id=entry_id,consumed_bar=bar)
-            if getattr(rule.parameters,"entry_profile","donchian_v1") == "setup2_v1":
+            if is_setup2_profile(getattr(rule.parameters,"entry_profile","donchian_v1")):
                 # Trail inputs: recomputed statelessly from stored bars at every protection pass.
                 route.update(signal_atr=str(observation.atr),entered_at=self.clock().isoformat(),trail_stop=None)
             else:

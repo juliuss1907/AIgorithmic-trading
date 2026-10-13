@@ -17,7 +17,11 @@ from intraday.assets import normalize_symbol
 from intraday.contracts import DecisionScope, is_setup2_profile
 
 EXTENSION_VERSION = '1'
-MAX_COINS = 3
+MAX_COINS = 3  # setup2_v1 (ADR-004); the slot profile of ADR-007 holds five.
+MAX_COINS_BY_PROFILE = {'setup2_v1': 3, 'setup2_slots_v1': 5}
+MAX_WATCH = 3
+# The slot design is two equal sleeves (ADR-007); the 60/40 split is the setup2_v1 default.
+SLOT_SPLIT = Decimal('0.50')
 # Rule scopes per market; perp_4h arrives with the rule-driven Perp short (ADR-006 stage C).
 RULE_SCOPES = {'spot': 'spot_4h', 'perp': 'perp_4h'}
 H4 = timedelta(hours=4)
@@ -53,7 +57,7 @@ class ActiveSetPlan(BaseModel):
     spot_split: Decimal = Field(default=Decimal('0.60'), ge=0, le=1)
     perp_split: Decimal = Field(default=Decimal('0.40'), ge=0, le=1)
     perp_leverage: Literal[1] = 1
-    rule_profile: Literal['setup2_v1'] = 'setup2_v1'
+    rule_profile: Literal['setup2_v1', 'setup2_slots_v1'] = 'setup2_v1'
     perp_intraday_enabled: Literal[False] = False
     # Rotation candidates (ADR-004): rule-only Setup-2 soak, no Jev and no trading.
     watch: dict[str, datetime] = Field(default_factory=dict)
@@ -61,8 +65,8 @@ class ActiveSetPlan(BaseModel):
     @field_validator('watch')
     @classmethod
     def canonical_watch(cls, watch):
-        if len(watch) > MAX_COINS or any(normalize_symbol(s) != s for s in watch):
-            raise ValueError(f'watch at most {MAX_COINS} canonical USDT symbols')
+        if len(watch) > MAX_WATCH or any(normalize_symbol(s) != s for s in watch):
+            raise ValueError(f'watch at most {MAX_WATCH} canonical USDT symbols')
         for anchor in watch.values():
             if anchor.tzinfo is None or anchor.utcoffset() != timedelta(0) or (
                     anchor-datetime(1970, 1, 1, tzinfo=timezone.utc)) % H4:
@@ -72,14 +76,19 @@ class ActiveSetPlan(BaseModel):
     @field_validator('coins')
     @classmethod
     def canonical_coins(cls, coins):
-        if not 1 <= len(coins) <= MAX_COINS:
-            raise ValueError(f'the active set holds one to {MAX_COINS} coins')
+        if not 1 <= len(coins) <= max(MAX_COINS_BY_PROFILE.values()):
+            raise ValueError(f'the active set holds one to {max(MAX_COINS_BY_PROFILE.values())} coins')
         if any(normalize_symbol(s) != s for s in coins):
             raise ValueError('active set requires canonical USDT symbols')
         return dict(sorted(coins.items()))
 
     @model_validator(mode='after')
     def budgets(self):
+        limit = MAX_COINS_BY_PROFILE[self.rule_profile]
+        if len(self.coins) > limit:
+            raise ValueError(f'the active set holds one to {limit} coins ({self.rule_profile})')
+        if self.rule_profile == 'setup2_slots_v1' and (self.spot_split, self.perp_split) != (SLOT_SPLIT, SLOT_SPLIT):
+            raise ValueError('the slot design splits capital 50/50 between Spot and Perp')
         if self.spot_split + self.perp_split > 1:
             raise ValueError('Spot and Perp splits must total at most one')
         for market in ('spot', 'perp'):
@@ -110,6 +119,23 @@ class ActiveSetVersion(BaseModel):
     actor: str
     reason: str
     plan: ActiveSetPlan
+
+
+def slots_plan(modes, *, anchors, watch=None):
+    """Slot design plan (ADR-007): `modes` maps coin to spot/perp/both, `anchors` coin to its H4 anchor.
+
+    Weights are equal within each market among the coins enabled there; they are bookkeeping only,
+    because the slot design sizes a position as a third of its sleeve, not by coin weight."""
+    from intraday.replay_v2.donchian_adx_setups import weights
+    markets = {m: [s for s, mode in modes.items() if mode in (m, 'both')] for m in ('spot', 'perp')}
+    equal = {m: weights(**{normalize_symbol(s).removesuffix('USDT'): 1 for s in coins}) if coins else {}
+             for m, coins in markets.items()}
+    zero = Decimal(0)
+    coins = {s: CoinPlan(mode=mode, indicator_anchor=anchors[s],
+                         spot_weight=equal['spot'].get(s, zero), perp_weight=equal['perp'].get(s, zero))
+             for s, mode in modes.items()}
+    return ActiveSetPlan(coins=coins, spot_split=SLOT_SPLIT, perp_split=SLOT_SPLIT,
+                         rule_profile='setup2_slots_v1', watch=watch or {})
 
 
 def equal_plan(symbols, *, mode='both', anchor, spot_split='0.60', perp_split='0.40'):

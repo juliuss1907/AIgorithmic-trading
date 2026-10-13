@@ -24,8 +24,14 @@ def add_active_set_parser(commands):
         command.add_argument("--coins", help="comma-separated coins with equal weights, e.g. ETH,NEAR,SOL")
         command.add_argument("--mode", choices=("spot", "perp", "both"), default="both")
         command.add_argument("--coin", action="append", default=[], metavar="COIN:MODE:SPOT_WEIGHT:PERP_WEIGHT",
-                             help="explicit per-coin mode and weights; repeat per coin")
-        command.add_argument("--split", default="60/40", metavar="SPOT/PERP", help="capital split in percent")
+                             help="explicit per-coin mode and weights; repeat per coin (the slot profile takes COIN:MODE)")
+        command.add_argument("--split", default=None, metavar="SPOT/PERP",
+                             help="capital split in percent (default 60/40; the slot profile is 50/50)")
+        command.add_argument("--profile", choices=("setup2_v1", "setup2_slots_v1"), default="setup2_v1",
+                             help="setup2_slots_v1 is the ADR-007 slot design (up to five coins, 50/50)")
+        command.add_argument("--anchor", default=None, metavar="YYYY-MM-DD",
+                             help="indicator anchor for new coins (UTC date at an H4 boundary); an earlier anchor "
+                                  "gives the replay gate more history")
         command.add_argument("--watch", action="append", default=[], metavar="COIN",
                              help="rotation candidate: rule-only Setup-2 soak, no Jev and no trading")
         command.add_argument("--execution-database", type=Path,
@@ -36,31 +42,60 @@ def add_active_set_parser(commands):
         command.add_argument("--reason", required=True)
 
 
-def _anchor(previous, symbol, now):
+def _anchor(previous, symbol, now, override=None):
     if previous and previous.plan.anchor(symbol):
         return previous.plan.anchor(symbol)
+    if override is not None:
+        return override
     if previous is None:
         return INITIAL_ANCHOR
     epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
     return epoch + (now - epoch)//active_set.H4*active_set.H4 - active_set.WARMUP_BARS*active_set.H4
 
 
+def _override(arguments):
+    value = getattr(arguments, "anchor", None)
+    if value is None:
+        return None
+    anchor = datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    if (anchor - datetime(1970, 1, 1, tzinfo=timezone.utc)) % active_set.H4:
+        raise ValueError("--anchor must be an H4 boundary")
+    return anchor
+
+
 def build_plan(arguments, previous, now):
-    spot, slash, perp = arguments.split.partition("/")
+    profile = getattr(arguments, "profile", "setup2_v1")
+    default_split = "50/50" if profile == "setup2_slots_v1" else "60/40"
+    spot, slash, perp = (arguments.split or default_split).partition("/")
     if not slash:
         raise ValueError("--split requires SPOT/PERP percentages")
     splits = dict(spot_split=Decimal(spot)/100, perp_split=Decimal(perp)/100)
-    watch = {ticker_symbol(s): _anchor(previous, ticker_symbol(s), now) for s in getattr(arguments, "watch", [])}
+    override = _override(arguments)
+    watch = {ticker_symbol(s): _anchor(previous, ticker_symbol(s), now, override)
+             for s in getattr(arguments, "watch", [])}
     if bool(arguments.coins) == bool(arguments.coin):
         raise ValueError("use either --coins for equal weights or one --coin per coin")
     if arguments.coins:
         symbols = [ticker_symbol(s) for s in arguments.coins.split(",")]
-        anchors = {_anchor(previous, s, now) for s in symbols}
+        if profile == "setup2_slots_v1":
+            modes = {s: arguments.mode for s in symbols}
+            return active_set.slots_plan(modes, anchors={s: _anchor(previous, s, now, override) for s in symbols},
+                                         watch=watch)
+        anchors = {_anchor(previous, s, now, override) for s in symbols}
         if len(anchors) != 1:
             raise ValueError("equal-weight switches need one anchor; use --coin per coin")
         plan = active_set.equal_plan(symbols, mode=arguments.mode, anchor=anchors.pop(), **{
             k: str(v) for k, v in splits.items()})
         return active_set.ActiveSetPlan.model_validate({**plan.model_dump(), "watch": watch})
+    if profile == "setup2_slots_v1":
+        modes = {}
+        for item in arguments.coin:
+            symbol, colon, mode = item.partition(":")
+            if not colon or mode not in ("spot", "perp", "both") or ticker_symbol(symbol) in modes:
+                raise ValueError("the slot profile takes one --coin COIN:MODE per coin (spot, perp or both)")
+            modes[ticker_symbol(symbol)] = mode
+        return active_set.slots_plan(modes, anchors={s: _anchor(previous, s, now, override) for s in modes},
+                                     watch=watch)
     coins = {}
     for item in arguments.coin:
         parts = item.split(":")
@@ -71,8 +106,8 @@ def build_plan(arguments, previous, now):
             raise ValueError("each coin appears once")
         coins[symbol] = active_set.CoinPlan(mode=parts[1], spot_weight=Decimal(parts[2]),
                                             perp_weight=Decimal(parts[3]),
-                                            indicator_anchor=_anchor(previous, symbol, now))
-    return active_set.ActiveSetPlan(coins=coins, watch=watch, **splits)
+                                            indicator_anchor=_anchor(previous, symbol, now, override))
+    return active_set.ActiveSetPlan(coins=coins, watch=watch, rule_profile=profile, **splits)
 
 
 def _execution_check(arguments):
