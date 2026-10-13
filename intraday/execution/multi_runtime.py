@@ -19,6 +19,9 @@ from intraday.portfolio_coordinator import ParentPortfolioCoordinator, ParentPor
 from intraday.scoped_gate import ScopedEntryGate
 
 
+JEV_GRACE_SECONDS = 600  # How long a bar's ranking waits for the other coins' Jev answers (ADR-007).
+
+
 def identity(*parts):
     return "ag"+hashlib.sha256(":".join(map(str,parts)).encode()).hexdigest()[:32]
 
@@ -520,8 +523,12 @@ class MultiDemoRuntime:
         return {"spot":(plan.capital*plan.spot_split+spot_realized,spot_used),
                 "perp":(plan.capital*plan.perp_split+perp_realized,perp_used)}
 
-    def _slot_authorization(self,p,plan,gate,candidate,equity,spot_gross,perp_gross,markets,sleeves,*,now):
-        """Cap and gate answer for one candidate against the current exposure; zero cap means no entry."""
+    def _slot_authorization(self,p,plan,gate,candidate,equity,spot_gross,perp_gross,markets,sleeves,*,now,
+                            ranking=False):
+        """Cap and gate answer for one candidate against the current exposure; zero cap means no entry.
+
+        While ranking, a full book has no free principal and a rotation candidate must still be considered
+        (the weakest position is closed first), so only the Jev and loss-limit answer counts there."""
         symbol,market = candidate["symbol"],candidate["market"]
         observation,decision,rule = candidate["observation"],candidate["decision"],candidate["rule"]
         snapshot = markets[(symbol,market)][1]
@@ -531,14 +538,18 @@ class MultiDemoRuntime:
             mark_price=1,spot_price=1,perp_mark_price=1,day_start_equity=float(p["day_start_equity"]),
             high_water_mark=float(p["high_water_mark"]),entries_paused=False,paper_active=True,updated_at=now)
         sleeve_equity,used = sleeves[market]
-        cap = plan.slot_cap(sleeve_equity,sleeve_equity-used,observation.size_multiplier)
-        gross_cap,perp_cap,margin_cap = self._envelope(plan)
-        cap = min(cap,max(Decimal(0),equity*gross_cap-spot_gross-perp_gross))
         margin = self._perp_margin(markets)
-        if market == "perp":
-            cap = min(cap,max(Decimal(0),equity*perp_cap-perp_gross),
-                      max(Decimal(0),equity*margin_cap-margin)*snapshot.leverage)
-        projected_margin = float((margin+(cap/snapshot.leverage if market=="perp" else Decimal(0)))/equity)
+        if ranking:
+            cap = plan.slot_cap(sleeve_equity,sleeve_equity,observation.size_multiplier)
+            projected_margin = float(margin/equity)
+        else:
+            cap = plan.slot_cap(sleeve_equity,sleeve_equity-used,observation.size_multiplier)
+            gross_cap,perp_cap,margin_cap = self._envelope(plan)
+            cap = min(cap,max(Decimal(0),equity*gross_cap-spot_gross-perp_gross))
+            if market == "perp":
+                cap = min(cap,max(Decimal(0),equity*perp_cap-perp_gross),
+                          max(Decimal(0),equity*margin_cap-margin)*snapshot.leverage)
+            projected_margin = float((margin+(cap/snapshot.leverage if market=="perp" else Decimal(0)))/equity)
         multiplier = float(observation.size_multiplier)
         auth = (gate.spot_entry(state,decision,rule.parameters,donchian_entry=observation.entry,
                                 size_multiplier=multiplier,scope=DecisionScope.SPOT_4H,
@@ -659,21 +670,27 @@ class MultiDemoRuntime:
             held.append(Held(market,symbol,strength,gain,seen is not None))
         # 3. Candidates: rule entry, one position per coin, fresh unconsumed Jev answer and an allowed gate.
         gate,sleeves,candidates,pool = self._gate_for(plan),self._sleeves(p,plan,markets,now=now),{},[]
+        considered,waiting_bar = [],None
         for (symbol,market),seen in observed.items():
             observation = seen["observation"]
             if symbol in coins or not observation.entry:
                 continue
             route,source,rule,bar = seen["route"],seen["source"],seen["rule"],seen["bar"]
+            if route.get("consumed_bar") == bar:
+                continue                  # this bar was already ranked: one decision per bar, as in the replay
+            considered.append((route,bar))
             try:
                 research,decision,rule_id = source.latest_decision(now=self.clock())
             except (ValueError,KeyError,TypeError):
+                waiting_bar = bar
                 results.append({"symbol":symbol,"market":market,"status":"waiting_for_eligible_evidence"})
                 continue
             if rule_id != route["rule_id"]:
                 continue
             if (self.clock()-decision.created_at).total_seconds() > 14400:
                 continue
-            if route.get("consumed_bar") == bar or int(decision.created_at.timestamp()*1000) < bar:
+            if int(decision.created_at.timestamp()*1000) < bar:
+                waiting_bar = bar         # Jev has not answered this bar yet
                 continue
             venue = markets[(symbol,market)][0]
             quote = venue.quote(symbol,now=self.clock())
@@ -682,7 +699,8 @@ class MultiDemoRuntime:
                 continue
             candidate = dict(symbol=symbol,market=market,route=route,rule=rule,decision=decision,
                              observation=observation,bar=bar)
-            auth,cap = self._slot_authorization(p,plan,gate,candidate,equity,spot_gross,perp_gross,markets,sleeves,now=now)
+            auth,cap = self._slot_authorization(p,plan,gate,candidate,equity,spot_gross,perp_gross,markets,sleeves,
+                                                now=now,ranking=True)
             if not cap:
                 results.append({"symbol":symbol,"market":market,"status":"not_authorized",
                                 "reasons":list(auth.reason_codes)})
@@ -690,6 +708,14 @@ class MultiDemoRuntime:
             candidates[(symbol,market)] = candidate
             pool.append(Candidate(market,symbol,Decimal(str(observation.size_multiplier)),
                                   adx_of(observation.features),volume_ratio(observation.features)))
+        if waiting_bar is not None and self.clock().timestamp()*1000-(waiting_bar+1) < JEV_GRACE_SECONDS*1000:
+            # Rank once, with every answer: wait for the other coins' Jev answers for a short grace period.
+            results.append({"status":"waiting_for_jev_answers"})
+            self._save(p,"portfolio_cycle")
+            return {"status":"running","equity":str(equity),"spot_gross":str(spot_gross),
+                    "perp_gross":str(perp_gross),"routes":results}
+        for route,bar in considered:
+            route["consumed_bar"] = bar    # blocked or unanswered candidates are not re-ranked in this bar
         audit = dict(at=now.isoformat(),open_positions=len(held),open_book_pnl=str(book_pnl),steps=[])
         if pool and pnl_gate_blocks(len(held),book_pnl):
             for c in pool:

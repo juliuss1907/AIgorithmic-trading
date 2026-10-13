@@ -1,4 +1,5 @@
 """Slot design runtime (ADR-007): ranking, free positions, PnL gate, rotation after confirmation, sizing."""
+from datetime import timedelta
 from decimal import Decimal as D
 from types import SimpleNamespace
 
@@ -34,7 +35,7 @@ def slot_source(world):
             return SimpleNamespace(entry=coin.get('entry', False), exit=coin.get('exit', False),
                                    size_multiplier=D(coin.get('multiplier', 1)), atr=D(2),
                                    features=features(coin.get('adx', 0), plus=coin.get('plus', 30),
-                                                     minus=coin.get('minus', 10))), int(NOW.timestamp()*1000)-1
+                                                     minus=coin.get('minus', 10))), world['bar']
 
         def setup2_trail(self, *, side, entry_price, signal_atr, entered_at, now):
             return entry_price*D('.95')
@@ -44,7 +45,10 @@ def slot_source(world):
             direction = world['jev'].get(self.symbol, Direction.BUY)
             price = float(world['exchange'].mark)   # The evidence tracks the venue, as a fresh live decision would.
             research = SimpleNamespace(features={'mark_price': price, 'reference_price': price})
-            return research, made.model_copy(update={'direction': direction}), rule_id
+            update = {'direction': direction}
+            if self.symbol in world['late']:        # Jev has not yet answered this bar: the answer is a minute old.
+                update['created_at'] = world['now']-timedelta(hours=4, seconds=-60)
+            return research, made.model_copy(update=update), rule_id
     return SlotSource
 
 
@@ -54,10 +58,11 @@ def build(tmp_path, *, coins=COINS):
     version = active_set.ActiveSetVersion(version_id='v1', seq=1, previous_version_id=None, created_at=NOW,
                                           actor='j', reason='r', plan=plan)
     exchange = FakeExchange()
-    world = {'version': version, 'signals': {}, 'jev': {}, 'exchange': exchange}
+    world = {'version': version, 'signals': {}, 'jev': {}, 'exchange': exchange, 'now': NOW,
+             'bar': int(NOW.timestamp()*1000)-1, 'late': set()}
     exchange.balances.update({s[:-4]: D(0) for s in coins})
     run = MultiDemoRuntime(ExecutionJournal(tmp_path/'execution.sqlite'), ACCOUNT, exchange.venue, slot_source(world),
-                           clock=lambda: NOW)
+                           clock=lambda: world['now'])
     allocation = DemoAllocation(
         capital=1000, profile=PROFILE, spot_split=D('.5'), perp_split=D('.5'), active_set_version_id='v1',
         spot_emergency_stop_pct=D('.05'),
@@ -72,6 +77,15 @@ def owned(exchange):
     return {k+'USDT': v for k, v in exchange.balances.items() if k in {c[:-4] for c in COINS} and v}
 
 
+def tick(run, world, *, new_bar=True, minutes=0):
+    """One cycle, by default on the next H4 bar: the runtime ranks each bar once, as the replay does."""
+    if new_bar:
+        world['now'] = world['now']+timedelta(hours=4)
+        world['bar'] = int(world['now'].timestamp()*1000)-1
+    world['now'] = world['now']+timedelta(minutes=minutes)
+    return run.cycle(now=world['now'])
+
+
 def results(report):
     return {(r['symbol']): r for r in report['routes']}
 
@@ -79,7 +93,7 @@ def results(report):
 def test_five_coins_rank_by_adx_and_the_book_stops_at_three_positions_of_a_third_sleeve(tmp_path):
     run, exchange, world = build(tmp_path)
     world['signals'] = {s: dict(entry=True, adx=a) for s, a in zip(COINS, (22, 41, 35, 28, 50))}
-    report = run.cycle(now=NOW)
+    report = tick(run, world)
     assert report['status'] == 'running', report
     taken = owned(exchange)
     assert set(taken) == {'ZECUSDT', 'HYPEUSDT', 'NEARUSDT'}                   # ADX 50, 41, 35
@@ -95,39 +109,39 @@ def test_five_coins_rank_by_adx_and_the_book_stops_at_three_positions_of_a_third
 def test_pnl_gate_blocks_new_entries_until_the_open_book_is_in_profit(tmp_path):
     run, exchange, world = build(tmp_path)
     world['signals'] = {'ETHUSDT': dict(entry=True, adx=40)}
-    run.cycle(now=NOW)
+    tick(run, world)
     assert set(owned(exchange)) == {'ETHUSDT'}
     world['signals'] = {'ETHUSDT': dict(adx=40), 'NEARUSDT': dict(entry=True, adx=45)}
-    flat = run.cycle(now=NOW)                       # open book PnL is zero: gate closed
+    flat = tick(run, world)                       # open book PnL is zero: gate closed
     assert results(flat)['NEARUSDT'] == {'symbol': 'NEARUSDT', 'market': 'spot', 'status': 'blocked',
                                          'reason': 'pnl_gate'}
     assert set(owned(exchange)) == {'ETHUSDT'}
     exchange.mark = D('101')                        # the held position is now in profit
-    run.cycle(now=NOW)
+    tick(run, world)
     assert set(owned(exchange)) == {'ETHUSDT', 'NEARUSDT'}
 
 
 def test_rotation_closes_the_weakest_only_for_a_candidate_that_beats_it_by_more_than_five_points(tmp_path):
     run, exchange, world = build(tmp_path)
     world['signals'] = {s: dict(entry=True, adx=a) for s, a in (('ETHUSDT', 20), ('NEARUSDT', 30), ('SOLUSDT', 40))}
-    run.cycle(now=NOW)
+    tick(run, world)
     assert set(owned(exchange)) == {'ETHUSDT', 'NEARUSDT', 'SOLUSDT'}
     exchange.mark = D('101')
     held_signals = {s: dict(adx=a) for s, a in (('ETHUSDT', 20), ('NEARUSDT', 30), ('SOLUSDT', 40))}
     # +5 exactly is not enough (strictly more than the margin), and the weakest stays.
     world['signals'] = {**held_signals, 'ZECUSDT': dict(entry=True, adx=25)}
-    report = run.cycle(now=NOW)
+    report = tick(run, world)
     assert results(report)['ZECUSDT']['reason'] == 'rotation_margin'
     assert set(owned(exchange)) == {'ETHUSDT', 'NEARUSDT', 'SOLUSDT'}
     # Jev vetoes the stronger candidate: nothing is closed.
     world['signals']['ZECUSDT'] = dict(entry=True, adx=26)
     world['jev']['ZECUSDT'] = Direction.SELL
-    report = run.cycle(now=NOW)
+    report = tick(run, world)
     assert 'ZECUSDT' not in owned(exchange) and 'ETHUSDT' in owned(exchange)
     assert results(report)['ZECUSDT']['status'] == 'not_authorized'
     # Confirmed and strong enough: the weakest (ETH, ADX 20) is replaced.
     world['jev'].pop('ZECUSDT')
-    report = run.cycle(now=NOW)
+    report = tick(run, world)
     assert set(owned(exchange)) == {'NEARUSDT', 'SOLUSDT', 'ZECUSDT'}
     statuses = [r['status'] for r in report['routes']]
     assert 'rotation_exit' in statuses
@@ -136,11 +150,11 @@ def test_rotation_closes_the_weakest_only_for_a_candidate_that_beats_it_by_more_
 def test_donchian_exit_frees_the_position_before_new_entries_are_ranked(tmp_path):
     run, exchange, world = build(tmp_path)
     world['signals'] = {s: dict(entry=True, adx=a) for s, a in (('ETHUSDT', 20), ('NEARUSDT', 30), ('SOLUSDT', 40))}
-    run.cycle(now=NOW)
+    tick(run, world)
     exchange.mark = D('101')
     world['signals'] = {'ETHUSDT': dict(exit=True), 'NEARUSDT': dict(adx=30), 'SOLUSDT': dict(adx=40),
                         'ZECUSDT': dict(entry=True, adx=21)}
-    report = run.cycle(now=NOW)
+    report = tick(run, world)
     assert set(owned(exchange)) == {'NEARUSDT', 'SOLUSDT', 'ZECUSDT'}
     assert results(report)['ETHUSDT']['status'] == 'exit'
     assert results(report)['ZECUSDT']['status'] != 'blocked'     # a free position, no rotation margin needed
@@ -149,19 +163,19 @@ def test_donchian_exit_frees_the_position_before_new_entries_are_ranked(tmp_path
 def test_realized_profit_grows_the_slot_but_unrealized_profit_does_not(tmp_path):
     run, exchange, world = build(tmp_path)
     world['signals'] = {'ETHUSDT': dict(entry=True, adx=30)}
-    run.cycle(now=NOW)
+    tick(run, world)
     first = owned(exchange)['ETHUSDT']*exchange.mark
     exchange.mark = D('120')                                     # unrealized gain only
     world['signals'] = {'ETHUSDT': dict(adx=30), 'NEARUSDT': dict(entry=True, adx=35)}
-    run.cycle(now=NOW)
+    tick(run, world)
     near_unrealized = owned(exchange)['NEARUSDT']*exchange.mark
     assert abs(near_unrealized-D(500)/3) < D('2')                # still a third of the original sleeve
     world['signals'] = {'ETHUSDT': dict(exit=True), 'NEARUSDT': dict(adx=35)}
-    run.cycle(now=NOW)                                           # realize the gain
+    tick(run, world)                                           # realize the gain
     assert 'ETHUSDT' not in owned(exchange)
     exchange.mark = D('121')                                     # the held NEAR is in profit: the gate is open
     world['signals'] = {'NEARUSDT': dict(adx=35), 'SOLUSDT': dict(entry=True, adx=36)}
-    run.cycle(now=NOW)
+    tick(run, world)
     sol = owned(exchange)['SOLUSDT']*exchange.mark
     assert sol > D(500)/3+D(1) and first > 0                     # the realized gain is reinvested
 
@@ -186,3 +200,44 @@ def test_ranking_inputs_are_the_research_functions_for_every_missing_indicator_c
     assert (adx_of(f), volume_ratio(f), trend_strength(f, 1), trend_strength(f, -1)) == (D(30), D(2), D(30), D(0))
     gone = dict(adx=None, plus_di=None, minus_di=None, volume=D(1), volume_ma=D(0))
     assert (adx_of(gone), volume_ratio(gone), trend_strength(gone, 1)) == (0, 0, 0)
+
+
+def test_a_full_sleeve_with_no_free_principal_still_reaches_the_ranking(tmp_path):
+    """Three whole thirds leave no free principal: ranking must still see the candidate, entry must not."""
+    run, exchange, world = build(tmp_path)
+    world['signals'] = {'ETHUSDT': dict(entry=True, adx=30)}
+    tick(run, world)
+    p = run._portfolio()
+    plan = DemoAllocation.model_validate(p['allocation'])
+    equity, spot_gross, perp_gross, markets = run._risk(p, now=NOW)
+    source = world['version'] and slot_source(world)('ZECUSDT', 'spot')
+    _, decision, _ = source.latest_decision(now=NOW)
+    candidate = dict(symbol='ZECUSDT', market='spot', rule=source.rule(), decision=decision,
+                     observation=SimpleNamespace(entry=True, size_multiplier=D(1)))
+    full = {'spot': (D(500), D(500)), 'perp': (D(500), D(0))}        # every unit of the Spot sleeve is in use
+    gate = run._gate_for(plan)
+    args = (p, plan, gate, candidate, equity, spot_gross, perp_gross, markets, full)
+    auth, ranking_cap = run._slot_authorization(*args, now=NOW, ranking=True)
+    assert auth.allowed and ranking_cap > 0
+    _, entry_cap = run._slot_authorization(*args, now=NOW)
+    assert entry_cap == 0                                              # no principal left until a rotation frees it
+
+
+def test_each_bar_is_ranked_once_and_waits_a_grace_period_for_late_jev_answers(tmp_path):
+    run, exchange, world = build(tmp_path)
+    world['signals'] = {'ETHUSDT': dict(entry=True, adx=40), 'NEARUSDT': dict(entry=True, adx=50)}
+    world['late'] = {'NEARUSDT'}                    # the strongest coin has no answer for this bar yet
+    waiting = tick(run, world)
+    assert {'status': 'waiting_for_jev_answers'} in waiting['routes'] and not owned(exchange)
+    world['late'] = set()
+    first = tick(run, world, new_bar=False, minutes=2)          # the answer arrived inside the grace period
+    assert set(owned(exchange)) == {'ETHUSDT', 'NEARUSDT'}, first
+    # The same bar is never ranked again: a candidate blocked by the gate stays blocked even if it opens later.
+    world['signals'] = {'ETHUSDT': dict(adx=40), 'NEARUSDT': dict(adx=50), 'SOLUSDT': dict(entry=True, adx=60)}
+    blocked = tick(run, world)                                 # gate closed: open book PnL is zero
+    assert results(blocked)['SOLUSDT']['reason'] == 'pnl_gate'
+    exchange.mark = D('105')
+    tick(run, world, new_bar=False, minutes=3)
+    assert 'SOLUSDT' not in owned(exchange)
+    tick(run, world)                                           # the next bar decides again
+    assert 'SOLUSDT' in owned(exchange)
