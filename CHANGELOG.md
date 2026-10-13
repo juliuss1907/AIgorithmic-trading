@@ -4,6 +4,18 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-13 — Spot HYPE trên proxy giá Perp, ngưỡng 400 nến, miễn trừ gate lệnh (phụ lục ADR-007)
+
+Nhánh: `feature/slot-runtime`. Julius muốn Spot HYPE vào Demo cùng các coin khác thay vì chờ tới 2027-01-02. Chi tiết và số đo: phụ lục của [ADR-007](docs/decisions/007-slot-rotation-five-coin-runtime.md).
+
+- **Đo trước khi làm (dữ liệu công khai):** từ ≥ 400 nến làm nóng, bộ lọc xu hướng gần như không đổi (EMA200 trong 0,1%); Perp so với Spot HYPE lệch 0,057% trung bình, tối đa 0,125%; ghép giá Perp làm EMA200 lệch 0,02% (trung vị); volume Spot chỉ bằng ~5% Perp nên **volume và volume profile không bao giờ được ghép**.
+- **Active set (`CoinPlan`):** thêm `warmup_bars` (400 đến 600, mặc định 600), `spot_price_proxy_until` và `waive_min_trades`; payload cũ giữ nguyên từng byte. `slots_plan()` và `active-set init/switch --warmup COIN=N --spot-proxy COIN=ISO --waive-min-trades COIN:spot`.
+- **Chuỗi ghép (`proxied_bars`):** nến H4 Spot trước mốc lấy OHLC từ Perp, volume 0; M15 không ghép. Bộ đánh giá không thể sinh lệnh vào khi cửa sổ volume MA20 chạm nến proxy (`proxy_volume_warmup`) hoặc profile chưa đủ 20 ngày Spot thật (`profile_incomplete`). `sync` chỉ tải Spot từ mốc, trail stop và replay dùng cùng chuỗi.
+- **Gate:** `GateEvidence.required_bars`, `min_trades_waived`; cửa sổ replay bắt đầu tại neo + ngưỡng của coin; với miễn trừ, 0 lệnh qua, 1 đến 5 lệnh vẫn bị loại nếu lãi ròng ≤ 0 hoặc DD ≥ 15%; mọi miễn trừ để lại `waived_*` trong số liệu và nhãn `setup2_spot_price_proxied_from_perp`. Miễn trừ tự hết hiệu lực khi Spot đủ ngưỡng nến thật.
+- **Kiểm thử:** 11 test mới (`tests/test_spot_proxy.py`); toàn bộ suite 1515 qua, 1 lỗi có sẵn.
+- **Đo trên dữ liệu công khai:** bộ đánh giá live trên chuỗi Spot HYPE ghép (2.882 nến proxy + 116 nến Spot) không có lệnh vào Spot; nến mới nhất không qua bộ lọc EMA200, EMA50, DMI, volume (HYPE đang dưới các đường trung bình); Perp short đã kích hoạt 38 lần, lần gần nhất 2026-10-12 20:00Z.
+- **Điều cần nói thẳng:** replay của Spot HYPE gần như không có lệnh (volume và profile chỉ có từ 2026-09-24, lệnh vào chỉ có thể từ 2026-10-14 08:00Z), nên route qua gate bằng bằng chứng quy trình (soak 14 ngày, heartbeat, giới hạn rủi ro) chứ không bằng lệnh đóng như các route khác. Gỡ proxy khi đủ 600 nến Spot thật (2027-01-02).
+
 ## 2026-10-13 — Runtime slot 1/3 túi, 5 coin (ADR-007)
 
 Nhánh: `feature/slot-runtime`. Julius chốt thiết kế 4 coin, slot 1/3 túi, Donchian 25 và yêu cầu xây hệ thống, thêm HYPE thành 5 coin, triển khai lên Binance Demo, Jev vẫn xác nhận. Quyết định: [ADR-007](docs/decisions/007-slot-rotation-five-coin-runtime.md). **Đã làm xong phần mã và kiểm thử; chưa push, chưa deploy, chưa chạm Demo/VPS.** Checklist triển khai: [slot-runtime-demo-rollout-checklist](docs/runbooks/slot-runtime-demo-rollout-checklist.md).

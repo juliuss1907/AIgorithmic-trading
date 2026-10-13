@@ -10,7 +10,7 @@ Cơ sở: [ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md), [ADR-0
 | Mục | Giá trị |
 |---|---|
 | Profile quy tắc | `setup2_slots_v1`: Donchian **25/10** H4, EMA200/50, ADX14 > 20 và đang tăng, volume ×1,2, volume profile, ATR14×3, **stop chặn 5%** |
-| Coin | ETH, NEAR, SOL, ZEC (`both`) và HYPE (`perp` cho tới 2027-01-02, khi đủ 600 nến H4 Spot) |
+| Coin | ETH, NEAR, SOL, ZEC và HYPE, tất cả `both`. HYPE Spot chạy trên **proxy giá Perp** trước 2026-09-24 (ngưỡng làm nóng 400 nến, miễn trừ gate ≥ 6 lệnh), xem phụ lục ADR-007 |
 | Túi | Spot 50% / Perp short 1x 50%, tách riêng; vị thế tối đa **1/3 vốn thực hiện của túi** nhân hệ số ATR |
 | Danh mục | Tối đa **3 vị thế** trên hai túi, một vị thế mỗi coin; cổng PnL sổ đang mở; xoay vị thế khi ADX hơn > 5 điểm |
 | Jev | Luật tạo tín hiệu, Jev xác nhận (short cần SELL/STRONG_SELL); xoay vị thế chỉ đóng vị thế yếu **sau** khi ứng viên được xác nhận |
@@ -27,7 +27,7 @@ Cơ sở: [ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md), [ADR-0
 - [ ] **Neo chỉ báo (anchor) quyết định thời gian chờ replay gate.** Cửa sổ replay v2 bắt đầu tại `anchor + 600 nến H4` và cần ≥ 6 lệnh đóng cho từng
       route. Với neo mặc định 2026-07-02 mốc này rơi vào 2026-10-10 và đủ lệnh khoảng tháng 3/2027. Với `--anchor 2025-06-01` cửa sổ bắt đầu
       2025-09-09 nên đã có lịch sử để đủ 6 lệnh. Đổi lại chỉ báo bắt đầu từ chuỗi sớm hơn (EMA/ADX hội tụ sau hàng trăm nến).
-      Spot HYPE chỉ có từ 2026-09-24 nên chạy `perp`.
+      Spot HYPE chỉ có từ 2026-09-24: lịch sử trước đó là giá Perp (proxy), ngưỡng làm nóng 400 nến.
 
 ## Các cổng duyệt (mỗi cổng cần Julius đồng ý riêng)
 
@@ -49,8 +49,10 @@ Cơ sở: [ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md), [ADR-0
 - [ ] Binance Demo: One-way, Single-asset, **Isolated**; tài khoản chuyên dụng, không giao dịch tay.
 - [x] **Demo liệt kê cả 5 coin ở Spot và USD-M Perp** (`exchangeInfo` công khai của Demo, `TRADING`, kiểm ngày 2026-10-13). Vẫn chạy
       `aigt assets scan COIN --market spot|perp --notional 1000` cho từng route để có thanh khoản, bước giá và lệnh tối thiểu thật.
-- [ ] **HYPE vào active set với chế độ `perp` cho tới 2027-01-02** (Spot HYPE chỉ có nến 4h từ 2026-09-24, cần 600 nến liền mạch từ neo).
-      Venue Spot của HYPE đã sẵn sàng nhưng tín hiệu Spot thì chưa; khi đủ nến, `active-set switch` sang `both` lúc paused và flat.
+- [ ] **HYPE Spot chạy trên proxy giá Perp** (Julius chốt 2026-10-13): nến H4 Spot trước 2026-09-24T08:00Z lấy giá từ Perp (volume 0),
+      ngưỡng làm nóng 400 nến, miễn trừ gate ≥ 6 lệnh. Volume và volume profile là của Spot thật nên **không có lệnh vào Spot HYPE trước
+      2026-10-14 08:00Z** (đủ 20 ngày M15 Spot); báo cáo gate mang nhãn `setup2_spot_price_proxied_from_perp` và `waived_minimum_6_closed_trades`.
+      Gỡ proxy và miễn trừ bằng `active-set switch` khi Spot HYPE đủ 600 nến thật (2027-01-02); miễn trừ tự hết hiệu lực khi đó.
 
 ## Giai đoạn 2: sao lưu và deploy (G1, G2)
 
@@ -66,22 +68,24 @@ Cơ sở: [ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md), [ADR-0
 
 ```bash
 aigt active-set init --profile setup2_slots_v1 --anchor 2025-06-01 \
-  --coin ETH:both --coin NEAR:both --coin SOL:both --coin ZEC:both --coin HYPE:perp \
+  --coin ETH:both --coin NEAR:both --coin SOL:both --coin ZEC:both --coin HYPE:both \
+  --warmup HYPE=400 --spot-proxy HYPE=2026-09-24T08:00:00Z --waive-min-trades HYPE:spot \
   --actor julius --reason "ADR-007 rollout" [--no-demo-portfolio]
 ```
 
-- [ ] `aigt active-set show`: version 1, `rule_profile: setup2_slots_v1`, split 0,5/0,5, 5 coin, HYPE `perp`.
+- [ ] `aigt active-set show`: version 1, `rule_profile: setup2_slots_v1`, split 0,5/0,5, 5 coin, HYPE `both` kèm `warmup_bars: 400`, `spot_price_proxy_until` và `waive_min_trades: ["spot"]`.
 - [ ] Vòng Jev 30 giây tắt; coin ngoài danh sách ghi `skipped_inactive`.
 
 ## Giai đoạn 4: dữ liệu, rule, gate v2 (G4)
 
-Lặp cho từng route (ETH, NEAR, SOL, ZEC: spot và perp; HYPE: perp), 9 route:
+Lặp cho từng route (ETH, NEAR, SOL, ZEC, HYPE: spot và perp), 10 route:
 
-- [ ] `aigt setup2 backfill --symbol COIN --market MARKET` (cần 600 nến H4 liền mạch từ neo).
+- [ ] `aigt setup2 backfill --symbol COIN --market MARKET` (cần 600 nến H4 liền mạch từ neo, 400 với HYPE). Với HYPE backfill **Perp trước, Spot sau**:
+      Spot chỉ tải từ 2026-09-24, và nến Perp trước mốc đó phải liền mạch từ neo.
 - [ ] `aigt setup2 evaluate --symbol COIN --market MARKET --profile setup2_slots_v1` (chỉ đọc).
 - [ ] `aigt setup2 candidate --symbol COIN --market MARKET --profile setup2_slots_v1 --actor julius --reason "ADR-007" [--retire-open]`
       (ghi `rule_id`; `--profile` mặc định là `setup2_v1`, **bắt buộc truyền** cho thiết kế này).
-- [ ] `aigt assets rules replay CANDIDATE_ID --engine v2`: cần ≥ 6 lệnh đóng, lãi ròng > 0, DD < 15%, ≥ 600 nến từ neo, phủ nến ≥ 99%.
+- [ ] `aigt assets rules replay CANDIDATE_ID --engine v2`: cần ≥ 6 lệnh đóng (miễn trừ cho Spot HYPE), lãi ròng > 0, DD < 15%, ≥ 600 nến từ neo (400 với HYPE), phủ nến ≥ 99%.
       Chưa đủ lệnh thì `deferred`, chạy lại hằng tuần.
 - [ ] Julius duyệt G4, rồi `aigt assets rules start-soak CANDIDATE_ID [--evaluation-id REPLAY_EVALUATION_ID]`; soak ≥ 14 ngày, heartbeat ≥ 95%.
 - [ ] `aigt assets rules evaluate CANDIDATE_ID`, rồi `aigt assets rules activate CANDIDATE_ID --evaluation-id SOAK_EVALUATION_ID`.

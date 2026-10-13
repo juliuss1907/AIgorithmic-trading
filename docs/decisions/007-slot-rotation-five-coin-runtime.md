@@ -103,3 +103,38 @@ an audited `active-set switch` to `both` (paused and flat) enables its Spot slee
   active-set extension tables, as in ADR-006.
 - Deployment to Binance Demo and any VPS change need separate operator approval and a verified
   backup; this ADR does not authorize them.
+
+## Addendum 2026-10-13: Spot HYPE on a Perp price proxy, a 400-bar warm-up and a scoped waiver
+
+**Why.** The operator wants Spot HYPE to run on Demo with the other coins now, not after 2027-01-02. Spot HYPE has 4h bars from
+2026-09-24 only, and the Setup-2 gate asks for 600 contiguous H4 bars and at least six closed trades per route.
+
+**Decision (operator).**
+
+- **Warm-up 400 for HYPE.** A per-coin `warmup_bars` (400 to 600, default 600) replaces the single constant. Measured on public data
+  (ETH, SOL, NEAR, ZEC, 120 H4 bars): with 400 bars or more the trend filters (EMA200, EMA50, ADX, DMI) decide the same as with the
+  full history (EMA200 within 0,1%, 0 of 114 passing setups missed); below 300 bars EMA200 differs by up to 3% and decisions can flip.
+- **Price-only proxy.** For HYPE, Spot H4 bars before `2026-09-24T08:00Z` (its first own bar) take their OHLC from the HYPE Perp
+  series with the volume set to zero. Measured basis over 115 shared bars: Spot above Perp by 0,057% on average, at most 0,125%.
+  Stitched series differ from Spot-only history by 0,02% in EMA200 (median) and flip 0,06% to 0,6% of filter decisions, the order of
+  the basis itself. **Volume and the volume profile are never proxied** (Spot volume is about 5% of Perp volume): the evaluator
+  blocks entries while the volume MA20 window touches proxied bars (`proxy_volume_warmup`) and while the 20-day M15 profile window
+  is incomplete (`profile_incomplete`), so the proxy can only warm EMA and ADX, never create an entry.
+- **Scoped waiver.** For the Spot route of a coin with a proxy, the replay gate does not require six closed trades; with zero
+  closed trades the non-positive-net criterion is waived too. With one to five trades net profit above zero and drawdown below
+  15% still apply. The waiver is recorded in the active-set version, shows in every gate report (`waived_*`, limitation
+  `setup2_spot_price_proxied_from_perp`) and **lapses by itself** when the Spot market has `warmup_bars` bars of its own.
+
+**What this is not.** The replay of Spot HYPE has almost no trades (volume and profile exist only since 2026-09-24, entries are
+possible from 2026-10-14 08:00Z), so the Spot HYPE route passes the gate on process evidence (the 14-day soak, heartbeat,
+risk limits and the EMA/ADX history), not on closed-trade evidence like the other routes. Risk is bounded by the slot (a third of
+the sleeve), the 5% stop, three positions and the 3% daily loss.
+
+**Check on the stored proxy.** The live evaluator over the HYPE Spot series built from public data (2025-06-01 to 2026-10-13,
+2.882 proxied bars plus 116 own bars) produced no Spot entry, with `proxy_volume_warmup` on the first 20 own bars and
+`profile_incomplete` on the rest; the latest bar fails the EMA200, EMA50, DMI, volume and profile filters (HYPE is below its
+averages). The Perp short rule fired 38 times since its warm-up, the latest on 2026-10-12 20:00Z.
+
+**Removal.** The proxy is data-plumbing for a young market, not a permanent design. When Spot HYPE reaches 600 own bars
+(2027-01-02) the operator removes `spot_price_proxy_until` and the waiver through an audited `active-set switch`
+(paused and flat); the waiver stops applying on its own at that point.
