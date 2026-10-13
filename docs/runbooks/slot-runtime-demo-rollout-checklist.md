@@ -67,12 +67,14 @@ Cơ sở: [ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md), [ADR-0
 Điều kiện: Demo paused và flat, BTC paper paused và flat, `perp_intraday` flat, và Stage 0 đã ghi nhận.
 
 ```bash
-aigt active-set init --profile setup2_slots_v1 --anchor 2025-06-01 \
+aigt active-set init --profile setup2_slots_v1 --anchor 2024-01-01 --anchor HYPE=2025-06-01 \
   --coin ETH:both --coin NEAR:both --coin SOL:both --coin ZEC:both --coin HYPE:both \
   --warmup HYPE=400 --spot-proxy HYPE=2026-09-24T08:00:00Z --waive-min-trades HYPE:spot \
   --actor julius --reason "ADR-007 rollout" [--no-demo-portfolio]
 ```
 
+- [ ] **Neo là quyết định của Julius** (xem "Chạy thử trên database tạm"): `2024-01-01` cho ETH/NEAR/SOL/ZEC (30 tháng replay, 7 trong 8 route qua gate)
+      và `2025-06-01` cho HYPE (Perp chỉ có từ 2025-05-30); neo `2025-06-01` cho cả năm coin chỉ cho 6 trong 10 route qua gate.
 - [ ] `aigt active-set show`: version 1, `rule_profile: setup2_slots_v1`, split 0,5/0,5, 5 coin, HYPE `both` kèm `warmup_bars: 400`, `spot_price_proxy_until` và `waive_min_trades: ["spot"]`.
 - [ ] Vòng Jev 30 giây tắt; coin ngoài danh sách ghi `skipped_inactive`.
 
@@ -85,6 +87,8 @@ Lặp cho từng route (ETH, NEAR, SOL, ZEC, HYPE: spot và perp), 10 route:
 - [ ] `aigt setup2 evaluate --symbol COIN --market MARKET --profile setup2_slots_v1` (chỉ đọc).
 - [ ] `aigt setup2 candidate --symbol COIN --market MARKET --profile setup2_slots_v1 --actor julius --reason "ADR-007" [--retire-open]`
       (ghi `rule_id`; `--profile` mặc định là `setup2_v1`, **bắt buộc truyền** cho thiết kế này).
+- [ ] Route Perp cần funding phủ cả cửa sổ replay: `aigt replay funding fetch COIN --from <neo + ngưỡng làm nóng> --to <ranh giới H4 gần nhất> --report-dir ...`
+      rồi truyền `--funding-id`. Cửa sổ funding kết thúc trước ranh giới H4 cuối thì gate báo `funding_coverage_incomplete`.
 - [ ] `aigt assets rules replay CANDIDATE_ID --engine v2`: cần ≥ 6 lệnh đóng (miễn trừ cho Spot HYPE), lãi ròng > 0, DD < 15%, ≥ 600 nến từ neo (400 với HYPE), phủ nến ≥ 99%.
       Chưa đủ lệnh thì `deferred`, chạy lại hằng tuần.
 - [ ] Julius duyệt G4, rồi `aigt assets rules start-soak CANDIDATE_ID [--evaluation-id REPLAY_EVALUATION_ID]`; soak ≥ 14 ngày, heartbeat ≥ 95%.
@@ -119,3 +123,34 @@ Pause portfolio (stop gốc được giữ), `aigt execution demo flatten`, rồ
 - Acceptance có giám sát với tiền Demo cho đường lệnh, stop và đối soát (chưa từng có), cũng như ghi và đọc lại leverage.
 - Hành vi thật của Demo với HYPE, ZEC (thanh khoản, bước giá, lệnh tối thiểu).
 - Hiệu ứng của Jev lên tập lệnh so với replay; xoay vị thế chạy tuần tự (đóng rồi mở) nên có trượt giá giữa hai lệnh.
+
+## Chạy thử trên database tạm (2026-10-13, dữ liệu công khai, chỉ đọc)
+
+Mình chạy đúng các lệnh ở trên (`active-set init`, `setup2 backfill`, `evaluate`, `candidate`, `replay funding fetch`, `assets rules replay --engine v2`)
+trên một database tạm, không chạm VPS hay Demo.
+
+**Lỗi tìm thấy và đã sửa:** nến M15 Spot HYPE đầu tiên là 11:00, ba giờ sau nến H4 đầu (08:00); backfill từ đúng mốc proxy bị từ chối
+(`incomplete native Futures window`). `setup2.sync` nay dò nến đầu tiên có thật của thị trường Spot trước khi tải (có test).
+
+**Kết quả gate replay v2 theo route** (cửa sổ bắt đầu tại neo + ngưỡng làm nóng, kết thúc 2026-10-13 12:00Z, một vị thế một coin, slot 1/3 túi 50%):
+
+| Route | Neo 2025-06-01 (13 tháng) | Neo 2024-01-01 (30 tháng) |
+|---|---|---|
+| ETH Spot | **loại**: −2,63% / 14 lệnh | qua: +1,98% / 36 lệnh |
+| ETH Perp | qua: +4,82% / 20 lệnh | qua: +5,44% / 46 lệnh |
+| NEAR Spot | qua: +9,54% / 18 lệnh | qua: +9,38% / 40 lệnh |
+| NEAR Perp | **loại**: −0,70% / 14 lệnh | qua: +5,03% / 39 lệnh |
+| SOL Spot | qua: +0,06% / 15 lệnh | qua: +1,53% / 39 lệnh |
+| SOL Perp | qua: +4,11% / 17 lệnh | qua: +4,54% / 42 lệnh |
+| ZEC Spot | qua: +14,03% / 24 lệnh | qua: +15,09% / 47 lệnh |
+| ZEC Perp | **loại**: −2,79% / 11 lệnh | **loại**: −1,69% / 31 lệnh |
+| HYPE Spot | qua (miễn trừ): 0 lệnh | không có lịch sử |
+| HYPE Perp | **loại**: −4,36% / 20 lệnh, DD 7,1% | không có lịch sử |
+
+Điều cần quyết:
+
+- **Gate là kiểm tra từng route độc lập, lãi ròng > 0 trong cửa sổ**; kết quả nhạy theo cửa sổ. Cửa sổ dài cho nhiều lệnh hơn (31 đến 47 so với 11 đến 24), nên đáng tin hơn
+  ngưỡng "≥ 6 lệnh". Chọn neo theo coin là quyết định của Julius, không phải để "cho qua gate".
+- **ZEC Perp bị loại ở cả hai cửa sổ và HYPE Perp bị loại ở cửa sổ duy nhất có thể**: theo quy tắc hiện tại hai route này không kích hoạt được, và không có đường ngoại lệ.
+  Route không kích hoạt thì đơn giản không giao dịch; rổ thực chạy khi đó là Spot × 5 (HYPE nhờ miễn trừ) và Perp × 3 (ETH, NEAR, SOL).
+- **ETH Spot yếu trong 13 tháng gần nhất** (−2,6%) dù dương trong 30 tháng; HYPE Perp là coin đã lỗ trong cửa sổ có thể kiểm.

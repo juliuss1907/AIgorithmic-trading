@@ -4,6 +4,16 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-13 — Chạy thử quy trình triển khai trên database tạm (ADR-007)
+
+Nhánh: `feature/slot-runtime`. Chạy đúng các lệnh của checklist trên một database tạm với dữ liệu công khai (chỉ đọc), không chạm VPS hay Demo. Kết quả: [checklist](docs/runbooks/slot-runtime-demo-rollout-checklist.md).
+
+- **Lỗi tìm thấy và đã sửa:** backfill Spot HYPE bị từ chối vì nến M15 đầu tiên (11:00) muộn hơn nến H4 đầu (08:00) ba giờ; `setup2.sync` nay dò nến đầu tiên thật của Spot. Có test.
+- **CLI:** `active-set init/switch --anchor [COIN=]YYYY-MM-DD` cho phép neo khác nhau theo coin.
+- **Gate replay v2 trên dữ liệu thật:** với neo 2025-06-01 cho cả 5 coin, 4 trong 10 route bị loại (ETH Spot −2,6%, NEAR Perp −0,7%, ZEC Perp −2,8%, HYPE Perp −4,4%); với neo 2024-01-01 cho 4 coin cũ, 7 trong 8 route qua, chỉ ZEC Perp bị loại (−1,7%). HYPE Spot qua nhờ miễn trừ (0 lệnh).
+- **Điều cần Julius quyết:** neo theo coin, và chấp nhận rằng ZEC Perp và HYPE Perp không kích hoạt được theo quy tắc hiện tại (không có đường ngoại lệ).
+- **Quy trình Perp:** phải chạy `replay funding fetch` phủ đến ranh giới H4 gần nhất rồi truyền `--funding-id`, nếu không gate báo `funding_coverage_incomplete`.
+
 ## 2026-10-13 — Spot HYPE trên proxy giá Perp, ngưỡng 400 nến, miễn trừ gate lệnh (phụ lục ADR-007)
 
 Nhánh: `feature/slot-runtime`. Julius muốn Spot HYPE vào Demo cùng các coin khác thay vì chờ tới 2027-01-02. Chi tiết và số đo: phụ lục của [ADR-007](docs/decisions/007-slot-rotation-five-coin-runtime.md).
