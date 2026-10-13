@@ -51,6 +51,15 @@ Reference points: ADR-005 `H4` +81,7% / 11,6% (3 coins), and the same design at 
   research replay and by the runtime, so the same inputs give the same decision. The replay's
   reference cases keep their result ids byte for byte after the extraction.
 
+## Operator decision on the fifth coin (2026-10-13)
+
+After the Stage 0 result below (five coins did not improve on four with BTC standing in for HYPE), the operator kept
+HYPE as the fifth active coin. Binance Demo lists `HYPEUSDT` on Spot and on USD-M Perp (both `TRADING`, checked against
+the public Demo `exchangeInfo` on 2026-10-13, as are the other four coins), so venue availability is not the limit.
+The limit is the indicator warm-up: Spot HYPE has 4h bars only from 2026-09-24, so 600 contiguous bars are reached on
+**2027-01-02**; Perp HYPE (from 2025-05-30) has had them since 2025-09-07. Until 2027-01-02 HYPE runs `perp`; after that
+an audited `active-set switch` to `both` (paused and flat) enables its Spot sleeve.
+
 ## Evidence and its limits
 
 - Every number above was measured on data the design was chosen on (27 cases on one window); a

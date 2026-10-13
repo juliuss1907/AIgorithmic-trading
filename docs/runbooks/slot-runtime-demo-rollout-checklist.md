@@ -10,7 +10,7 @@ Cơ sở: [ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md), [ADR-0
 | Mục | Giá trị |
 |---|---|
 | Profile quy tắc | `setup2_slots_v1`: Donchian **25/10** H4, EMA200/50, ADX14 > 20 và đang tăng, volume ×1,2, volume profile, ATR14×3, **stop chặn 5%** |
-| Coin | ETH, NEAR, SOL, ZEC (`both`) và HYPE (`perp` cho tới khi đủ 600 nến H4 Spot) |
+| Coin | ETH, NEAR, SOL, ZEC (`both`) và HYPE (`perp` cho tới 2027-01-02, khi đủ 600 nến H4 Spot) |
 | Túi | Spot 50% / Perp short 1x 50%, tách riêng; vị thế tối đa **1/3 vốn thực hiện của túi** nhân hệ số ATR |
 | Danh mục | Tối đa **3 vị thế** trên hai túi, một vị thế mỗi coin; cổng PnL sổ đang mở; xoay vị thế khi ADX hơn > 5 điểm |
 | Jev | Luật tạo tín hiệu, Jev xác nhận (short cần SELL/STRONG_SELL); xoay vị thế chỉ đóng vị thế yếu **sau** khi ứng viên được xác nhận |
@@ -47,8 +47,10 @@ Cơ sở: [ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md), [ADR-0
 - [ ] Credit OpenRouter nạp đủ; `aigt provider list` ổn.
 - [ ] Demo key (quyền Spot và USD-M Futures, không rút): `! uv run aigt connect bnb demo` (nhập ẩn). Không dán key vào chat hay `.env`.
 - [ ] Binance Demo: One-way, Single-asset, **Isolated**; tài khoản chuyên dụng, không giao dịch tay.
-- [ ] **Xác nhận Demo liệt kê** `ZECUSDT` và `HYPEUSDT` (Spot cho ZEC, USD-M Perp cho cả hai) bằng `aigt assets scan COIN --market spot|perp --notional 1000`.
-      Coin nào thiếu thì hạ về `watch` và báo Julius, không ép vào active set.
+- [x] **Demo liệt kê cả 5 coin ở Spot và USD-M Perp** (`exchangeInfo` công khai của Demo, `TRADING`, kiểm ngày 2026-10-13). Vẫn chạy
+      `aigt assets scan COIN --market spot|perp --notional 1000` cho từng route để có thanh khoản, bước giá và lệnh tối thiểu thật.
+- [ ] **HYPE vào active set với chế độ `perp` cho tới 2027-01-02** (Spot HYPE chỉ có nến 4h từ 2026-09-24, cần 600 nến liền mạch từ neo).
+      Venue Spot của HYPE đã sẵn sàng nhưng tín hiệu Spot thì chưa; khi đủ nến, `active-set switch` sang `both` lúc paused và flat.
 
 ## Giai đoạn 2: sao lưu và deploy (G1, G2)
 
