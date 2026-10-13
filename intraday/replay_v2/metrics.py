@@ -29,7 +29,10 @@ def journal_hash(rows):
 def dataset_fingerprint(data):
     setup2 = ({"profile_candles": [[b.opened_at.isoformat(), str(b.open), str(b.high), str(b.low), str(b.close),
                                     str(b.volume)] for b in data.profile_candles],
-               "indicator_anchor": data.indicator_anchor.isoformat()} if data.indicator_anchor else {})
+               "indicator_anchor": data.indicator_anchor.isoformat(),
+               **({"warmup_bars": data.warmup_bars} if data.warmup_bars else {}),
+               **({"price_proxy_until": data.price_proxy_until.isoformat()} if data.price_proxy_until else {})}
+              if data.indicator_anchor else {})
     return fingerprint({**setup2, "rule": data.rule.model_dump(mode="json"),
         "candles": [c.model_dump(mode="json") for c in data.candles],
         "quotes": [q.model_dump(mode="json") for q in data.quotes],

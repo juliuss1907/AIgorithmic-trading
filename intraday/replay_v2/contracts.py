@@ -239,3 +239,6 @@ class ReplayDataset:
     # Setup-2 volume-profile M15 bars and the indicator anchor; empty for every legacy rule.
     profile_candles: tuple = ()
     indicator_anchor: datetime | None = None
+    # ADR-007 addendum, Setup-2 only: per-coin warm-up and the boundary before which Spot H4 bars are Perp prices.
+    warmup_bars: int | None = None
+    price_proxy_until: datetime | None = None

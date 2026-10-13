@@ -56,16 +56,21 @@ def perp_evidence(reader, rule, start, end, data=None):
 def _setup2_inputs(reader, rule, market, now, *, campaign=None):
     """Anchored Setup-2 history: replay starts once 600 bars warm the indicators up."""
     from intraday import setup2
-    from intraday.setup2_store import coin_anchor, heartbeat, list_bars
-    anchor = coin_anchor(reader, rule.symbol)
-    bars = list_bars(reader, rule.symbol, market, "4h", since=anchor, until=now)
+    from intraday.setup2_store import coin_settings, heartbeat, own_spot_bars, proxied_bars
+    settings = coin_settings(reader, rule.symbol)
+    anchor = settings.anchor
+    bars = proxied_bars(reader, rule.symbol, market, "4h", since=anchor, until=now, settings=settings)
     expected = int((setup2.floor_h4(now)-anchor)/setup2.H4)
     contiguous = setup2.anchored(bars, anchor) is not None
     end = bars[-1].available_at if bars else now
-    start = anchor+setup2.WARMUP_BARS*setup2.H4
+    start = anchor+settings.warmup_bars*setup2.H4
     if start >= end:
         start = end-setup2.H4
-    values = dict(history_bars=len(bars) if contiguous else 0,
+    # The waiver ends once the Spot market has enough bars of its own (the proxy is then to be removed).
+    waived = (market in settings.waive_min_trades and settings.proxy_until is not None
+              and own_spot_bars(settings, bars) < settings.warmup_bars)
+    values = dict(history_bars=len(bars) if contiguous else 0, required_bars=settings.warmup_bars,
+                  min_trades_waived=waived,
                   history_coverage=min(1.0, len(bars)/expected) if expected and contiguous else 0.0,
                   latest_candle_age_seconds=(now-bars[-1].available_at).total_seconds() if bars else None)
     if campaign:

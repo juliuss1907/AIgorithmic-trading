@@ -22,6 +22,9 @@ def profile_fingerprint(profile: ExecutionProfile):
 
 class GateEvidence(FrozenModel):
     history_bars: int = Field(default=0, ge=0)
+    required_bars: int = Field(default=600, ge=1)
+    # ADR-007 addendum: a Perp-proxied Spot market is judged without the six-closed-trades criterion.
+    min_trades_waived: bool = False
     history_coverage: float = Field(default=0, ge=0, le=1)
     latest_candle_age_seconds: float | None = Field(default=None, ge=0)
     elapsed_days: float = Field(default=0, ge=0)
@@ -146,8 +149,8 @@ def evaluate_report_gate(report, evidence: GateEvidence, *, champion=None, kind=
         rejected.append("hard_risk_violation")
     setup2 = is_setup2_report(report)
     if setup2:
-        if evidence.history_bars < 600:
-            waiting.append("minimum_600_anchored_h4_bars")
+        if evidence.history_bars < evidence.required_bars:
+            waiting.append(f"minimum_{evidence.required_bars}_anchored_h4_bars")
         if evidence.history_coverage < .99:
             waiting.append("4h_candle_coverage_below_99pct")
         if evidence.latest_candle_age_seconds is None or evidence.latest_candle_age_seconds > 14700:
@@ -186,11 +189,21 @@ def evaluate_report_gate(report, evidence: GateEvidence, *, champion=None, kind=
         "no_valid_perp_quotes", "no_verified_recorded_decisions", "setup2_warmup_inside_window",
         "setup2_history_not_anchored")):
         waiting.append("replay_price_or_decision_history_incomplete")
+    waivers = []
+    waived = setup2 and evidence.min_trades_waived
     if summary.get("closed_trades", 0) < 6:
-        waiting.append("minimum_6_closed_trades")
+        if waived:
+            waivers.append("minimum_6_closed_trades")
+        else:
+            waiting.append("minimum_6_closed_trades")
     net, drawdown = summary.get("net_return_pct"), summary.get("max_drawdown_known_pct")
     if net is not None and net <= 0:
-        rejected.append("nonpositive_net_return")
+        if waived and summary.get("closed_trades", 0) == 0:
+            waivers.append("nonpositive_net_return_without_trades")
+        else:
+            rejected.append("nonpositive_net_return")
+    for code in waivers:
+        metrics["waived_"+code] = 1  # GateOutcome metrics are numeric; each waiver leaves a visible flag.
     if drawdown is None:
         waiting.append("drawdown_unknown")
     elif setup2 and drawdown >= 15:

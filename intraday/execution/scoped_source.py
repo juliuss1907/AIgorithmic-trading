@@ -131,10 +131,12 @@ class ScopedEvidenceSource(EvidenceSource):
     def setup2_trail(self, *, side, entry_price, signal_atr, entered_at, now):
         """Stateless capped ATR trail recomputed from stored bars; restarts cannot lose it."""
         from intraday import setup2
-        from intraday.setup2_store import coin_anchor, list_bars
+        from intraday.setup2_store import coin_settings, proxied_bars
         reader = self._reader()
-        anchor = coin_anchor(reader, self.symbol)
-        bars = list_bars(reader, self.symbol, self.market, "4h", since=anchor, until=setup2.floor_h4(now))
+        settings = coin_settings(reader, self.symbol)
+        anchor = settings.anchor
+        bars = proxied_bars(reader, self.symbol, self.market, "4h", since=anchor, until=setup2.floor_h4(now),
+                            settings=settings)
         profile = getattr(self.rule().parameters, "entry_profile", "setup2_v1")
         return setup2.trail_stop(side, entry_price, signal_atr, bars, entered_at=entered_at, anchor=anchor,
                                  cap=setup2.stop_cap(profile))

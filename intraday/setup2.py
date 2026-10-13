@@ -22,6 +22,8 @@ STOP_CAP = Decimal('.10')
 ENTRY_WINDOWS = {'setup2_v1': ENTRY, 'setup2_slots_v1': 25}
 STOP_CAPS = {'setup2_v1': STOP_CAP, 'setup2_slots_v1': Decimal('.05')}
 EVALUATOR_VERSIONS = {'setup2_v1': EVALUATOR_VERSION, 'setup2_slots_v1': 'setup2-slots-live-v1'}
+# A volume MA20 window that touches Perp-proxied bars (volume zero) is not a Spot volume: no entries (ADR-007).
+PROXY_VOLUME_BARS = 20
 # Slot design (ADR-007): positions across both sleeves, a position's share of its sleeve, rotation margin.
 SLOT_MAX_POSITIONS, SLOT_DIVISOR, ROTATION_MARGIN = 3, 3, Decimal(5)
 # Spot and Perp sleeve shares of capital per profile (60/40 of ADR-006; 50/50 slot design of ADR-007).
@@ -107,8 +109,11 @@ def stop_cap(profile='setup2_v1'):
     return STOP_CAPS[profile]
 
 
-def _observe(series, indicators, i, m15, times, side, profile='setup2_v1'):
-    """Observation for closed bar `i` of an anchored series; `indicators` is its causal pass."""
+def _observe(series, indicators, i, m15, times, side, profile='setup2_v1', own_from=None):
+    """Observation for closed bar `i` of an anchored series; `indicators` is its causal pass.
+
+    `own_from` is the first bar of the market's own data when earlier bars are a price proxy: their volume
+    is zero, so a trigger whose volume MA20 window reaches them cannot enter."""
     entry, version = _profile(profile)
     trigger = series[i]
     f = indicators[i].copy()
@@ -116,6 +121,8 @@ def _observe(series, indicators, i, m15, times, side, profile='setup2_v1'):
     # Profile ends at the trigger OPEN: (open-480h, open] by availability, as in research.
     window = m15[bisect_right(times, trigger.opened_at-PROFILE_WINDOW):bisect_right(times, trigger.opened_at)]
     blockers = []
+    if own_from is not None and trigger.opened_at < own_from+PROXY_VOLUME_BARS*H4:
+        blockers.append('proxy_volume_warmup')
     if len(window) != PROFILE_BARS or not contiguous(window, M15):
         blockers.append('profile_incomplete')
         f['profile'] = None
@@ -140,24 +147,25 @@ def _not_ready(side):
     return Setup2Observation(side, None, None, False, False, False, blockers=('history_not_ready',))
 
 
-def evaluate_setup2(h4, m15, *, side, anchor, profile='setup2_v1'):
+def evaluate_setup2(h4, m15, *, side, anchor, profile='setup2_v1', warmup_bars=WARMUP_BARS, own_from=None):
     """Signal on the last closed H4 bar. Missing data blocks entries but never exits."""
     if side not in (1, -1):
         raise ValueError('side must be +1 (Spot long) or -1 (Perp short)')
     series = anchored(h4, anchor)
-    if series is None or len(series) < WARMUP_BARS:
+    if series is None or len(series) < warmup_bars:
         return _not_ready(side)
-    return _observe(series, indicator_series(series), len(series)-1, m15, [b.available_at for b in m15], side, profile)
+    return _observe(series, indicator_series(series), len(series)-1, m15, [b.available_at for b in m15], side, profile,
+                    own_from)
 
 
-def series_observations(h4, m15, *, side, anchor, profile='setup2_v1'):
+def series_observations(h4, m15, *, side, anchor, profile='setup2_v1', warmup_bars=WARMUP_BARS, own_from=None):
     """Every warmed-up bar of one anchored series with a single causal indicator pass (replay)."""
     series = anchored(h4, anchor)
     if series is None:
         return series, []
     indicators, times = indicator_series(series), [b.available_at for b in m15]
-    return series, [_observe(series, indicators, i, m15, times, side, profile) if i >= WARMUP_BARS-1 else None
-                    for i in range(len(series))]
+    return series, [_observe(series, indicators, i, m15, times, side, profile, own_from)
+                    if i >= warmup_bars-1 else None for i in range(len(series))]
 
 
 def trail_stop(side, entry_price, signal_atr, h4, *, entered_at, anchor, cap=STOP_CAP):

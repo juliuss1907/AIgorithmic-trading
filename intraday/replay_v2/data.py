@@ -122,16 +122,21 @@ def load_dataset(database: str | Path, config: ReplayConfig, *, reader=None) -> 
         evaluation = store.latest_scoped_rule_evaluation(rule.rule_id, kind="replay")
         reference = evaluation.model_dump(mode="json") if evaluation else None
         if is_setup2_profile(getattr(rule.parameters, "entry_profile", None)):
-            from intraday.setup2_store import coin_anchor, list_bars, profile_start
-            anchor = coin_anchor(store, config.symbol)
+            from intraday.setup2_store import coin_settings, list_bars, profile_start, proxied_bars
+            settings = coin_settings(store, config.symbol)
+            anchor = settings.anchor
             candles = tuple(Candle(opened_at=b.opened_at, available_at=b.available_at, open=b.open, high=b.high,
                                    low=b.low, close=b.close, volume=b.volume)
-                            for b in list_bars(store, config.symbol, config.market, "4h", since=anchor,
-                                               until=config.end))
-            profile = tuple(list_bars(store, config.symbol, config.market, "15m", since=profile_start(anchor),
-                                      until=config.end))
-            return ReplayDataset(rule=rule, candles=candles, profile_candles=profile, indicator_anchor=anchor,
-                                 v1_reference=reference)
+                            for b in proxied_bars(store, config.symbol, config.market, "4h", since=anchor,
+                                                  until=config.end, settings=settings))
+            profile = tuple(list_bars(store, config.symbol, config.market, "15m",
+                                      since=profile_start(anchor, settings.warmup_bars), until=config.end))
+            proxied = config.market == "spot" and settings.proxy_until is not None
+            return ReplayDataset(
+                rule=rule, candles=candles, profile_candles=profile, indicator_anchor=anchor, v1_reference=reference,
+                warmup_bars=settings.warmup_bars if settings.warmup_bars != 600 else None,
+                price_proxy_until=settings.proxy_until if proxied else None,
+                limitations=("setup2_spot_price_proxied_from_perp",) if proxied else ())
         if config.market == "spot":
             candles = tuple(Candle.from_row(row) for row in store.list_asset_candles(
                 config.symbol, "4h", as_of=config.end))

@@ -139,8 +139,9 @@ def _setup2(config, data, book, limitations, side=1):
     from intraday import setup2
     from intraday.replay_v2.donchian_filter_book import ATRTrail
     profile = getattr(data.rule.parameters, "entry_profile", "setup2_v1")
-    series, observations = setup2.series_observations(list(data.candles), list(data.profile_candles),
-                                                       side=side, anchor=data.indicator_anchor, profile=profile)
+    series, observations = setup2.series_observations(
+        list(data.candles), list(data.profile_candles), side=side, anchor=data.indicator_anchor, profile=profile,
+        warmup_bars=data.warmup_bars or setup2.WARMUP_BARS, own_from=data.price_proxy_until)
     if series is None:
         limitations.add("setup2_history_not_anchored")
         return

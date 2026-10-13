@@ -4,7 +4,9 @@ Extension tables only; the source schema version is unchanged. Bars are immutabl
 and each evaluated closed H4 bar leaves one observation row, which is the Setup-2 heartbeat.
 """
 
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from decimal import Decimal
 import json
 import sqlite3
 
@@ -82,9 +84,52 @@ def list_bars(store, symbol, market, interval, *, since=None, until=None):
     return setup2.bars([json.loads(r['payload_json']) for r in rows], WIDTHS[interval])
 
 
-def profile_start(anchor):
+@dataclass(frozen=True)
+class CoinSettings:
+    """What the active set records for one coin's Setup-2 series (ADR-007 addendum)."""
+    anchor: datetime
+    warmup_bars: int = setup2.WARMUP_BARS
+    proxy_until: datetime | None = None
+    waive_min_trades: frozenset = frozenset()
+
+
+def coin_settings(store, symbol, *, anchor=None):
+    """Anchor, warm-up, Spot price proxy and waiver of an active or watched coin.
+
+    `anchor` keeps callers that pass their own anchor (tests, one-off evaluation) on the defaults."""
+    version = active_set.current(store)
+    coin = version.plan.coins.get(symbol) if version else None
+    if coin is not None:
+        return CoinSettings(coin.indicator_anchor, coin.warmup_bars, coin.spot_price_proxy_until,
+                            frozenset(coin.waive_min_trades))
+    found = version.plan.anchor(symbol) if version else None
+    found = found or anchor
+    if found is None:
+        raise ValueError('setup2 rules run only for active or watched coins')
+    return CoinSettings(found)
+
+
+def proxied_bars(store, symbol, market, interval, *, since=None, until=None, settings=None):
+    """The series a rule evaluates. Spot H4 bars before the coin's proxy boundary are its Perp bars with the
+    price kept and the volume zeroed (Spot volume is a different, much smaller quantity); everything else is
+    the stored market's own bars. Raw stored bars are never altered."""
+    settings = settings or coin_settings(store, symbol)
+    own = list_bars(store, symbol, market, interval, since=since, until=until)
+    if market != 'spot' or interval != '4h' or settings.proxy_until is None:
+        return own
+    cut = settings.proxy_until
+    proxy = [replace(b, volume=Decimal(0)) for b in list_bars(store, symbol, 'perp', '4h', since=since, until=cut)]
+    return proxy+[b for b in own if b.opened_at >= cut]
+
+
+def own_spot_bars(settings, bars):
+    """Bars of the Spot market's own data in a proxied series."""
+    return len(bars) if settings.proxy_until is None else sum(b.opened_at >= settings.proxy_until for b in bars)
+
+
+def profile_start(anchor, warmup_bars=setup2.WARMUP_BARS):
     """First M15 bar needed: the profile of the first fully warmed-up trigger bar."""
-    return anchor+(setup2.WARMUP_BARS-1)*setup2.H4-setup2.PROFILE_WINDOW
+    return anchor+(warmup_bars-1)*setup2.H4-setup2.PROFILE_WINDOW
 
 
 def sync(store, symbol, market, *, anchor, now, fetch_spot=None, fetch_perp=None):
@@ -93,7 +138,12 @@ def sync(store, symbol, market, *, anchor, now, fetch_spot=None, fetch_perp=None
     from intraday.replay_v2.historical_data import fetch_candle_snapshot
     end = setup2.floor_h4(now)
     fetched = {}
-    for interval, first in (('4h', anchor), ('15m', profile_start(anchor))):
+    settings = coin_settings(store, symbol, anchor=anchor)
+    # A proxied Spot market stores only its own bars: nothing exists before its listing.
+    floor = settings.proxy_until if market == 'spot' and settings.proxy_until else None
+    for interval, first in (('4h', anchor), ('15m', profile_start(anchor, settings.warmup_bars))):
+        if floor is not None:
+            first = max(first, floor)
         stored = list_bars(store, symbol, market, interval, since=first)
         start = stored[-1].available_at if stored else first
         if start >= end:
@@ -111,9 +161,12 @@ def sync(store, symbol, market, *, anchor, now, fetch_spot=None, fetch_perp=None
 def evaluate(store, symbol, market, *, anchor, now, profile='setup2_v1'):
     side = 1 if market == 'spot' else -1
     until = setup2.floor_h4(now)
-    return setup2.evaluate_setup2(list_bars(store, symbol, market, '4h', since=anchor, until=until),
-                                  list_bars(store, symbol, market, '15m', since=profile_start(anchor), until=until),
-                                  side=side, anchor=anchor, profile=profile)
+    settings = coin_settings(store, symbol, anchor=anchor)
+    return setup2.evaluate_setup2(
+        proxied_bars(store, symbol, market, '4h', since=anchor, until=until, settings=settings),
+        list_bars(store, symbol, market, '15m', since=profile_start(anchor, settings.warmup_bars), until=until),
+        side=side, anchor=anchor, profile=profile, warmup_bars=settings.warmup_bars,
+        own_from=settings.proxy_until if market == 'spot' else None)
 
 
 def record_observation(store, symbol, market, rule_id, observation, *, active, jev_status, now):
@@ -146,11 +199,7 @@ def heartbeat(store, symbol, market, rule_id, *, start, end):
 
 
 def coin_anchor(store, symbol):
-    version = active_set.current(store)
-    anchor = version.plan.anchor(symbol) if version else None
-    if anchor is None:
-        raise ValueError('setup2 rules run only for active or watched coins')
-    return anchor
+    return coin_settings(store, symbol).anchor
 
 
 def run_setup2_observation(store, provider, snapshot, *, rule, market, now):

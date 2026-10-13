@@ -29,6 +29,13 @@ def add_active_set_parser(commands):
                              help="capital split in percent (default 60/40; the slot profile is 50/50)")
         command.add_argument("--profile", choices=("setup2_v1", "setup2_slots_v1"), default="setup2_v1",
                              help="setup2_slots_v1 is the ADR-007 slot design (up to five coins, 50/50)")
+        command.add_argument("--warmup", action="append", default=[], metavar="COIN=BARS",
+                             help="per-coin H4 warm-up bars, 400 to 600 (slot profile; default 600)")
+        command.add_argument("--spot-proxy", action="append", default=[], metavar="COIN=H4_BOUNDARY",
+                             help="Spot H4 bars before this UTC H4 boundary take their price from the coin's Perp "
+                                  "series (volume zero, no entries there); the coin's first own Spot bar is typical")
+        command.add_argument("--waive-min-trades", action="append", default=[], metavar="COIN:spot",
+                             help="waive the replay gate's six-closed-trades criterion for a Perp-proxied Spot route")
         command.add_argument("--anchor", default=None, metavar="YYYY-MM-DD",
                              help="indicator anchor for new coins (UTC date at an H4 boundary); an earlier anchor "
                                   "gives the replay gate more history")
@@ -63,8 +70,38 @@ def _override(arguments):
     return anchor
 
 
+def _per_coin(items, parse):
+    result = {}
+    for item in items:
+        coin, separator, value = item.partition("=")
+        if not separator or ticker_symbol(coin) in result:
+            raise ValueError("per-coin settings are COIN=VALUE, once per coin")
+        result[ticker_symbol(coin)] = parse(value)
+    return result
+
+
+def _boundary(value):
+    at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
+
+
+def _per_coin_settings(arguments):
+    warmup = _per_coin(getattr(arguments, "warmup", []), int)
+    proxy = _per_coin(getattr(arguments, "spot_proxy", []), _boundary)
+    waive = {}
+    for item in getattr(arguments, "waive_min_trades", []):
+        coin, separator, market = item.partition(":")
+        if not separator or market != "spot":
+            raise ValueError("--waive-min-trades takes COIN:spot")
+        waive[ticker_symbol(coin)] = True
+    return warmup, proxy, waive
+
+
 def build_plan(arguments, previous, now):
     profile = getattr(arguments, "profile", "setup2_v1")
+    warmup, proxy, waive = _per_coin_settings(arguments)
+    if (warmup or proxy or waive) and profile != "setup2_slots_v1":
+        raise ValueError("per-coin warm-up, proxy and waiver settings belong to the slot profile")
     default_split = "50/50" if profile == "setup2_slots_v1" else "60/40"
     spot, slash, perp = (arguments.split or default_split).partition("/")
     if not slash:
@@ -80,7 +117,7 @@ def build_plan(arguments, previous, now):
         if profile == "setup2_slots_v1":
             modes = {s: arguments.mode for s in symbols}
             return active_set.slots_plan(modes, anchors={s: _anchor(previous, s, now, override) for s in symbols},
-                                         watch=watch)
+                                         watch=watch, warmup=warmup, proxy=proxy, waive=waive)
         anchors = {_anchor(previous, s, now, override) for s in symbols}
         if len(anchors) != 1:
             raise ValueError("equal-weight switches need one anchor; use --coin per coin")
@@ -95,7 +132,7 @@ def build_plan(arguments, previous, now):
                 raise ValueError("the slot profile takes one --coin COIN:MODE per coin (spot, perp or both)")
             modes[ticker_symbol(symbol)] = mode
         return active_set.slots_plan(modes, anchors={s: _anchor(previous, s, now, override) for s in modes},
-                                     watch=watch)
+                                     watch=watch, warmup=warmup, proxy=proxy, waive=waive)
     coins = {}
     for item in arguments.coin:
         parts = item.split(":")

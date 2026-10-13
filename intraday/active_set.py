@@ -11,7 +11,7 @@ import hashlib
 import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from intraday.assets import normalize_symbol
 from intraday.contracts import DecisionScope, is_setup2_profile
@@ -28,16 +28,54 @@ H4 = timedelta(hours=4)
 WARMUP_BARS = 600
 
 
+MIN_WARMUP_BARS = 400  # The lowest warm-up measured to leave the trend filters unchanged (ADR-007).
+OWN_SPOT_BARS = 120    # Twenty days of Spot H4 bars: the volume profile of a Perp-proxied Spot coin is its own.
+
+
 class CoinPlan(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     mode: Literal['spot', 'perp', 'both']
     spot_weight: Decimal = Field(ge=0, le=1)
     perp_weight: Decimal = Field(ge=0, le=1)
     indicator_anchor: datetime
+    # ADR-007 addendum. `warmup_bars`: contiguous H4 bars from the anchor before a signal exists.
+    # `spot_price_proxy_until`: Spot H4 bars before this H4 boundary take their price from the coin's Perp series
+    # (volume zero, entries impossible there). `waive_min_trades`: the replay gate's six-closed-trades criterion is
+    # waived for these markets while the Spot series is still mostly proxy.
+    warmup_bars: int = Field(default=600, ge=MIN_WARMUP_BARS, le=600)
+    spot_price_proxy_until: datetime | None = None
+    waive_min_trades: tuple[Literal['spot'], ...] = ()
+
+    @model_serializer(mode='wrap')
+    def omit_defaults(self, handler):
+        # Stored active-set versions and their hash chain stay byte-identical.
+        payload = handler(self)
+        if self.warmup_bars == 600:
+            payload.pop('warmup_bars', None)
+        if self.spot_price_proxy_until is None:
+            payload.pop('spot_price_proxy_until', None)
+        if not self.waive_min_trades:
+            payload.pop('waive_min_trades', None)
+        return payload
 
     @property
     def markets(self):
         return {'spot', 'perp'} if self.mode == 'both' else {self.mode}
+
+    @model_validator(mode='after')
+    def proxy_follows_spot(self):
+        until = self.spot_price_proxy_until
+        if until is not None:
+            if 'spot' not in self.markets:
+                raise ValueError('a Spot price proxy needs the Spot market enabled')
+            if until.tzinfo is None or until.utcoffset() != timedelta(0) or (
+                    until-datetime(1970, 1, 1, tzinfo=timezone.utc)) % H4:
+                raise ValueError('the proxy boundary must be a UTC H4 boundary')
+            if until <= self.indicator_anchor:
+                raise ValueError('the proxy boundary must be after the indicator anchor')
+        if self.waive_min_trades and until is None:
+            raise ValueError('the closed-trades waiver is only for a Perp-proxied Spot market')
+        return self
 
     @model_validator(mode='after')
     def weights_follow_mode(self):
@@ -121,7 +159,7 @@ class ActiveSetVersion(BaseModel):
     plan: ActiveSetPlan
 
 
-def slots_plan(modes, *, anchors, watch=None):
+def slots_plan(modes, *, anchors, watch=None, warmup=None, proxy=None, waive=None):
     """Slot design plan (ADR-007): `modes` maps coin to spot/perp/both, `anchors` coin to its H4 anchor.
 
     Weights are equal within each market among the coins enabled there; they are bookkeeping only,
@@ -131,8 +169,14 @@ def slots_plan(modes, *, anchors, watch=None):
     equal = {m: weights(**{normalize_symbol(s).removesuffix('USDT'): 1 for s in coins}) if coins else {}
              for m, coins in markets.items()}
     zero = Decimal(0)
+    warmup, proxy, waive = warmup or {}, proxy or {}, waive or {}
+    if unknown := sorted((set(warmup) | set(proxy) | set(waive)) - set(modes)):
+        raise ValueError('per-coin warm-up, proxy and waiver settings need a coin of the plan: '+', '.join(unknown))
     coins = {s: CoinPlan(mode=mode, indicator_anchor=anchors[s],
-                         spot_weight=equal['spot'].get(s, zero), perp_weight=equal['perp'].get(s, zero))
+                         spot_weight=equal['spot'].get(s, zero), perp_weight=equal['perp'].get(s, zero),
+                         **({'warmup_bars': warmup[s]} if s in warmup else {}),
+                         **({'spot_price_proxy_until': proxy[s]} if s in proxy else {}),
+                         **({'waive_min_trades': ('spot',)} if waive.get(s) else {}))
              for s, mode in modes.items()}
     return ActiveSetPlan(coins=coins, spot_split=SLOT_SPLIT, perp_split=SLOT_SPLIT,
                          rule_profile='setup2_slots_v1', watch=watch or {})
@@ -253,6 +297,23 @@ def history_bars(store, symbol, anchor, now):
     return count
 
 
+def spot_history(store, symbol, coin, now):
+    """(usable bars, own bars) of a coin's Spot series: its own contiguous bars from the anchor, or, with a Perp
+    price proxy (ADR-007 addendum), the contiguous Perp bars before the boundary plus the Spot bars from it."""
+    until = coin.spot_price_proxy_until
+    if until is None:
+        own = history_bars(store, symbol, coin.indicator_anchor, now)
+        return own, own
+    from intraday.setup2_store import list_bars
+    own = history_bars(store, symbol, until, now)
+    proxy = list_bars(store, symbol, 'perp', '4h', since=coin.indicator_anchor, until=until)
+    expected = int((until-coin.indicator_anchor)/H4)
+    contiguous = len(proxy) == expected and all(
+        b.opened_at-a.opened_at == H4 for a, b in zip(proxy, proxy[1:])) and (
+            not proxy or proxy[0].opened_at == coin.indicator_anchor)
+    return (len(proxy) if contiguous else 0)+own, own
+
+
 def setup2_soak_passed(store, symbol, market):
     """A passing v2 soak evaluation for a Setup-2 rule of this coin and market."""
     from intraday.replay_v2.gate_repository import GateRepository
@@ -270,8 +331,12 @@ def setup2_soak_passed(store, symbol, market):
 def rotation_blockers(store, symbol, coin, now):
     """Fast rotation (ADR-004): history and a passing Setup-2 soak per market; no backtest."""
     blockers = []
-    if 'spot' in coin.markets and history_bars(store, symbol, coin.indicator_anchor, now) < WARMUP_BARS:
-        blockers.append('history_not_ready')
+    if 'spot' in coin.markets:
+        ready, own = spot_history(store, symbol, coin, now)
+        if ready < coin.warmup_bars:
+            blockers.append('history_not_ready')
+        elif coin.spot_price_proxy_until is not None and own < OWN_SPOT_BARS:
+            blockers.append('spot_own_history_not_ready')
     blockers += [f'{m}_setup2_gate_required' for m in sorted(coin.markets) if not setup2_soak_passed(store, symbol, m)]
     return blockers
 
@@ -320,8 +385,15 @@ def readiness_view(store, symbol, market, now, *, version=None):
     epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
     anchor = coin.indicator_anchor if coin else epoch + (now - epoch)//H4*H4 - WARMUP_BARS*H4
     labels = []
-    if market == 'spot' and history_bars(store, symbol, anchor, now) < WARMUP_BARS:
-        labels.append('history_not_ready')
+    if market == 'spot':
+        if coin is not None:
+            ready, own = spot_history(store, symbol, coin, now)
+            if ready < coin.warmup_bars:
+                labels.append('history_not_ready')
+            elif coin.spot_price_proxy_until is not None and own < OWN_SPOT_BARS:
+                labels.append('spot_own_history_not_ready')
+        elif history_bars(store, symbol, anchor, now) < WARMUP_BARS:
+            labels.append('history_not_ready')
     if symbol.removesuffix('USDT') not in CANDIDATES:
         labels.append('no_backtest_evidence')
     return {'version_id': version.version_id if version else None,
