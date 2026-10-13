@@ -252,6 +252,11 @@ def markdown(receipt):
                 ('at', 'action', 'symbol', 'market', 'side', 'price', 'quantity', 'notional', 'reason', 'net_pnl'))+' |')
         if not row['orders']:
             lines += ['No orders.']
+        lines += ['', '| Blocked signal UTC | Coin | Market | Reason | Failed filters |',
+                  '|---|---|---|---|---|']
+        for event in row['blocked_signals']:
+            lines.append(f"| {event['at']} | {event.get('symbol', '')} | {event.get('market', '')} | "
+                         f"{event['reason']} | {', '.join(event.get('failed_filters', []))} |")
         lines += ['', 'Positions valued at end: `'+encoded(row['window_end_positions'])+'`.']
         if row['variant'].startswith('PERP'):
             keys = ('daily_stops', 'hard_stop_exits', 'liquidations', 'funding_paid_known', 'exchange_fee_known',
