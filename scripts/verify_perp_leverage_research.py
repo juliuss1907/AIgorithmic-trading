@@ -5,6 +5,10 @@ from datetime import datetime
 from decimal import Decimal as D
 import json
 from pathlib import Path
+import sys
+
+# A shared editable virtualenv may point at the parent checkout; direct script execution must use this tree.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from intraday.replay_v2.artifacts import SERIES, _manifest, _verified_file, _write, read_report
 from intraday.replay_v2.donchian_adx_config import FiveCoinADXConfig
@@ -13,7 +17,7 @@ from intraday.replay_v2.donchian_adx_study import enriched, runtime_hashes
 from intraday.replay_v2.donchian_filter_data import decode_bundle, verify_files
 from intraday.replay_v2.donchian_filter_engine import prepare
 from intraday.replay_v2.donchian_five_data import read_manifest
-from intraday.replay_v2.donchian_oos_pipeline import git, verify_item
+from intraday.replay_v2.donchian_oos_pipeline import REPO, git, verify_item
 from intraday.replay_v2.donchian_rotation_config import RotationConfig
 from intraday.replay_v2.intraday_study import verify_reference
 from intraday.replay_v2.metrics import encoded, fingerprint, journal_hash
@@ -75,6 +79,33 @@ def audit_case(item):
                 net_pnl=str(total), journals_verified=True, decimal_accounting_verified=True)
 
 
+def legacy_shape(report, original):
+    """Compare the old schema with defaults added BEFORE this task; never alter published evidence."""
+    version, data = report['evaluator_version'], report['inputs']['dataset_checksum']
+    cfg = dict(report['config'])
+    if version != original['evaluator_version'] or fingerprint(dict(version=version, config=cfg, data=data)) != report['result_id']:
+        raise ValueError('current legacy report identity is invalid')
+    defaults = {}
+    allowed = dict(limit_scope='total', slot_divisor=None)
+    for key in set(cfg)-set(original['config']):
+        if key not in allowed or cfg[key] != allowed[key]:
+            raise ValueError('unexpected legacy configuration change: '+key)
+        defaults[key] = cfg.pop(key)
+    if cfg != original['config']:
+        raise ValueError('legacy rule configuration changed')
+    identity = fingerprint(dict(version=version, config=cfg, data=data))
+    if identity != original['result_id']:
+        raise ValueError('legacy dataset or identity changed')
+    events = []
+    for event in report['events']:
+        e = dict(event)
+        if 'limit_scope' in defaults and e['kind'] == 'selection' and e['reason'] == 'rotation_ranking':
+            if e.pop('limit_scope', 'total') != 'total':
+                raise ValueError('legacy selection scope changed')
+        events.append(e)
+    return dict(report, config=cfg, result_id=identity, events=events), defaults
+
+
 def verify_rotation(reference_path, progress=print):
     reference_path = Path(reference_path).expanduser().resolve()
     old = json.loads(reference_path.read_text())
@@ -99,10 +130,16 @@ def verify_rotation(reference_path, progress=print):
         cfg = cls.model_validate({k: v for k, v in item['config'].items() if k in cls.model_fields})
         report = enriched(cfg, prepared)
         report['summary'] = json.loads(encoded(report['summary']))
-        verify_reference(item['report_directory'], report)
+        directory = Path(item['report_directory'])
+        original = read_report(directory.parent, item['run_id'])
+        compatible, defaults = legacy_shape(report, original)
+        verify_reference(directory, compatible)
         results.append(dict(variant=name, result_id=report['result_id'], summary=report['summary'],
-                            journals={s: journal_hash(report[s]) for s in SERIES}, matched=True))
-        progress('Matched summary, result ID and every journal: '+name)
+            original_result_id=original['result_id'], prior_schema_defaults=defaults,
+            journals={s: journal_hash(report[s]) for s in SERIES},
+            raw_journals_match={s: file_hash(directory/(s+'.jsonl')) == journal_hash(report[s]) for s in SERIES},
+            legacy_shape_journals={s: journal_hash(compatible[s]) for s in SERIES}, matched=True))
+        progress('Matched summary, legacy identity and journals; prior schema defaults '+encoded(defaults)+': '+name)
     verify_files(lineage)
     return results
 
@@ -120,6 +157,7 @@ def main():
     paths = [*args.comparison, *([args.rotation_reference] if args.rotation_reference else [])]
     sources = runtime_hashes()
     binding = dict(commit=git('rev-parse', 'HEAD'), sources=sources,
+                   engine_repository=str(REPO),
                    verifier_sha256=file_hash(Path(__file__)), inputs={str(p): file_hash(p) for p in paths})
     _write(root/'binding.json', encoded(binding))
     results = [audit_case(item) for path in args.comparison for item in json.loads(Path(path).read_text())['results']]
