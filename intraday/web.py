@@ -393,6 +393,8 @@ def create_app(
         else:
             policy = ParentPortfolioPolicy.from_split(
                 version.plan.spot_split, version.plan.perp_split, version.plan.perp_leverage)
+            net_delta = (float(version.plan.spot_split+version.plan.perp_split)
+                         if version.plan.rule_profile == "setup2_slots_v1" else policy.max_abs_net_delta_pct)
             limits = {
                 "profile": version.plan.rule_profile,
                 "active_set_version_id": version.version_id,
@@ -401,7 +403,7 @@ def create_app(
                 "spot_max_parent_equity_pct": policy.spot_budget_pct,
                 "perp_max_parent_equity_pct": policy.perp_budget_pct,
                 "gross_exposure_pct": policy.max_gross_exposure_pct,
-                "abs_net_delta_pct": policy.max_abs_net_delta_pct,
+                "abs_net_delta_pct": net_delta,
                 "isolated_margin_pct": policy.max_isolated_margin_pct,
                 "leverage": policy.leverage,
                 "daily_loss_limit_pct": policy.daily_loss_limit_pct,
