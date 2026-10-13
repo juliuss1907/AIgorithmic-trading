@@ -4,6 +4,9 @@ services:
       context: ../..
       dockerfile: deploy/intraday/Dockerfile
     command: ["portfolio", "${PORTFOLIO_WORKER_MODE:-soak}", "run"]
+    # A self-hosted LLM gateway on the host is reachable as host.docker.internal (not localhost).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - ${INTRADAY_ENV_FILE:-../../.env.intraday}
     environment:
@@ -63,6 +66,8 @@ services:
       - type: bind
         source: ${INTRADAY_PROVIDER_SECRETS_HOST_DIR:-../../state/provider-secrets}
         target: /run/provider-secrets
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: ["doctor"]
 
   demo-execution:

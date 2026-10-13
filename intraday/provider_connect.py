@@ -83,12 +83,12 @@ def _openai_base_url(value: str) -> str:
     return normalized[:-len(suffix)] if normalized.endswith(suffix) else normalized
 
 
-def _valid_provider_url(value: str) -> bool:
+def _valid_provider_url(value: str, *, allow_local_http: bool = False) -> bool:
+    from intraday.contracts import secure_or_local_url
     try:
         parsed = urlsplit(value)
         return bool(
-            parsed.scheme == "https"
-            and parsed.hostname
+            (parsed.scheme == "https" and parsed.hostname or allow_local_http and secure_or_local_url(parsed))
             and not parsed.username
             and not parsed.password
             and not parsed.query
@@ -128,7 +128,8 @@ def connect_provider(arguments, *, database: Path, secrets_file: Path) -> None:
         base_url = _text_input("Provider URL: ")
         if kind == ProviderKind.OPENAI_COMPATIBLE:
             base_url = _openai_base_url(base_url)
-        if not _valid_provider_url(base_url):
+        # LLM gateways may run on the host itself; from a container use host.docker.internal, not localhost.
+        if not _valid_provider_url(base_url, allow_local_http=True):
             _fail("Invalid url")
         api_key = _read_api_key(arguments)
         model = _text_input("Model ID: ")
@@ -152,7 +153,8 @@ def connect_provider(arguments, *, database: Path, secrets_file: Path) -> None:
 
     result = ProviderPreflightClient().test(ProviderCredential(profile, api_key))
     if result.status != "ok":
-        _fail("API error")
+        # The error code (auth_failed, not_found, timeout, ...) never contains the key.
+        _fail(f"API error ({result.error_code})" if result.error_code else "API error")
 
     secret_store = ProviderSecretStore(secrets_file)
     store = IntradayStore(database)

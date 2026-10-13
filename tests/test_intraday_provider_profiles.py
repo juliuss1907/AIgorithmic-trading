@@ -594,7 +594,7 @@ def test_connect_failure_does_not_persist_or_replace_active_provider(
 
     assert exit_info.value.code == 1
     output = capsys.readouterr().out
-    assert output == "API error\n"
+    assert output == "API error (auth_failed)\n"
     assert "rejected-private-key" not in output
     assert [item.profile_id for item in ProviderSecretStore(secrets_file).list_profiles()] == [
         current.profile_id
@@ -940,3 +940,29 @@ def test_worker_applies_queued_provider_test_and_activation(tmp_path):
     process_pending_commands(store, now=NOW, secret_store=secrets)
 
     assert store.provider_assignment(ProviderRole.JEV)["profile_id"] == current.profile_id
+
+
+def test_llm_gateways_may_use_plain_http_only_on_local_or_private_hosts():
+    from datetime import datetime, timezone
+    from urllib.parse import urlsplit
+    from intraday.contracts import ProviderKind, ProviderProfile, ProviderRole, secure_or_local_url
+    from intraday.provider_connect import _valid_provider_url
+    now = datetime(2026, 10, 13, tzinfo=timezone.utc)
+
+    def profile(url, kind=ProviderKind.OPENAI_COMPATIBLE, role=ProviderRole.LLM):
+        return ProviderProfile.create(profile_id="llm-local", role=role, kind=kind, base_url=url, model="m",
+                                      credential_version="0"*32, created_at=now, updated_at=now)
+    for url in ("http://host.docker.internal:20128/v1", "http://localhost:20128/v1", "http://127.0.0.1:8000/v1",
+                "http://172.17.0.1:20128/v1", "http://192.168.21.57:20128/v1", "https://api.example.com/v1"):
+        assert profile(url).base_url == url
+        assert _valid_provider_url(url, allow_local_http=True)
+    assert profile("http://host.docker.internal:20128/v1", kind=ProviderKind.ANTHROPIC_COMPATIBLE).base_url
+    for url in ("http://api.example.com/v1", "http://8.8.8.8/v1", "ftp://localhost/v1"):
+        with pytest.raises(ValueError):
+            profile(url)
+        assert not _valid_provider_url(url, allow_local_http=True)
+    # Jev custom providers keep requiring HTTPS, and the default check stays strict.
+    assert not _valid_provider_url("http://localhost:20128/v1")
+    with pytest.raises(ValueError):
+        profile("http://localhost:9000/v1", kind=ProviderKind.SYSTEMONE_COMPATIBLE, role=ProviderRole.JEV)
+    assert not secure_or_local_url(urlsplit("http://example.com"))

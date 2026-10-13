@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import math
 from datetime import datetime
@@ -621,13 +622,13 @@ class ProviderProfile(StrictContract):
         elif self.kind == ProviderKind.ANTHROPIC_COMPATIBLE:
             if self.role != ProviderRole.LLM:
                 raise ValueError("Anthropic-compatible profiles must use the llm role")
-            if parsed.scheme != "https" or not parsed.hostname:
-                raise ValueError("Anthropic-compatible provider URL must use HTTPS")
+            if not secure_or_local_url(parsed):
+                raise ValueError("Anthropic-compatible provider URL must use HTTPS, or HTTP to a local host")
         elif self.kind == ProviderKind.OPENAI_COMPATIBLE:
             if self.role != ProviderRole.LLM:
                 raise ValueError("OpenAI-compatible profiles must use the llm role")
-            if parsed.scheme != "https" or not parsed.hostname:
-                raise ValueError("OpenAI-compatible provider URL must use HTTPS")
+            if not secure_or_local_url(parsed):
+                raise ValueError("OpenAI-compatible provider URL must use HTTPS, or HTTP to a local host")
         expected = self._fingerprint_for(
             profile_id=self.profile_id,
             role=self.role,
@@ -845,6 +846,29 @@ SETUP2_PROFILES = tuple(SETUP2_DONCHIAN)
 
 def is_setup2_profile(value) -> bool:
     return value in SETUP2_DONCHIAN
+
+
+# A self-hosted LLM gateway on the same machine or LAN may speak plain HTTP; the API key then never
+# leaves the host or the private network. Public hosts still require HTTPS.
+LOCAL_PROVIDER_HOSTS = frozenset({"localhost", "host.docker.internal"})
+
+
+def is_local_provider_host(hostname) -> bool:
+    if not hostname:
+        return False
+    if hostname.lower() in LOCAL_PROVIDER_HOSTS:
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private
+
+
+def secure_or_local_url(parsed) -> bool:
+    """HTTPS anywhere, or plain HTTP only to a loopback, private or Docker-host address."""
+    return bool(parsed.hostname) and (
+        parsed.scheme == "https" or parsed.scheme == "http" and is_local_provider_host(parsed.hostname))
 
 
 class PerpRuleParameters(RuleParameters):
