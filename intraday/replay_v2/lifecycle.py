@@ -70,7 +70,7 @@ def _setup2_inputs(reader, rule, market, now, *, campaign=None):
     waived = (market in settings.waive_min_trades and settings.proxy_until is not None
               and own_spot_bars(settings, bars) < settings.warmup_bars)
     values = dict(history_bars=len(bars) if contiguous else 0, required_bars=settings.warmup_bars,
-                  min_trades_waived=waived,
+                  min_trades_waived=waived, net_return_waived=market in settings.waive_net_return,
                   history_coverage=min(1.0, len(bars)/expected) if expected and contiguous else 0.0,
                   latest_candle_age_seconds=(now-bars[-1].available_at).total_seconds() if bars else None)
     if campaign:

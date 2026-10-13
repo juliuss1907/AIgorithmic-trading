@@ -45,6 +45,9 @@ class CoinPlan(BaseModel):
     warmup_bars: int = Field(default=600, ge=MIN_WARMUP_BARS, le=600)
     spot_price_proxy_until: datetime | None = None
     waive_min_trades: tuple[Literal['spot'], ...] = ()
+    # Operator exception (ADR-007 addendum): the gate's net-profit criterion is waived for these markets of the coin,
+    # down to the floor in replay_v2.gates; every other criterion still applies.
+    waive_net_return: tuple[Literal['spot', 'perp'], ...] = ()
 
     @model_serializer(mode='wrap')
     def omit_defaults(self, handler):
@@ -56,6 +59,8 @@ class CoinPlan(BaseModel):
             payload.pop('spot_price_proxy_until', None)
         if not self.waive_min_trades:
             payload.pop('waive_min_trades', None)
+        if not self.waive_net_return:
+            payload.pop('waive_net_return', None)
         return payload
 
     @property
@@ -75,6 +80,8 @@ class CoinPlan(BaseModel):
                 raise ValueError('the proxy boundary must be after the indicator anchor')
         if self.waive_min_trades and until is None:
             raise ValueError('the closed-trades waiver is only for a Perp-proxied Spot market')
+        if not set(self.waive_net_return) <= self.markets or len(set(self.waive_net_return)) != len(self.waive_net_return):
+            raise ValueError('the net-return waiver names enabled markets of the coin, once each')
         return self
 
     @model_validator(mode='after')
@@ -159,7 +166,7 @@ class ActiveSetVersion(BaseModel):
     plan: ActiveSetPlan
 
 
-def slots_plan(modes, *, anchors, watch=None, warmup=None, proxy=None, waive=None):
+def slots_plan(modes, *, anchors, watch=None, warmup=None, proxy=None, waive=None, waive_net=None):
     """Slot design plan (ADR-007): `modes` maps coin to spot/perp/both, `anchors` coin to its H4 anchor.
 
     Weights are equal within each market among the coins enabled there; they are bookkeeping only,
@@ -169,14 +176,15 @@ def slots_plan(modes, *, anchors, watch=None, warmup=None, proxy=None, waive=Non
     equal = {m: weights(**{normalize_symbol(s).removesuffix('USDT'): 1 for s in coins}) if coins else {}
              for m, coins in markets.items()}
     zero = Decimal(0)
-    warmup, proxy, waive = warmup or {}, proxy or {}, waive or {}
-    if unknown := sorted((set(warmup) | set(proxy) | set(waive)) - set(modes)):
+    warmup, proxy, waive, waive_net = warmup or {}, proxy or {}, waive or {}, waive_net or {}
+    if unknown := sorted((set(warmup) | set(proxy) | set(waive) | set(waive_net)) - set(modes)):
         raise ValueError('per-coin warm-up, proxy and waiver settings need a coin of the plan: '+', '.join(unknown))
     coins = {s: CoinPlan(mode=mode, indicator_anchor=anchors[s],
                          spot_weight=equal['spot'].get(s, zero), perp_weight=equal['perp'].get(s, zero),
                          **({'warmup_bars': warmup[s]} if s in warmup else {}),
                          **({'spot_price_proxy_until': proxy[s]} if s in proxy else {}),
-                         **({'waive_min_trades': ('spot',)} if waive.get(s) else {}))
+                         **({'waive_min_trades': ('spot',)} if waive.get(s) else {}),
+                         **({'waive_net_return': tuple(sorted(waive_net[s]))} if waive_net.get(s) else {}))
              for s, mode in modes.items()}
     return ActiveSetPlan(coins=coins, spot_split=SLOT_SPLIT, perp_split=SLOT_SPLIT,
                          rule_profile='setup2_slots_v1', watch=watch or {})

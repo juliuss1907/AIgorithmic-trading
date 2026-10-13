@@ -20,11 +20,16 @@ def profile_fingerprint(profile: ExecutionProfile):
                        "instrument_observed_at", "instrument_source"}))
 
 
+NET_RETURN_WAIVER_FLOOR_PCT = -5.0  # A waived route still fails when its replay loses this much or more.
+
+
 class GateEvidence(FrozenModel):
     history_bars: int = Field(default=0, ge=0)
     required_bars: int = Field(default=600, ge=1)
     # ADR-007 addendum: a Perp-proxied Spot market is judged without the six-closed-trades criterion.
     min_trades_waived: bool = False
+    # ADR-007 addendum: an operator exception for one route's net-profit criterion, never below the floor.
+    net_return_waived: bool = False
     history_coverage: float = Field(default=0, ge=0, le=1)
     latest_candle_age_seconds: float | None = Field(default=None, ge=0)
     elapsed_days: float = Field(default=0, ge=0)
@@ -200,6 +205,8 @@ def evaluate_report_gate(report, evidence: GateEvidence, *, champion=None, kind=
     if net is not None and net <= 0:
         if waived and summary.get("closed_trades", 0) == 0:
             waivers.append("nonpositive_net_return_without_trades")
+        elif setup2 and evidence.net_return_waived and net > NET_RETURN_WAIVER_FLOOR_PCT:
+            waivers.append("nonpositive_net_return")
         else:
             rejected.append("nonpositive_net_return")
     for code in waivers:

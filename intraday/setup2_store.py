@@ -91,6 +91,7 @@ class CoinSettings:
     warmup_bars: int = setup2.WARMUP_BARS
     proxy_until: datetime | None = None
     waive_min_trades: frozenset = frozenset()
+    waive_net_return: frozenset = frozenset()
 
 
 def coin_settings(store, symbol, *, anchor=None):
@@ -101,7 +102,7 @@ def coin_settings(store, symbol, *, anchor=None):
     coin = version.plan.coins.get(symbol) if version else None
     if coin is not None:
         return CoinSettings(coin.indicator_anchor, coin.warmup_bars, coin.spot_price_proxy_until,
-                            frozenset(coin.waive_min_trades))
+                            frozenset(coin.waive_min_trades), frozenset(coin.waive_net_return))
     found = version.plan.anchor(symbol) if version else None
     found = found or anchor
     if found is None:

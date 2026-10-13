@@ -36,6 +36,9 @@ def add_active_set_parser(commands):
                                   "series (volume zero, no entries there); the coin's first own Spot bar is typical")
         command.add_argument("--waive-min-trades", action="append", default=[], metavar="COIN:spot",
                              help="waive the replay gate's six-closed-trades criterion for a Perp-proxied Spot route")
+        command.add_argument("--waive-net-return", action="append", default=[], metavar="COIN:MARKET",
+                             help="operator exception: waive the replay gate's net-profit criterion for one route "
+                                  "(down to a -5% floor; trades, drawdown and coverage still apply)")
         command.add_argument("--anchor", action="append", default=[], metavar="[COIN=]YYYY-MM-DD",
                              help="indicator anchor for new coins (UTC date at an H4 boundary); `COIN=DATE` sets one "
                                   "coin, a bare date the rest. An earlier anchor gives the replay gate more history")
@@ -104,13 +107,19 @@ def _per_coin_settings(arguments):
         if not separator or market != "spot":
             raise ValueError("--waive-min-trades takes COIN:spot")
         waive[ticker_symbol(coin)] = True
-    return warmup, proxy, waive
+    waive_net = {}
+    for item in getattr(arguments, "waive_net_return", []):
+        coin, separator, market = item.partition(":")
+        if not separator or market not in ("spot", "perp"):
+            raise ValueError("--waive-net-return takes COIN:spot or COIN:perp")
+        waive_net.setdefault(ticker_symbol(coin), set()).add(market)
+    return warmup, proxy, waive, waive_net
 
 
 def build_plan(arguments, previous, now):
     profile = getattr(arguments, "profile", "setup2_v1")
-    warmup, proxy, waive = _per_coin_settings(arguments)
-    if (warmup or proxy or waive) and profile != "setup2_slots_v1":
+    warmup, proxy, waive, waive_net = _per_coin_settings(arguments)
+    if (warmup or proxy or waive or waive_net) and profile != "setup2_slots_v1":
         raise ValueError("per-coin warm-up, proxy and waiver settings belong to the slot profile")
     default_split = "50/50" if profile == "setup2_slots_v1" else "60/40"
     spot, slash, perp = (arguments.split or default_split).partition("/")
@@ -127,7 +136,8 @@ def build_plan(arguments, previous, now):
         if profile == "setup2_slots_v1":
             modes = {s: arguments.mode for s in symbols}
             return active_set.slots_plan(modes, anchors={s: _anchor(previous, s, now, override) for s in symbols},
-                                         watch=watch, warmup=warmup, proxy=proxy, waive=waive)
+                                         watch=watch, warmup=warmup, proxy=proxy, waive=waive,
+                                         waive_net=waive_net)
         anchors = {_anchor(previous, s, now, override) for s in symbols}
         if len(anchors) != 1:
             raise ValueError("equal-weight switches need one anchor; use --coin per coin")
@@ -142,7 +152,8 @@ def build_plan(arguments, previous, now):
                 raise ValueError("the slot profile takes one --coin COIN:MODE per coin (spot, perp or both)")
             modes[ticker_symbol(symbol)] = mode
         return active_set.slots_plan(modes, anchors={s: _anchor(previous, s, now, override) for s in modes},
-                                     watch=watch, warmup=warmup, proxy=proxy, waive=waive)
+                                     watch=watch, warmup=warmup, proxy=proxy, waive=waive,
+                                         waive_net=waive_net)
     coins = {}
     for item in arguments.coin:
         parts = item.split(":")
