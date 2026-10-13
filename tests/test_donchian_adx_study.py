@@ -63,3 +63,29 @@ def test_calendar_periods_use_equal_halves_and_label_partial_window():
     assert sum(D(str(r['pnl'])) for r in rows)==300
     assert all(r['full_calendar_half'] for r in rows[:-1])
     assert not rows[-1]['full_calendar_half']
+
+
+def test_perp_leverage_universe_stress_cases_and_later_start(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from intraday.replay_v2.donchian_adx_config import cases
+    from intraday.replay_v2.donchian_adx_study import run_study
+    from intraday.replay_v2 import donchian_five_data
+    from intraday.replay_v2.donchian_recent import collect, symbol_groups
+    from test_donchian_prospective import fetchers
+    start = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    end = start+timedelta(days=2)
+    variants = cases(start, end, universe='perp-leverage')
+    assert [n for n, _ in variants] == ['ETH-NEAR-SOL-H4', 'ETH-NEAR-SOL-H4-cost2x',
+                                       'PERP1X', 'PERP1X-cost2x', 'PERP5X', 'PERP5X-cost2x']
+    path = collect(symbol_groups(start, end)[-1], start, end, tmp_path/'inputs',
+                   now=end+timedelta(hours=1), progress=lambda _: None, **fetchers())
+    monkeypatch.setattr(donchian_five_data, 'read_manifest', lambda p: json.loads(p.read_text()))
+    result = run_study(path, tmp_path/'study', universe='perp-leverage',
+                       window_start=(start+timedelta(days=1)).isoformat(), progress=lambda _: None)
+    assert result['preset'] == 'donchian-perp-leverage' and len(result['results']) == 6
+    assert all(r['deterministic_rerun_verified'] for r in result['results'])
+    assert len({r['dataset_checksum'] for r in result['results']}) == 1
+    assert result['window']['start'] == (start+timedelta(days=1)).isoformat()
+    assert not result['activation_allowed']
+    assert run_study(path, tmp_path/'study', universe='perp-leverage', resume=True,
+                     window_start=(start+timedelta(days=1)).isoformat(), progress=lambda _: None) == result

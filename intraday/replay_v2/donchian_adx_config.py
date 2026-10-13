@@ -32,6 +32,9 @@ class FiveCoinADXConfig(ADXStudyConfig):
 
 
 def config_type(universe='three'):
+    if universe == 'perp-leverage':
+        from intraday.replay_v2.donchian_perp_leverage import PerpLeverageConfig
+        return PerpLeverageConfig
     if universe == 'baskets':
         from intraday.replay_v2.donchian_adx_setups import BasketConfig
         return BasketConfig
@@ -44,6 +47,9 @@ def config_type(universe='three'):
 
 
 def cases(start=START, end=END, *, universe='three'):
+    if universe == 'perp-leverage':
+        from intraday.replay_v2.donchian_perp_leverage import perp_cases
+        return perp_cases(start, end, stress=True)
     if universe == 'rotation':
         from intraday.replay_v2.donchian_rotation_config import rotation_cases
         return rotation_cases(start, end)

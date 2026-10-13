@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from intraday.replay_v2.donchian_adx_setups import BasketConfig, H1_BASKET, basket_specification, matches
+from intraday.replay_v2.donchian_adx_setups import BasketConfig, BasketStressConfig, H1_BASKET, basket_specification, matches
 from intraday.replay_v2.donchian_filter_book import FilterBook
 from intraday.replay_v2.contracts import positive_policy_number
 from intraday.replay_v2.historical_capital import HistoricalBook
@@ -28,6 +28,9 @@ class PerpLeverageConfig(HistoricalConfig):
     entry_window: Literal[30] = 30
     exit_window: Literal[10] = 10
     adx_threshold: Literal[20] = 20
+    capital: Literal[D(1000)] = D(1000)
+    daily_loss: Literal[D('.03')] = D('.03')
+    max_drawdown: Literal[D('.10')] = D('.10')
     entry_cap: Literal[0] = 0
     perp_cap: Literal[1] = 1
     reserve: Literal[0] = 0
@@ -51,7 +54,7 @@ class PerpLeverageConfig(HistoricalConfig):
         # Only this Perp-only configuration admits an empty Spot sleeve.
         return 0 if info.field_name == 'entry_cap' and value == 0 else positive_policy_number(value)
 
-    @field_validator('hard_stop_pct', 'maintenance_margin_rate', mode='before')
+    @field_validator('capital', 'daily_loss', 'max_drawdown', 'hard_stop_pct', 'maintenance_margin_rate', mode='before')
     @classmethod
     def decimal_literal(cls, value):
         return D(str(value))
@@ -63,10 +66,35 @@ class PerpLeverageConfig(HistoricalConfig):
         return self
 
 
-def perp_cases(start, end):
-    return [('ETH-NEAR-SOL-H4', BasketConfig(start=start, end=end, basket=H1_BASKET,
+class PerpLeverageStressConfig(PerpLeverageConfig):
+    """Historical criterion only: double fees/slippage, retain actual funding and all risk rules."""
+    cost_multiplier: Literal[2] = 2
+
+
+def perp_cases(start, end, *, stress=False):
+    cases = [('ETH-NEAR-SOL-H4', BasketConfig(start=start, end=end, basket=H1_BASKET,
                                            **basket_specification(H1_BASKET)))] + [
         (f'PERP{leverage}X', PerpLeverageConfig(start=start, end=end, leverage=leverage)) for leverage in (1, 5)]
+    if not stress:
+        return cases
+    paired = []
+    for name, cfg in cases:
+        cls = BasketStressConfig if name.endswith('H4') else PerpLeverageStressConfig
+        paired += [(name, cfg), (name+'-cost2x', cls.model_validate(
+            dict(cfg.model_dump(), cost_multiplier=2)))]
+    return paired
+
+
+def evaluate_perp(receipt):
+    from intraday.replay_v2.donchian_rotation_verdict import describe, judge
+    by_name = {item['variant']: item for item in receipt['results']}
+    candidates = {}
+    for name in ('PERP1X', 'PERP5X'):
+        normal, stressed = by_name[name], by_name[name+'-cost2x']
+        candidates[name] = dict(describe(normal), **judge(receipt, normal, stressed, by_name['ETH-NEAR-SOL-H4']))
+    return dict(candidates=candidates, advancing=[n for n, r in candidates.items() if r['advance']],
+        activation_allowed=False, note='Five original criteria unchanged. Spot contribution is zero in a Perp-only '
+        'account, so spot_and_perp_net_positive necessarily fails. Seen-data research, never activation.')
 
 
 class PerpLeverageBook(FilterBook):
@@ -147,6 +175,9 @@ class PerpLeverageBook(FilterBook):
 def leverage_result(report, book):
     """Describe the opt-in model without changing legacy reports or result identities."""
     cfg = book.config
+    entries = {(e['at'], e['symbol']): e for e in book.events if e['kind'] == 'entry'}
+    gaps = [abs(D(e['stop'])-D(entries[(e['at'], e['symbol'])]['liquidation_price'])) /
+            D(entries[(e['at'], e['symbol'])]['price'])*100 for e in book.events if e['kind'] == 'entry_features']
     report['config']['market'] = f'perp-long-short{cfg.leverage}x'
     report['evaluator_version'] += '-perp-leverage-v1'
     report['result_id'] = fingerprint(dict(version=report['evaluator_version'], config=report['config'],
@@ -158,6 +189,8 @@ def leverage_result(report, book):
         liquidations=sum(t['exit_reason'] == 'liquidation' for t in book.trades),
         liquidation_penalty_known=float(book.liquidation_penalty),
         hard_stop_liquidation_gap_pct=float((ONE/D(cfg.leverage)-cfg.maintenance_margin_rate-cfg.hard_stop_pct)*100),
+        initial_stop_liquidation_gap_pct=dict(minimum=float(min(gaps)) if gaps else None,
+                                             maximum=float(max(gaps)) if gaps else None),
         perp_sides={side: dict(closed_trades=sum(t['side'] == side for t in book.trades),
             net_pnl=float(sum((t['net_pnl'] for t in book.trades if t['side'] == side), ZERO)))
             for side in ('long', 'short')})
