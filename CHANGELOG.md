@@ -4,6 +4,20 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-13 — Runtime slot 1/3 túi, 5 coin (ADR-007)
+
+Nhánh: `feature/slot-runtime`. Julius chốt thiết kế 4 coin, slot 1/3 túi, Donchian 25 và yêu cầu xây hệ thống, thêm HYPE thành 5 coin, triển khai lên Binance Demo, Jev vẫn xác nhận. Quyết định: [ADR-007](docs/decisions/007-slot-rotation-five-coin-runtime.md). **Đã làm xong phần mã và kiểm thử; chưa push, chưa deploy, chưa chạm Demo/VPS.** Checklist triển khai: [slot-runtime-demo-rollout-checklist](docs/runbooks/slot-runtime-demo-rollout-checklist.md).
+
+- **Profile quy tắc `setup2_slots_v1`:** Donchian 25/10 (khoá trong hợp đồng quy tắc), stop chặn 5%, evaluator live nhận `profile`. `setup2_v1` và hash quy tắc cũ không đổi.
+- **Tập coin hoạt động:** tối đa 5 coin cho profile mới (3 cho `setup2_v1`), split 50/50, mỗi coin một chế độ; `slots_plan()` và `active-set init --profile setup2_slots_v1 --coin COIN:MODE --anchor YYYY-MM-DD`. HYPE chạy `perp` cho tới khi đủ nến H4 Spot.
+- **Phân bổ:** `DemoAllocation.profile = setup2_slots_v1`, `slot_cap()` = 1/3 vốn thực hiện của túi × hệ số ATR, chặn bởi vốn rảnh của túi; stop 5% cho cả Spot lẫn Perp; chính sách cổng bỏ giới hạn net-delta một-parent (cạnh túi 50% và 3 slot đã đủ).
+- **Vòng lặp thực thi (`_slots_cycle`):** mỗi nến H4 thu quan sát của mọi route, thoát Donchian trước, xếp hạng ứng viên một lần cho cả danh mục (cổng PnL, giới hạn 3 vị thế, một vị thế mỗi coin, xoay vị thế hơn > 5 điểm ADX), **chỉ đóng vị thế yếu sau khi ứng viên mới đã được luật và Jev xác nhận**; ghi `slot_selection` vào journal.
+- **Mã dùng chung với nghiên cứu:** logic chọn lệnh tách thành `replay_v2/donchian_rotation_select.py` (cùng `adx_of`, `volume_ratio`, `trend_strength`); engine nghiên cứu và runtime gọi cùng một hàm.
+- **Hồi quy nghiên cứu (cửa sổ 2026):** 18/18 ca `rotation` giống từng byte `result_id` so với commit ngay trước refactor; 8/8 ca `capacity` giống lần chạy trước, cả sau khi tách hàm trợ giúp; ca `rotation-window` chỉ khác ở trường `slot_divisor` thêm vào `variant`.
+- **Kiểm thử:** 11 test runtime mới (xếp hạng, cổng PnL, xoay vị thế và Jev loại, tái đầu tư, profile quy tắc), 5 test active set và phân bổ, 5 test profile quy tắc và parity với nghiên cứu cho cửa sổ 25.
+- **Còn lại trước khi triển khai (Julius duyệt):** kết quả Stage 0 (`rotation-five`, BTC thay HYPE), sao lưu và deploy, `active-set init`, soak, cấu hình và kích hoạt Demo.
+- **Chưa kiểm chứng:** HYPE (không có lịch sử Spot, không có số liệu nghiên cứu), hành vi thật của Binance Demo với ZEC và HYPE, và chênh lệch live so với replay do Jev và khớp lệnh.
+
 ## 2026-10-13 — Giới hạn mỗi túi bằng số coin (đăng ký trước)
 
 Nhánh: `research/rotating-slots`. Nghiên cứu offline; thiết kế và dự đoán nằm trong [rotating-positions-research](docs/rotating-positions-research.md).
