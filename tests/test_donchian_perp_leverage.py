@@ -104,3 +104,55 @@ def test_ten_percent_stop_is_symmetric_and_only_tightens(side, initial, tightene
     assert trail.stop == tightened
     trail.update(D(101), D(99), D(10))
     assert trail.stop == tightened
+
+
+def prepared_account(side, leverage=5):
+    from test_donchian_rotation import market_data
+    from intraday.replay_v2.donchian_filter_engine import prepare
+    cfg = PerpLeverageConfig(start=START, end=START+timedelta(days=1), leverage=leverage)
+    data, funding = market_data(cfg.basket, side={'ETH': 'both', 'NEAR': 'none', 'SOL': 'none'})
+    if side == 1:
+        for interval in ('4h', '15m'):
+            data['ETHUSDT']['perp'+interval] = data['ETHUSDT']['spot'+interval]
+        data['ETHUSDT']['mark15m'] = tuple(b for b in data['ETHUSDT']['perp15m'] if b.opened_at >= START)
+        funding['ETHUSDT'] = funding['ETHUSDT'].model_copy(update={'settlements': tuple(
+            r.model_copy(update={'mark': D(110)}) for r in funding['ETHUSDT'].settlements)})
+    p = prepare(cfg, data, funding)
+    price = D(100)+side*10
+    p.features['perp']['ETHUSDT'][START].update(ema200=price-side*5, ema50=price-side*2,
+        prior_ema50=price-side*3, adx=D(30), prior_adx=D(29), plus_di=D(30+side*10),
+        minus_di=D(30-side*10), volume=D(1000), volume_ma=D(100), profile={'vah': D(101), 'val': D(99)})
+    return cfg, p
+
+
+@pytest.mark.parametrize('side', [1, -1])
+def test_engine_perp_only_entries_and_directional_donchian_exits(side):
+    from intraday.replay_v2.donchian_filter_engine import simulate
+    cfg, p = prepared_account(side)
+    at = START+timedelta(hours=4)
+    p.observations['perp']['ETHUSDT'][at][(30, 10)]['long_exit' if side == 1 else 'short_exit'] = True
+    report = simulate(cfg, p)
+    entries = [e for e in report['events'] if e['kind'] == 'entry']
+    assert len(entries) == 1 and entries[0]['market'] == 'perp' and entries[0]['side'] == side
+    mult = min(D(1), D('.02')/(p.features['perp']['ETHUSDT'][START]['atr']/D(100+side*10)))
+    assert abs(D(entries[0]['notional'])-D(1000)*cfg.weights['ETHUSDT']*mult*5) < D('1e-20')
+    trade = report['trades'][0]
+    assert trade['side'] == ('long' if side == 1 else 'short')
+    assert trade['exit_reason'] == 'donchian_exit' and trade['closed_at'] == at.isoformat()
+    assert report['config']['market'] == 'perp-long-short5x'
+    assert report['summary']['max_locked_margin_usdt'] > 0
+
+
+def test_engine_mark_range_liquidation_precedes_an_ambiguous_stop_touch():
+    from intraday.replay_v2.donchian_filter_engine import simulate
+    cfg, p = prepared_account(-1)
+    at = START+timedelta(minutes=15)-timedelta(milliseconds=1)
+    for market in ('mark', 'perp'):
+        p.closes[market][at]['ETHUSDT'] = p.closes[market][at]['ETHUSDT'].model_copy(update={'high': D(120)})
+    report = simulate(cfg, p)
+    trade = report['trades'][0]
+    assert trade['exit_reason'] == 'liquidation' and D(trade['exit_price']) == D('107.64')
+    assert report['status'] == 'complete' and report['summary']['liquidations'] == 1
+    assert report['summary']['daily_stops'] == 1
+    assert not any(e['reason'] == 'unsupported_liquidation' for e in report['events'])
+    assert abs(sum(t['net_pnl'] for t in report['trades'])-D(str(report['summary']['pnl_after_known_costs']))) < D('1e-10')

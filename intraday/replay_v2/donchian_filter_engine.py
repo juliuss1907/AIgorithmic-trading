@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from intraday.replay_v2.donchian_filters import indicator_series, observation, volume_profile, entry_filters
 from intraday.replay_v2.donchian_filter_book import FilterBook, SlotBook, RotationBook, ATRTrail
+from intraday.replay_v2.donchian_perp_leverage import PerpLeverageConfig, PerpLeverageBook, leverage_result
 from intraday.replay_v2.donchian_filter_data import WARMUP
 from intraday.replay_v2.historical_data import validate_rows
 from intraday.replay_v2.historical_mixed import funding_audit, continuous_periods
@@ -239,7 +240,10 @@ def simulate(config, prepared):
     rotating = getattr(config, 'max_positions', None)
     scope = getattr(config, 'limit_scope', 'total')  # 'total': one pool of positions; 'sleeve': a limit per sleeve.
     hard_stop = getattr(config, 'hard_stop_pct', None)
-    book = RotationBook(config) if rotating else SlotBook(config) if slots else FilterBook(config)
+    leveraged = isinstance(config, PerpLeverageConfig)
+    book = (PerpLeverageBook(config) if leveraged else
+            RotationBook(config) if rotating else SlotBook(config) if slots else FilterBook(config))
+    entry_sides = (('perp', -1), ('perp', 1)) if leveraged else (('spot', 1), ('perp', -1))
     label = 'h4' if prepared.bar_interval == '4h' else 'h1'
     stop = getattr(config, 'stop_atr_multiple', 3)
     ema = dict(ema_fast=prepared.ema_periods[0], ema_slow=prepared.ema_periods[1])
@@ -438,6 +442,8 @@ def simulate(config, prepared):
             observed_spot.update({s:at for s in closing['spot']})
             book.perp_marks.update({s:b.close for s,b in closing_marks.items()})
             observed_mark.update({s:at for s in closing_marks})
+            if leveraged:
+                book.check_liquidations(at, closing_marks, closed, opening=False)
             check_stops(book,at,closing,closed,opening=False)
             cooldown[at+MS].update(closed)
             risk(at)
@@ -446,6 +452,8 @@ def simulate(config, prepared):
             observed_spot.update({s:at for s in opening['spot']})
             book.perp_marks.update({s:b.open for s,b in opening_marks.items()})
             observed_mark.update({s:at for s in opening_marks})
+            if leveraged:
+                book.check_liquidations(at, opening_marks, closed, opening=True)
         book.advance_day(at,marks)
         settlements = [(s, row) for s, row in prepared.settlements.get(at,()) if s in active['perp']]
         for s,row in settlements:
@@ -494,6 +502,8 @@ def simulate(config, prepared):
                 p = position(book,market,s)
                 if not p.quantity:
                     continue
+                if leveraged and market == 'perp':
+                    side = 1 if p.quantity > 0 else -1
                 f, bar = prepared.features[market][s][at], prepared.h4[market][s][at]
                 obs = prepared.observations[market][s][at][(config.entry_window,config.exit_window)]
                 if obs['long_exit' if side > 0 else 'short_exit']:
@@ -521,7 +531,7 @@ def simulate(config, prepared):
             risk(at)
         granted = (grant_rotation(at,opening,closed) if rotating else
                    grant_slots(at,opening,closed) if slots else None)
-        for market,side in (('spot',1),('perp',-1)):
+        for market,side in entry_sides:
             candidates = granted[market] if granted is not None else collect(at,market,side,opening,closed)
             if market == 'spot' and candidates:
                 if rotating:  # Best-ranked entry first; each takes its share of what the sleeve still has free.
@@ -533,12 +543,14 @@ def simulate(config, prepared):
                 f, price = prepared.features[market][s][at], opening[market][s].open
                 if market == 'perp':
                     target = book.perp_budget(marks)*book.perp_weight(s)*multiplier
+                    if leveraged:
+                        target *= config.leverage
                     distance = stop*f['atr']/price
                     if hard_stop is not None:
                         distance = min(distance, hard_stop)
-                    if not book.enter_perp(s,at,marks,price,-1,distance,approved_target=target):
+                    if not book.enter_perp(s,at,marks,price,side,distance,approved_target=target):
                         continue
-                    book.events[-1]['reason'] = 'donchian_short_entry'
+                    book.events[-1]['reason'] = 'donchian_long_entry' if side > 0 else 'donchian_short_entry'
                 if position(book,market,s).quantity:
                     book.trails[(market,s)] = ATRTrail(side,price,f['atr'],stop,hard_stop)
                     book.event(at,'entry_features',f'closed_{label}',market=market,symbol=s,
@@ -549,7 +561,8 @@ def simulate(config, prepared):
                     flatten(book,at,opening,closed)
                     risk(at)
                     break
-    return result(config,prepared,book)
+    report = result(config,prepared,book)
+    return leverage_result(report, book) if leveraged else report
 
 
 def result(config, prepared, book):

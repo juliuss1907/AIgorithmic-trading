@@ -11,6 +11,7 @@ from intraday.replay_v2.contracts import positive_policy_number
 from intraday.replay_v2.historical_capital import HistoricalBook
 from intraday.replay_v2.historical_mixed import HistoricalConfig
 from intraday.replay_v2.portfolio_book import ONE, ZERO
+from intraday.replay_v2.metrics import fingerprint
 
 
 def specification():
@@ -141,3 +142,36 @@ class PerpLeverageBook(FilterBook):
             if side*(observed-threshold) <= 0:
                 self.close_perp(s, at, threshold, 'liquidation')
                 closed.add(('perp', s))
+
+
+def leverage_result(report, book):
+    """Describe the opt-in model without changing legacy reports or result identities."""
+    cfg = book.config
+    report['config']['market'] = f'perp-long-short{cfg.leverage}x'
+    report['evaluator_version'] += '-perp-leverage-v1'
+    report['result_id'] = fingerprint(dict(version=report['evaluator_version'], config=report['config'],
+                                          data=report['inputs']['dataset_checksum']))
+    report['inputs']['config_checksum'] = fingerprint(report['config'])
+    report['summary'].update(max_locked_margin_usdt=float(book.max_locked_margin),
+        max_isolated_margin_pct=float(book.max_margin*100), max_perp_notional_pct=float(book.max_perp_exposure*100),
+        hard_stop_exits=sum(t['exit_reason'].startswith('hard_stop') for t in book.trades),
+        liquidations=sum(t['exit_reason'] == 'liquidation' for t in book.trades),
+        liquidation_penalty_known=float(book.liquidation_penalty),
+        hard_stop_liquidation_gap_pct=float((ONE/D(cfg.leverage)-cfg.maintenance_margin_rate-cfg.hard_stop_pct)*100),
+        perp_sides={side: dict(closed_trades=sum(t['side'] == side for t in book.trades),
+            net_pnl=float(sum((t['net_pnl'] for t in book.trades if t['side'] == side), ZERO)))
+            for side in ('long', 'short')})
+    report['methodology'].update(
+        allocation=f'100% realized Perp capital; ETH/NEAR/SOL fixed thirds; margin=capital/3*min(1,.02/ATR%); '
+                   f'notional={cfg.leverage}*margin; isolated long and short; no Spot; costs on notional; no unrealized sizing',
+        liquidation=dict(maintenance_margin_rate=str(cfg.maintenance_margin_rate),
+            enabled=cfg.leverage > 1, long='entry*(1-1/leverage+maintenance_margin_rate)',
+            short='entry*(1+1/leverage-maintenance_margin_rate)',
+            execution='mark M15 open or adverse high/low touch; fill at liquidation price; full margin forfeiture; '
+                      'exit costs booked within forfeiture; continue with unchanged combined daily3%',
+            ambiguous_intrabar_order='liquidation before trade-price stop when both M15 ranges touch'),
+        hard_stop='closer of ATR14x3 ratchet and 10% entry price; never loosened')
+    report['limitations'] = sorted(set(report['limitations'])-{'no_exact_liquidation_or_historical_demo_simulation'} |
+        {'fixed_maintenance_margin_not_exchange_tiers', 'conservative_m15_liquidation_before_stop_order',
+         'liquidation_price_not_tick_or_exchange_verified'})
+    return report
