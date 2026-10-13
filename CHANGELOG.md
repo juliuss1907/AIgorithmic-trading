@@ -4,6 +4,18 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-13 — Deploy mã ADR-007 lên VPS (cổng G2)
+
+VPS `julius-vps`, clone `~/AIgorithmic-trading`, Julius duyệt push và deploy. Chỉ deploy mã: **chưa** `active-set init`, chưa soak, chưa đụng Demo.
+
+- **Trước deploy:** VPS chạy `75e1d9e` (nhánh `fix/hyperliquid-frame-checksum`, không có trong `main` hay nhánh này). Đã gộp vào `feature/slot-runtime` (`846e744`, xung đột chỉ ở phần import; 1732 test qua, 1 lỗi có sẵn) để deploy không gỡ mất bản sửa nóng.
+- **Trạng thái trước deploy:** worker soak, web healthy, schema v23, BTC paper không vị thế và đang tạm dừng, Demo chưa từng cấu hình.
+- **Sao lưu:** `~/.local/state/aigorithmic-trading/backups/intraday-20261013T134644506616Z.sqlite3` (2,17 GB, SHA-256 `6d25bf92…caefeaa5`, `backup verify` ok). Chưa chép ra ngoài VPS.
+- **Deploy:** checkout `846e744`, build lại `worker`, `web`, `admin`, rồi `up -d --wait worker web` lúc 2026-10-13 13:53Z. `doctor` ok, `status` ok (paper, `execution_enabled: false`, schema 23), `/healthz` và `/api/active-set` trả 200, active set rỗng (chế độ legacy).
+- **Sự cố khi khởi động:** worker và web cùng khởi tạo database nên tranh khoá (`database is locked`). Web tự lên sau 2 lần khởi động lại; nhưng ba luồng nền của worker (`_news_loop`, `_asset_rule_bootstrap_loop`, `_gate_automation_loop`) **chết** vì mở database trước vòng lặp và không thử lại (lỗi có sẵn). Đã khởi động lại riêng worker khi web đã ổn: không còn luồng chết, vòng tin tức chạy lại.
+- **Cần sửa sau:** mở database bên trong vòng lặp có thử lại (hoặc đặt busy timeout), và deploy theo thứ tự web trước, worker sau.
+- **Ghi nhận:** Jev báo `insufficient_credits` (OpenRouter hết credit), nên mọi lượt soak `perp_intraday` là `provider_error`. Cần nạp credit trước cổng G4.
+
 ## 2026-10-13 — Ngoại lệ gate cho ZEC Perp và HYPE Perp (phụ lục ADR-007)
 
 Nhánh: `feature/slot-runtime`. Gate theo từng route loại ZEC Perp (−1,7% trong 30 tháng) và HYPE Perp (−4,4% trong 13 tháng); Julius chọn giữ cả 10 route bằng một ngoại lệ có phạm vi.

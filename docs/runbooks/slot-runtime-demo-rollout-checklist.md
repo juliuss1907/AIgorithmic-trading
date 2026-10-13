@@ -59,7 +59,9 @@ Cơ sở: [ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md), [ADR-0
 - [ ] `aigt backup create`, rồi `aigt backup verify <file>`; copy `.sqlite3` và `.manifest.json` sang nơi khác.
 - [ ] Ghi lại: commit và image ID đang chạy, chế độ worker, rule hash và campaign ID đang active, vị thế mở, trạng thái Demo.
 - [ ] Xác nhận **flat**: không vị thế BTC paper, không `perp_intraday`, Demo paused và flat (hoặc chưa từng cấu hình).
-- [ ] Julius duyệt push (G1) và deploy (G2). Chỉ rebuild `worker`, `web` (và `admin` khi cần). Không đổi schema (vẫn v23).
+- [x] Julius duyệt push (G1) và deploy (G2). Chỉ rebuild `worker`, `web` (và `admin` khi cần). Không đổi schema (vẫn v23).
+      **Đã deploy 2026-10-13 13:53Z, commit `846e744`** (gồm bản sửa nóng Hyperliquid đang chạy). Bài học: khởi động `web` trước rồi mới tới `worker`,
+      hoặc khởi động lại riêng `worker` sau khi web healthy; khởi động đồng thời làm ba luồng nền của worker chết vì tranh khoá database.
 - [ ] Sau deploy: `aigt doctor`, `aigt status` ổn; `aigt active-set show` báo chưa có version nếu chưa init; soak cũ vẫn chạy.
 
 ## Giai đoạn 3: kích hoạt tập coin (G3)
