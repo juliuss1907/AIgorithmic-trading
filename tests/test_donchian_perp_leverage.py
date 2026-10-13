@@ -156,3 +156,14 @@ def test_engine_mark_range_liquidation_precedes_an_ambiguous_stop_touch():
     assert report['summary']['daily_stops'] == 1
     assert not any(e['reason'] == 'unsupported_liquidation' for e in report['events'])
     assert abs(sum(t['net_pnl'] for t in report['trades'])-D(str(report['summary']['pnl_after_known_costs']))) < D('1e-10')
+
+
+def test_ten_percent_cap_keeps_a_wide_atr_stop_valid():
+    from intraday.replay_v2.donchian_filter_engine import simulate
+    cfg, p = prepared_account(1)
+    p.features['perp']['ETHUSDT'][START]['atr'] = D(100)
+    report = simulate(cfg, p)
+    entries = [e for e in report['events'] if e['kind'] == 'entry']
+    assert len(entries) == 1
+    trail = next(e for e in report['events'] if e['kind'] == 'entry_features')
+    assert D(trail['stop']) == D(99)

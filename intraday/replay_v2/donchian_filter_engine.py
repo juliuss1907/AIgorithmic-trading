@@ -294,7 +294,10 @@ def simulate(config, prepared):
                     failed_filters=failed,signal_available_at=at.isoformat())
                 continue
             price, atr = opening[market][s].open, f['atr']
-            if atr is None or not ZERO < stop*atr/price < ONE:
+            distance = stop*atr/price if atr is not None else ZERO
+            if leveraged:
+                distance = min(distance, hard_stop)
+            if atr is None or not ZERO < distance < ONE:
                 book.event(at,'entry_blocked','invalid_atr_stop',market=market,symbol=s)
                 continue
             if book.halted:
