@@ -146,4 +146,21 @@ replay gate then judges each route on 30 months and 31 to 47 closed trades) and 
 2025-05-30). The anchor fixes where each coin's indicator series begins and therefore where the gate's replay window begins
 (anchor plus the coin's warm-up bars); it does not change live signals once the indicators have converged. With these anchors the
 rehearsal passed seven of eight routes for the four established coins; ZEC Perp was rejected (net -1,7%), and HYPE Perp was rejected
-in its only possible window (net -4,4%). Under the current rule a rejected route cannot be activated and simply does not trade.
+in its only possible window (net -4,4%).
+
+## Addendum 2026-10-13: operator exception for ZEC Perp and HYPE Perp
+
+The per-route gate judges each coin and market alone, while the design was measured as a portfolio of coins competing for three
+positions. The operator chose to keep all ten routes and waive the gate's net-profit criterion for **ZEC Perp and HYPE Perp only**
+(`waive_net_return` in the active set). Every other criterion still applies: at least six closed trades, drawdown below 15%, data
+coverage, fresh candles and no risk violation. A waived route still fails when its replay loses **5% or more**
+(`NET_RETURN_WAIVER_FLOOR_PCT`), so a route that keeps losing is rejected at a later evaluation. The waiver shows in every gate report
+(`waived_nonpositive_net_return`).
+
+Evidence the operator accepted: ZEC Perp lost 1,7% over 30 months (31 trades, drawdown 5,7%) and HYPE Perp lost 4,4% over 13 months
+(20 trades, drawdown 7,1%), each alone on a third of a 50% sleeve. These two routes enter Demo on weaker evidence than the other eight.
+**HYPE Perp is 0,6 points from the floor**: a slightly worse replay at deployment time rejects it.
+
+Final rehearsal on a scratch database with the exact rollout command (anchors 2024-01-01 and HYPE 2025-06-01, HYPE proxy and both
+waivers): all ten routes pass the replay gate; three of them through a waiver (ZEC Perp and HYPE Perp on net profit, HYPE Spot on
+the trade count).

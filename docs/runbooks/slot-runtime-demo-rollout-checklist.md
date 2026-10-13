@@ -70,6 +70,7 @@ Cơ sở: [ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md), [ADR-0
 aigt active-set init --profile setup2_slots_v1 --anchor 2024-01-01 --anchor HYPE=2025-06-01 \
   --coin ETH:both --coin NEAR:both --coin SOL:both --coin ZEC:both --coin HYPE:both \
   --warmup HYPE=400 --spot-proxy HYPE=2026-09-24T08:00:00Z --waive-min-trades HYPE:spot \
+  --waive-net-return ZEC:perp --waive-net-return HYPE:perp \
   --actor julius --reason "ADR-007 rollout" [--no-demo-portfolio]
 ```
 
@@ -152,6 +153,21 @@ trên một database tạm, không chạm VPS hay Demo.
 
 - **Gate là kiểm tra từng route độc lập, lãi ròng > 0 trong cửa sổ**; kết quả nhạy theo cửa sổ. Cửa sổ dài cho nhiều lệnh hơn (31 đến 47 so với 11 đến 24), nên đáng tin hơn
   ngưỡng "≥ 6 lệnh". Chọn neo theo coin là quyết định của Julius, không phải để "cho qua gate".
-- **ZEC Perp bị loại ở cả hai cửa sổ và HYPE Perp bị loại ở cửa sổ duy nhất có thể**: theo quy tắc hiện tại hai route này không kích hoạt được, và không có đường ngoại lệ.
-  Route không kích hoạt thì đơn giản không giao dịch; rổ thực chạy khi đó là Spot × 5 (HYPE nhờ miễn trừ) và Perp × 3 (ETH, NEAR, SOL).
+- **ZEC Perp bị loại ở cả hai cửa sổ và HYPE Perp bị loại ở cửa sổ duy nhất có thể** theo quy tắc gate từng route. Julius chọn **ngoại lệ có phạm vi**
+  cho đúng hai route này (`--waive-net-return`): chỉ bỏ tiêu chí lãi ròng > 0, chặn dưới −5%, các tiêu chí khác giữ nguyên. Cấu hình vẫn là 5 coin, cả Spot
+  lẫn Perp (10 route).
 - **ETH Spot yếu trong 13 tháng gần nhất** (−2,6%) dù dương trong 30 tháng; HYPE Perp là coin đã lỗ trong cửa sổ có thể kiểm.
+
+### Chạy thử lần cuối với đúng lệnh triển khai (2026-10-13)
+
+Neo 2024-01-01 (HYPE 2025-06-01), proxy giá HYPE, ngưỡng 400, miễn trừ số lệnh cho HYPE Spot và miễn trừ lãi ròng cho ZEC Perp, HYPE Perp:
+
+| Route | Gate | Lệnh | Lãi ròng | DD | Miễn trừ |
+|---|---|---:|---:|---:|---|
+| ETH Perp / Spot | qua / qua | 46 / 36 | +5,44% / +1,98% | 5,53% / 5,26% | không |
+| NEAR Perp / Spot | qua / qua | 39 / 40 | +5,03% / +9,38% | 4,93% / 4,94% | không |
+| SOL Perp / Spot | qua / qua | 42 / 39 | +4,54% / +1,53% | 3,71% / 5,92% | không |
+| ZEC Perp / Spot | qua / qua | 31 / 47 | −1,69% / +15,09% | 5,73% / 4,54% | Perp: lãi ròng |
+| HYPE Perp / Spot | qua / qua | 20 / 0 | −4,36% / 0 | 7,11% / 0 | Perp: lãi ròng; Spot: số lệnh |
+
+**HYPE Perp chỉ cách chặn dưới −5% có 0,64 điểm**: lần đánh giá lúc triển khai có thể loại nó nếu replay xấu thêm một chút.

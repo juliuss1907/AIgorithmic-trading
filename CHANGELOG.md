@@ -4,6 +4,15 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-13 — Ngoại lệ gate cho ZEC Perp và HYPE Perp (phụ lục ADR-007)
+
+Nhánh: `feature/slot-runtime`. Gate theo từng route loại ZEC Perp (−1,7% trong 30 tháng) và HYPE Perp (−4,4% trong 13 tháng); Julius chọn giữ cả 10 route bằng một ngoại lệ có phạm vi.
+
+- **Mã:** `CoinPlan.waive_net_return` (thị trường của coin), `active-set init/switch --waive-net-return COIN:MARKET`, `GateEvidence.net_return_waived`. Gate chỉ bỏ tiêu chí lãi ròng > 0, còn lỗ từ 5% trở lên vẫn bị loại (`NET_RETURN_WAIVER_FLOOR_PCT`); số lệnh, DD < 15%, độ phủ dữ liệu vẫn áp dụng; mỗi miễn trừ để lại `waived_nonpositive_net_return` trong báo cáo.
+- **Kiểm thử:** 3 test mới (`tests/test_net_return_waiver.py`).
+- **Chạy thử lần cuối với đúng lệnh triển khai:** cả 10 route qua gate, 3 route qua nhờ miễn trừ (ZEC Perp và HYPE Perp ở lãi ròng, HYPE Spot ở số lệnh). HYPE Perp chỉ cách chặn dưới 0,64 điểm.
+- **Sửa diễn đạt:** bỏ cách viết "Spot ×5 và Perp ×3" như một cấu hình; cấu hình vẫn là 5 coin, cả hai thị trường.
+
 ## 2026-10-13 — Chạy thử quy trình triển khai trên database tạm (ADR-007)
 
 Nhánh: `feature/slot-runtime`. Chạy đúng các lệnh của checklist trên một database tạm với dữ liệu công khai (chỉ đọc), không chạm VPS hay Demo. Kết quả: [checklist](docs/runbooks/slot-runtime-demo-rollout-checklist.md).
