@@ -397,3 +397,29 @@ def test_capacity_verdict_judges_each_design_against_three_per_sleeve(tmp_path):
     assert verdict['candidates']['ETH-NEAR-SOL-ZEC-ROT-SLOT4S']['advance']
     assert not verdict['candidates']['ETH-NEAR-SOL-ZEC-ROT-SLOT6-QUARTER']['advance']   # 60 < 80
     assert not verdict['candidates']['ETH-NEAR-SOL-ZEC-ROT-SLOT4S-THIRD']['advance']    # DD 16% is above the 15% limit
+
+
+def test_pure_selection_matches_the_documented_order_and_rotation_rules():
+    from intraday.replay_v2.donchian_rotation_select import Candidate, Held, pnl_gate_blocks, select_entries
+    c = lambda m, s, adx, ratio=D(1): Candidate(m, s, D(1), D(adx), D(ratio))
+    h = lambda m, s, strength, pnl=0: Held(m, s, D(strength), D(pnl), True)
+    # Two free slots: the stronger two enter, ties go to the larger volume ratio, then symbol and market.
+    steps = select_entries([c('spot', 'AUSDT', 30), c('spot', 'BUSDT', 40), c('perp', 'CUSDT', 40, 2)], [h('spot', 'XUSDT', 10)],
+                           max_positions=3)
+    assert [(s.kind, s.symbol) for s in steps] == [('free', 'CUSDT'), ('free', 'BUSDT'), ('rotate', 'AUSDT')]
+    assert steps[2].victim == ('spot', 'XUSDT') and steps[2].victim_strength == D(10)
+    # Margin: needs more than 5 points over the weakest; equal or less is skipped, never closed.
+    blocked = select_entries([c('spot', 'AUSDT', 15)], [h('spot', 'XUSDT', 10)], max_positions=1)
+    assert [(s.kind, s.reason) for s in blocked] == [('blocked', 'rotation_margin')] and blocked[0].weakest == ('spot', 'XUSDT')
+    # Weakest tie-break: lower PnL first, then symbol.
+    tie = select_entries([c('spot', 'AUSDT', 40)], [h('spot', 'XUSDT', 10, 5), h('spot', 'YUSDT', 10, -5)], max_positions=2)
+    assert tie[0].victim == ('spot', 'YUSDT')
+    # Rotation off and one position per coin across sleeves (total) versus per sleeve.
+    off = select_entries([c('spot', 'AUSDT', 40)], [h('perp', 'XUSDT', 10)], max_positions=1, rotation=False)
+    assert [(s.kind, s.reason) for s in off] == [('blocked', 'position_limit')]
+    total = select_entries([c('spot', 'AUSDT', 40), c('perp', 'AUSDT', 30)], [], max_positions=3)
+    assert [(s.kind, s.reason) for s in total] == [('free', None), ('blocked', 'one_position_per_coin')]
+    sleeve = select_entries([c('spot', 'AUSDT', 40), c('perp', 'AUSDT', 30)], [], max_positions=3, limit_scope='sleeve')
+    assert [s.kind for s in sleeve] == ['free', 'free']
+    assert pnl_gate_blocks(1, D(0)) and not pnl_gate_blocks(0, D(-1)) and not pnl_gate_blocks(2, D(1))
+    assert not pnl_gate_blocks(1, D(-1), pnl_gate=False)

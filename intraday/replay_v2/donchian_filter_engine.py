@@ -10,6 +10,7 @@ from decimal import Decimal
 from intraday.replay_v2.donchian_filters import indicator_series, observation, volume_profile, entry_filters
 from intraday.replay_v2.donchian_filter_book import FilterBook, SlotBook, RotationBook, ATRTrail
 from intraday.replay_v2.donchian_filter_data import WARMUP
+from intraday.replay_v2.donchian_rotation_select import Candidate, Held, pnl_gate_blocks, select_entries
 from intraday.replay_v2.historical_data import validate_rows
 from intraday.replay_v2.historical_mixed import funding_audit, continuous_periods
 from intraday.replay_v2.intraday_data import verify_boundaries
@@ -362,67 +363,53 @@ def simulate(config, prepared):
             return granted
         held = [(m,s) for m in ('spot','perp') for s in sorted(active[m]) if position(book,m,s).quantity]
         pnl = open_book_pnl()
-        if config.pnl_gate and held and pnl <= 0:
+        if pnl_gate_blocks(len(held), pnl, pnl_gate=config.pnl_gate):
             for m,s,_ in entries:
                 book.event(at,'entry_blocked','pnl_gate',market=m,symbol=s,open_positions=len(held),
                            open_book_pnl=str(pnl))
             return granted
         side_of = {'spot':1,'perp':-1}
 
-        def rank(entry):
+        def candidate(entry):
             f = prepared.features[entry[0]][entry[1]][at]
             ratio = f['volume']/f['volume_ma'] if f['volume_ma'] else ZERO
-            return (f['adx'] if f['adx'] is not None else ZERO), ratio
+            return Candidate(entry[0], entry[1], entry[2], f['adx'] if f['adx'] is not None else ZERO, ratio)
 
-        order = sorted(entries,key=lambda e:(-rank(e)[0],-rank(e)[1],e[1],e[0]))
-        def bucket(market):
-            return 'all' if scope == 'total' else market
+        def holding(m, s):
+            p = position(book,m,s)
+            priced = s in opening[m]
+            return Held(m, s, strength(m,s,side_of[m],at),
+                        p.quantity*(opening[m][s].open-p.entry_price) if priced else ZERO, priced)
 
-        free = {b: max(0, config.max_positions-sum(1 for hm,_ in held if bucket(hm) == b))
-                for b in {bucket(m) for m in ('spot','perp')}}
-        taken, rotated, decisions = set(), [], []
-        for m,s,mult in order:
-            key = s if scope == 'total' else (m,s)
-            if key in taken:
-                book.event(at,'entry_blocked','one_position_per_coin',market=m,symbol=s)
-                continue
-            candidate = rank((m,s,mult))[0]
-            if free[bucket(m)] > 0:
-                free[bucket(m)] -= 1
-                granted[m][s] = mult
-                taken.add(key)
-                decisions.append(dict(market=m,symbol=s,adx=str(candidate),action='free_position'))
-                continue
-            if config.rotation == 'off':
-                book.event(at,'entry_blocked','position_limit',market=m,symbol=s)
-                continue
-            victims = [(hm,hs) for hm,hs in held if (hm,hs) not in rotated and hs in opening[hm]
-                       and bucket(hm) == bucket(m)]
-            if not victims:
-                book.event(at,'entry_blocked','position_limit',market=m,symbol=s)
-                continue
-            weakest = min(victims,key=lambda v:(strength(v[0],v[1],side_of[v[0]],at),
-                          position(book,*v).quantity*(opening[v[0]][v[1]].open-position(book,*v).entry_price),
-                          v[1],v[0]))
-            weak = strength(weakest[0],weakest[1],side_of[weakest[0]],at)
-            if candidate <= weak+config.rotation_margin:
-                book.event(at,'entry_blocked','rotation_margin',market=m,symbol=s,candidate_adx=str(candidate),
-                           weakest=f'{weakest[0]}:{weakest[1]}',weakest_strength=str(weak))
-                continue
-            book.event(at,'rotation','close_weakest_for_new_signal',market=m,symbol=s,candidate_adx=str(candidate),
-                       closed_market=weakest[0],closed_symbol=weakest[1],closed_strength=str(weak))
-            close_position(book,weakest[0],weakest[1],at,opening[weakest[0]][weakest[1]].open,'rotation_exit')
-            closed.add(weakest)
-            rotated.append(weakest)
-            risk(at)
-            if book.halted:
-                flatten(book,at,opening,closed)
+        steps = select_entries([candidate(e) for e in entries], [holding(m,s) for m,s in held],
+                               max_positions=config.max_positions, limit_scope=scope,
+                               rotation=config.rotation != 'off', margin=Decimal(config.rotation_margin))
+        decisions = []
+        for step in steps:
+            m, s = step.market, step.symbol
+            if step.kind == 'blocked':
+                if step.reason == 'rotation_margin':
+                    book.event(at,'entry_blocked','rotation_margin',market=m,symbol=s,candidate_adx=str(step.adx),
+                               weakest=f'{step.weakest[0]}:{step.weakest[1]}',
+                               weakest_strength=str(step.victim_strength))
+                else:
+                    book.event(at,'entry_blocked',step.reason,market=m,symbol=s)
+            elif step.kind == 'free':
+                granted[m][s] = step.multiplier
+                decisions.append(dict(market=m,symbol=s,adx=str(step.adx),action='free_position'))
+            else:
+                vm, vs = step.victim
+                book.event(at,'rotation','close_weakest_for_new_signal',market=m,symbol=s,candidate_adx=str(step.adx),
+                           closed_market=vm,closed_symbol=vs,closed_strength=str(step.victim_strength))
+                close_position(book,vm,vs,at,opening[vm][vs].open,'rotation_exit')
+                closed.add(step.victim)
                 risk(at)
-                return {'spot':{}, 'perp':{}}
-            granted[m][s] = mult
-            taken.add(key)
-            decisions.append(dict(market=m,symbol=s,adx=str(candidate),action='rotated',
-                                  closed=f'{weakest[0]}:{weakest[1]}'))
+                if book.halted:
+                    flatten(book,at,opening,closed)
+                    risk(at)
+                    return {'spot':{}, 'perp':{}}
+                granted[m][s] = step.multiplier
+                decisions.append(dict(market=m,symbol=s,adx=str(step.adx),action='rotated',closed=f'{vm}:{vs}'))
         book.event(at,'selection','rotation_ranking',limit_scope=scope,open_positions=len(held),
                    open_book_pnl=str(pnl),decisions=decisions)
         return granted
