@@ -132,7 +132,16 @@ def profile_start(anchor, warmup_bars=setup2.WARMUP_BARS):
     return anchor+(warmup_bars-1)*setup2.H4-setup2.PROFILE_WINDOW
 
 
-def sync(store, symbol, market, *, anchor, now, fetch_spot=None, fetch_perp=None):
+def first_spot_bar(symbol, interval, at):
+    """Open time of the first Spot bar at or after `at`: a new listing can start trading inside its first bar."""
+    from intraday.replay_v2.donchian_filter_data import public_spot_json
+    page = public_spot_json(dict(symbol=symbol, interval=interval, startTime=int(at.timestamp()*1000), limit=1))
+    if not isinstance(page, list) or not page:
+        raise ValueError('the Spot market has no bar from the proxy boundary yet')
+    return datetime.fromtimestamp(int(page[0][0])/1000, timezone.utc)
+
+
+def sync(store, symbol, market, *, anchor, now, fetch_spot=None, fetch_perp=None, probe_spot=None):
     """Fetch closed public bars from the last stored one (or the anchor) to the H4 boundary."""
     from intraday.replay_v2.donchian_filter_data import fetch_spot_snapshot
     from intraday.replay_v2.historical_data import fetch_candle_snapshot
@@ -145,6 +154,10 @@ def sync(store, symbol, market, *, anchor, now, fetch_spot=None, fetch_perp=None
         if floor is not None:
             first = max(first, floor)
         stored = list_bars(store, symbol, market, interval, since=first)
+        if floor is not None and not stored:
+            # A young Spot market may start trading some bars after the boundary (HYPE: its first M15 bar is three
+            # hours into the first H4 bar); the window must start at the first bar that exists.
+            first = (probe_spot or first_spot_bar)(symbol, interval, first)
         start = stored[-1].available_at if stored else first
         if start >= end:
             fetched[interval] = 0

@@ -36,9 +36,9 @@ def add_active_set_parser(commands):
                                   "series (volume zero, no entries there); the coin's first own Spot bar is typical")
         command.add_argument("--waive-min-trades", action="append", default=[], metavar="COIN:spot",
                              help="waive the replay gate's six-closed-trades criterion for a Perp-proxied Spot route")
-        command.add_argument("--anchor", default=None, metavar="YYYY-MM-DD",
-                             help="indicator anchor for new coins (UTC date at an H4 boundary); an earlier anchor "
-                                  "gives the replay gate more history")
+        command.add_argument("--anchor", action="append", default=[], metavar="[COIN=]YYYY-MM-DD",
+                             help="indicator anchor for new coins (UTC date at an H4 boundary); `COIN=DATE` sets one "
+                                  "coin, a bare date the rest. An earlier anchor gives the replay gate more history")
         command.add_argument("--watch", action="append", default=[], metavar="COIN",
                              help="rotation candidate: rule-only Setup-2 soak, no Jev and no trading")
         command.add_argument("--execution-database", type=Path,
@@ -52,8 +52,10 @@ def add_active_set_parser(commands):
 def _anchor(previous, symbol, now, override=None):
     if previous and previous.plan.anchor(symbol):
         return previous.plan.anchor(symbol)
-    if override is not None:
-        return override
+    if override and symbol in override:
+        return override[symbol]
+    if override and None in override:
+        return override[None]
     if previous is None:
         return INITIAL_ANCHOR
     epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -61,13 +63,21 @@ def _anchor(previous, symbol, now, override=None):
 
 
 def _override(arguments):
-    value = getattr(arguments, "anchor", None)
-    if value is None:
-        return None
-    anchor = datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
-    if (anchor - datetime(1970, 1, 1, tzinfo=timezone.utc)) % active_set.H4:
-        raise ValueError("--anchor must be an H4 boundary")
-    return anchor
+    """Anchors given on the command line: {coin or None: datetime}; None is the default for the other coins."""
+    values = getattr(arguments, "anchor", None) or []
+    if isinstance(values, str):
+        values = [values]
+    result = {}
+    for item in values:
+        coin, separator, date = item.rpartition("=")
+        key = ticker_symbol(coin) if separator else None
+        anchor = datetime.fromisoformat(date).replace(tzinfo=timezone.utc)
+        if (anchor - datetime(1970, 1, 1, tzinfo=timezone.utc)) % active_set.H4:
+            raise ValueError("--anchor must be an H4 boundary")
+        if key in result:
+            raise ValueError("one --anchor per coin and one default")
+        result[key] = anchor
+    return result
 
 
 def _per_coin(items, parse):

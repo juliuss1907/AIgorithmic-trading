@@ -125,17 +125,32 @@ def test_the_waiver_lapses_once_the_spot_market_has_enough_bars_of_its_own(tmp_p
     assert evaluation.metrics['min_trades_waived'] == 0
 
 
-def test_sync_fetches_a_proxied_spot_market_only_from_its_boundary(tmp_path, series):
-    store, boundary = build(tmp_path, series)
+def test_sync_fetches_a_proxied_spot_market_only_from_its_first_own_bar(tmp_path, series):
     large, small = series
-    calls = []
+    boundary = large[len(large)-172].opened_at
+    store = IntradayStore(tmp_path/'intraday.sqlite')
+    plan = active_set.slots_plan({SYMBOL: 'both'}, anchors={SYMBOL: FIRST}, warmup={SYMBOL: 400},
+                                 proxy={SYMBOL: boundary}, waive={SYMBOL: True})
+    active_set.switch(store, plan, actor='julius', reason='sync test', now=FIRST, execution_check=lambda: None,
+                      initial=True)
+    calls, probes = [], []
 
     def fetch(symbol, interval, start, end, *, now):
         calls.append((interval, start))
         return type('Snapshot', (), {'raw_rows': []})()
+
+    def probe(symbol, interval, at):
+        probes.append((interval, at))
+        return at+timedelta(hours=3) if interval == '15m' else at    # trading began three hours into the first bar
     now = large[-1].available_at+timedelta(hours=8)
-    setup2_store.sync(store, SYMBOL, 'spot', anchor=FIRST, now=now, fetch_spot=fetch)
-    assert calls and all(start >= boundary for _, start in calls)
+    setup2_store.sync(store, SYMBOL, 'spot', anchor=FIRST, now=now, fetch_spot=fetch, probe_spot=probe)
+    assert dict(calls) == {'4h': boundary, '15m': boundary+timedelta(hours=3)}
+    assert {interval: at for interval, at in probes} == {'4h': boundary, '15m': boundary}
+    # Perp is never probed or clipped to the boundary: it starts at the anchor.
+    calls.clear()
+    perp = lambda *a, **k: type('Snapshot', (), {'raw_rows': []})()
+    setup2_store.sync(store, SYMBOL, 'perp', anchor=FIRST, now=now, fetch_perp=perp, probe_spot=probe)
+    assert len(probes) == 2
 
 
 def test_readiness_counts_the_proxy_and_asks_for_twenty_days_of_the_markets_own_bars(tmp_path, series):
@@ -240,3 +255,19 @@ def test_rotation_in_needs_the_proxy_history_and_twenty_days_of_the_markets_own_
     # Without the proxy the same coin would need its own 400 bars.
     bare = coin.model_copy(update={'spot_price_proxy_until': None, 'waive_min_trades': ()})
     assert 'history_not_ready' in active_set.rotation_blockers(store, SYMBOL, bare, now)
+
+
+def test_cli_anchors_can_differ_per_coin():
+    import argparse
+    from datetime import datetime, timezone
+    from intraday.active_set_cli import build_plan
+    now = datetime(2026, 10, 14, tzinfo=timezone.utc)
+    arguments = argparse.Namespace(coins=None, mode='both', coin=['ETH:both', 'HYPE:both'], split=None, profile=PROFILE,
+                                   watch=[], anchor=['2024-01-01', 'HYPE=2025-06-01'], warmup=[], spot_proxy=[],
+                                   waive_min_trades=[])
+    plan = build_plan(arguments, None, now)
+    assert plan.anchor('ETHUSDT') == datetime(2024, 1, 1, tzinfo=timezone.utc)
+    assert plan.anchor('HYPEUSDT') == datetime(2025, 6, 1, tzinfo=timezone.utc)
+    arguments.anchor = ['HYPE=2025-06-01', 'HYPE=2025-07-01']
+    with pytest.raises(ValueError, match='one --anchor per coin'):
+        build_plan(arguments, None, now)
