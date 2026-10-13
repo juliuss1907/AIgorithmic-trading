@@ -823,12 +823,21 @@ class RuleParameters(StrictContract):
         return value
 
 
+# Setup-2 rule profiles and the Donchian windows each locks (ADR-006; ADR-007 adds the slot design's 25).
+SETUP2_DONCHIAN = {"setup2_v1": (30, 10, 14), "setup2_slots_v1": (25, 10, 14)}
+SETUP2_PROFILES = tuple(SETUP2_DONCHIAN)
+
+
+def is_setup2_profile(value) -> bool:
+    return value in SETUP2_DONCHIAN
+
+
 class PerpRuleParameters(RuleParameters):
     """Bounded model-tunable filters for the isolated 3x perpetual sleeve."""
 
     confidence_threshold: float = Field(default=0.85, ge=0.69, le=1.0, allow_inf_nan=False)
     # Setup-2 short (ADR-006): closed-H4 rule signal, Jev may only confirm SELL; never model-tuned.
-    entry_profile: Literal["jev_intraday_v1", "setup2_v1"] = "jev_intraday_v1"
+    entry_profile: Literal["jev_intraday_v1", "setup2_v1", "setup2_slots_v1"] = "jev_intraday_v1"
 
     @model_serializer(mode="wrap")
     def omit_default_profile(self, handler):
@@ -851,7 +860,7 @@ class SpotRuleParameters(StrictContract):
         Regime.SIDEWAYS,
     )
     # Setup-2 (ADR-006): closed-H4 30/10 with A4 filters and ADX20; fixed, never model-tuned.
-    entry_profile: Literal["donchian_v1", "setup2_v1"] = "donchian_v1"
+    entry_profile: Literal["donchian_v1", "setup2_v1", "setup2_slots_v1"] = "donchian_v1"
 
     @model_serializer(mode="wrap")
     def omit_default_profile(self, handler):
@@ -872,9 +881,9 @@ class SpotRuleParameters(StrictContract):
     def exit_window_is_shorter(self):
         if self.exit_window >= self.entry_window:
             raise ValueError("exit_window must be shorter than entry_window")
-        if self.entry_profile == "setup2_v1" and (
-                self.entry_window, self.exit_window, self.atr_period) != (30, 10, 14):
-            raise ValueError("setup2_v1 is locked to Donchian 30/10 and ATR14")
+        locked = SETUP2_DONCHIAN.get(self.entry_profile)
+        if locked is not None and (self.entry_window, self.exit_window, self.atr_period) != locked:
+            raise ValueError(f"{self.entry_profile} is locked to Donchian {locked[0]}/{locked[1]} and ATR{locked[2]}")
         return self
 
 

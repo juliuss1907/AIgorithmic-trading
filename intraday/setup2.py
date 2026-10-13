@@ -18,6 +18,12 @@ WARMUP_BARS, PROFILE_BARS = 600, 1920
 H4, M15 = timedelta(hours=4), timedelta(minutes=15)
 PROFILE_WINDOW = timedelta(hours=480)
 STOP_CAP = Decimal('.10')
+# Per rule profile (ADR-007): the slot design enters on a 25-bar channel and caps the stop at 5%.
+ENTRY_WINDOWS = {'setup2_v1': ENTRY, 'setup2_slots_v1': 25}
+STOP_CAPS = {'setup2_v1': STOP_CAP, 'setup2_slots_v1': Decimal('.05')}
+EVALUATOR_VERSIONS = {'setup2_v1': EVALUATOR_VERSION, 'setup2_slots_v1': 'setup2-slots-live-v1'}
+# Spot and Perp sleeve shares of capital per profile (60/40 of ADR-006; 50/50 slot design of ADR-007).
+SPLITS = {'setup2_v1': (Decimal('.6'), Decimal('.4')), 'setup2_slots_v1': (Decimal('.5'), Decimal('.5'))}
 ZERO, ONE = Decimal(0), Decimal(1)
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
@@ -89,11 +95,22 @@ def anchored(h4, anchor):
     return series
 
 
-def _observe(series, indicators, i, m15, times, side):
+def _profile(profile):
+    if profile not in ENTRY_WINDOWS:
+        raise ValueError('unknown Setup-2 profile')
+    return ENTRY_WINDOWS[profile], EVALUATOR_VERSIONS[profile]
+
+
+def stop_cap(profile='setup2_v1'):
+    return STOP_CAPS[profile]
+
+
+def _observe(series, indicators, i, m15, times, side, profile='setup2_v1'):
     """Observation for closed bar `i` of an anchored series; `indicators` is its causal pass."""
+    entry, version = _profile(profile)
     trigger = series[i]
     f = indicators[i].copy()
-    obs = observation(series[max(0, i-ENTRY):i+1], ENTRY, EXIT)
+    obs = observation(series[max(0, i-entry):i+1], entry, EXIT)
     # Profile ends at the trigger OPEN: (open-480h, open] by availability, as in research.
     window = m15[bisect_right(times, trigger.opened_at-PROFILE_WINDOW):bisect_right(times, trigger.opened_at)]
     blockers = []
@@ -114,30 +131,30 @@ def _observe(series, indicators, i, m15, times, side):
         side=side, bar_open=trigger.opened_at, bar_close=trigger.available_at,
         entry=donchian and not failed and not blockers, exit=obs['long_exit' if side > 0 else 'short_exit'],
         donchian_entry=donchian, failed_filters=failed, blockers=tuple(blockers), close=trigger.close,
-        atr=atr, size_multiplier=size, profile=f['profile'], features=features)
+        atr=atr, size_multiplier=size, profile=f['profile'], features=features, evaluator_version=version)
 
 
 def _not_ready(side):
     return Setup2Observation(side, None, None, False, False, False, blockers=('history_not_ready',))
 
 
-def evaluate_setup2(h4, m15, *, side, anchor):
+def evaluate_setup2(h4, m15, *, side, anchor, profile='setup2_v1'):
     """Signal on the last closed H4 bar. Missing data blocks entries but never exits."""
     if side not in (1, -1):
         raise ValueError('side must be +1 (Spot long) or -1 (Perp short)')
     series = anchored(h4, anchor)
     if series is None or len(series) < WARMUP_BARS:
         return _not_ready(side)
-    return _observe(series, indicator_series(series), len(series)-1, m15, [b.available_at for b in m15], side)
+    return _observe(series, indicator_series(series), len(series)-1, m15, [b.available_at for b in m15], side, profile)
 
 
-def series_observations(h4, m15, *, side, anchor):
+def series_observations(h4, m15, *, side, anchor, profile='setup2_v1'):
     """Every warmed-up bar of one anchored series with a single causal indicator pass (replay)."""
     series = anchored(h4, anchor)
     if series is None:
         return series, []
     indicators, times = indicator_series(series), [b.available_at for b in m15]
-    return series, [_observe(series, indicators, i, m15, times, side) if i >= WARMUP_BARS-1 else None
+    return series, [_observe(series, indicators, i, m15, times, side, profile) if i >= WARMUP_BARS-1 else None
                     for i in range(len(series))]
 
 

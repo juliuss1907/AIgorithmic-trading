@@ -89,10 +89,21 @@ class GateEvaluation(FrozenModel):
 
 # Setup-2 replays size one coin at a third of its 60/40 sleeve, Isolated 1x (ADR-006).
 SETUP2_FRACTIONS = {"spot": Decimal(".6")/3, "perp": Decimal(".4")/3}
+# The slot design (ADR-007) sizes a coin at a third of a 50% sleeve.
+SETUP2_SLOTS_FRACTIONS = {"spot": Decimal(".5")/3, "perp": Decimal(".5")/3}
+
+
+def setup2_profile(report):
+    profile = report.get("inputs", {}).get("rule_parameters", {}).get("entry_profile")
+    return profile if profile in ("setup2_v1", "setup2_slots_v1") else None
 
 
 def is_setup2_report(report):
-    return report.get("inputs", {}).get("rule_parameters", {}).get("entry_profile") == "setup2_v1"
+    return setup2_profile(report) is not None
+
+
+def setup2_fractions(report):
+    return SETUP2_SLOTS_FRACTIONS if setup2_profile(report) == "setup2_slots_v1" else SETUP2_FRACTIONS
 
 
 def _audit_entries(report):
@@ -106,11 +117,12 @@ def _audit_entries(report):
         if audit is None:
             raise ValueError("gate replay requires fill risk audit evidence")
         equity, notional = Decimal(audit["pre_fill_equity"]), Decimal(audit["notional"])
-        cap = (SETUP2_FRACTIONS[config.market] if setup2 else
+        fractions = setup2_fractions(report)
+        cap = (fractions[config.market] if setup2 else
                Decimal(".30") if config.market == "spot" else Decimal(".20"))
         safe = 0 < notional <= min(config.capital, equity)*cap
         if config.market == "perp":
-            margin = SETUP2_FRACTIONS["perp"] if setup2 else Decimal(".10")
+            margin = fractions["perp"] if setup2 else Decimal(".10")
             safe = safe and notional/config.leverage <= equity*margin
         safe = safe and not audit["entries_paused"] and (config.market != "spot" or event["side"] == 1)
         violations += not safe

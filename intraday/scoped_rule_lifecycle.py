@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from intraday.contracts import DecisionScope, Direction, Regime, RiskLevel
+from intraday.contracts import DecisionScope, Direction, Regime, RiskLevel, is_setup2_profile
 
 
 class ScopedRuleEvaluation(BaseModel):
@@ -64,7 +64,7 @@ def rule_allows_answers(rule, answers: dict) -> bool:
             and toxic <= 0.30
         )
     quality = float(answers["entry_quality"]["score"]) + 1
-    if getattr(rule.parameters, "entry_profile", None) == "setup2_v1" and direction not in {
+    if is_setup2_profile(getattr(rule.parameters, "entry_profile", None)) and direction not in {
             Direction.SELL, Direction.STRONG_SELL}:
         return False  # The Setup-2 short is rule-generated; Jev may only confirm its side.
     return (

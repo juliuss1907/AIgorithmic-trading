@@ -125,15 +125,22 @@ SETUP2_SLOT = Decimal(1)/3
 
 
 def is_setup2(rule):
-    return getattr(rule.parameters, "entry_profile", "donchian_v1") == "setup2_v1"
+    from intraday.contracts import is_setup2_profile
+    return is_setup2_profile(getattr(rule.parameters, "entry_profile", "donchian_v1"))
+
+
+def setup2_splits(rule):
+    from intraday import setup2
+    return setup2.SPLITS[getattr(rule.parameters, "entry_profile", "setup2_v1")]
 
 
 def _setup2(config, data, book, limitations, side=1):
     """Setup-2 on closed H4 bars: signal at close, fill at the next open, capped ATR trail."""
     from intraday import setup2
     from intraday.replay_v2.donchian_filter_book import ATRTrail
+    profile = getattr(data.rule.parameters, "entry_profile", "setup2_v1")
     series, observations = setup2.series_observations(list(data.candles), list(data.profile_candles),
-                                                       side=side, anchor=data.indicator_anchor)
+                                                       side=side, anchor=data.indicator_anchor, profile=profile)
     if series is None:
         limitations.add("setup2_history_not_anchored")
         return
@@ -162,7 +169,7 @@ def _setup2(config, data, book, limitations, side=1):
                 if book.halted:
                     book.deny(candle.opened_at, candle.open, "portfolio_loss_limit")
                 else:
-                    stop_distance = min(3*signal.atr/candle.open, setup2.STOP_CAP)
+                    stop_distance = min(3*signal.atr/candle.open, setup2.stop_cap(profile))
                     target = min(config.capital, book.equity(candle.open))*book.entry_fraction*signal.size_multiplier
                     if book.enter(candle.opened_at, candle.open, target, side=side, stop_distance=stop_distance):
                         trail = ATRTrail(side, candle.open, signal.atr)
@@ -207,7 +214,8 @@ def simulate(config: ReplayConfig, data: ReplayDataset) -> dict:
     with localcontext() as context:
         context.prec = 28
         if is_setup2(data.rule):
-            book = Ledger(config, policy=ParentPortfolioPolicy.from_split(Decimal(".6"), Decimal(".4"), 1),
+            spot_share, perp_share = setup2_splits(data.rule)
+            book = Ledger(config, policy=ParentPortfolioPolicy.from_split(spot_share, perp_share, 1),
                           slot_weight=SETUP2_SLOT)
             limitations.update({"setup2_jev_filter_not_replayed", "setup2_ohlc_path_assumed_adverse_first",
                                 "setup2_intrabar_timestamps_estimated", "setup2_m15_profile_uniform_volume",

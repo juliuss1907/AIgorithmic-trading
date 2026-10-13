@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 
 from intraday.assets import ticker_symbol
-from intraday.contracts import DecisionScope, FeatureSnapshot, JevDecision, ScopedRuleCandidate
+from intraday.contracts import DecisionScope, FeatureSnapshot, JevDecision, ScopedRuleCandidate, is_setup2_profile
 from intraday.execution.source import EvidenceSource
 from intraday.providers import JevDecisionProvider
 from intraday.scoped_rule_lifecycle import ScopedRuleEvaluation
@@ -121,7 +121,9 @@ class ScopedEvidenceSource(EvidenceSource):
         """Setup-2 observation of the last closed H4 bar from stored anchored bars (ADR-006)."""
         from intraday.setup2_store import coin_anchor, evaluate
         reader = self._reader()
-        observation = evaluate(reader, self.symbol, self.market, anchor=coin_anchor(reader, self.symbol), now=now)
+        profile = getattr(self.rule().parameters, "entry_profile", "setup2_v1")
+        observation = evaluate(reader, self.symbol, self.market, anchor=coin_anchor(reader, self.symbol), now=now,
+                               profile=profile)
         if observation.bar_close is None or not 0 <= (now-observation.bar_close).total_seconds() <= 14700:
             raise ValueError("Setup-2 closed 4h bars are stale or not warmed up")
         return observation, int(observation.bar_close.timestamp()*1000)-1
@@ -133,12 +135,14 @@ class ScopedEvidenceSource(EvidenceSource):
         reader = self._reader()
         anchor = coin_anchor(reader, self.symbol)
         bars = list_bars(reader, self.symbol, self.market, "4h", since=anchor, until=setup2.floor_h4(now))
-        return setup2.trail_stop(side, entry_price, signal_atr, bars, entered_at=entered_at, anchor=anchor)
+        profile = getattr(self.rule().parameters, "entry_profile", "setup2_v1")
+        return setup2.trail_stop(side, entry_price, signal_atr, bars, entered_at=entered_at, anchor=anchor,
+                                 cap=setup2.stop_cap(profile))
 
     def spot_setup(self, *, now, rule):
         if self.market != "spot":
             raise ValueError("Spot setup requires Spot scope")
-        if getattr(rule.parameters, "entry_profile", "donchian_v1") == "setup2_v1":
+        if is_setup2_profile(getattr(rule.parameters, "entry_profile", "donchian_v1")):
             return self.setup2_signal(now=now)
         with self.connect() as c:
             rows = c.execute("SELECT payload_json FROM asset_daily_candles WHERE symbol=? AND interval='4h' "

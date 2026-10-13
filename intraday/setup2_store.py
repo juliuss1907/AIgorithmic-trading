@@ -108,12 +108,12 @@ def sync(store, symbol, market, *, anchor, now, fetch_spot=None, fetch_perp=None
     return fetched
 
 
-def evaluate(store, symbol, market, *, anchor, now):
+def evaluate(store, symbol, market, *, anchor, now, profile='setup2_v1'):
     side = 1 if market == 'spot' else -1
     until = setup2.floor_h4(now)
     return setup2.evaluate_setup2(list_bars(store, symbol, market, '4h', since=anchor, until=until),
                                   list_bars(store, symbol, market, '15m', since=profile_start(anchor), until=until),
-                                  side=side, anchor=anchor)
+                                  side=side, anchor=anchor, profile=profile)
 
 
 def record_observation(store, symbol, market, rule_id, observation, *, active, jev_status, now):
@@ -160,7 +160,8 @@ def run_setup2_observation(store, provider, snapshot, *, rule, market, now):
     scope = SCOPES[market]
     symbol = snapshot.symbol
     anchor = coin_anchor(store, symbol)
-    observation = evaluate(store, symbol, market, anchor=anchor, now=now)
+    observation = evaluate(store, symbol, market, anchor=anchor, now=now,
+                           profile=getattr(rule.parameters, 'entry_profile', 'setup2_v1'))
     active = active_set.is_active(store, symbol, active_set.RULE_SCOPES[market]) is True
     if not observation.entry or not active:
         status = 'skipped_no_setup' if active else 'skipped_inactive'

@@ -10,7 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from intraday.contracts import FeatureSnapshot, JevDecision, ModelCallRecord
+from intraday.contracts import FeatureSnapshot, JevDecision, ModelCallRecord, is_setup2_profile
 from intraday.providers import JevDecisionProvider
 from intraday.replay_v2.contracts import (
     Candle, QuotePoint, RecordedDecision, ReplayConfig, ReplayDataset, utc,
@@ -121,7 +121,7 @@ def load_dataset(database: str | Path, config: ReplayConfig, *, reader=None) -> 
             raise ValueError("market scope is not enabled for this registered coin")
         evaluation = store.latest_scoped_rule_evaluation(rule.rule_id, kind="replay")
         reference = evaluation.model_dump(mode="json") if evaluation else None
-        if getattr(rule.parameters, "entry_profile", None) == "setup2_v1":
+        if is_setup2_profile(getattr(rule.parameters, "entry_profile", None)):
             from intraday.setup2_store import coin_anchor, list_bars, profile_start
             anchor = coin_anchor(store, config.symbol)
             candles = tuple(Candle(opened_at=b.opened_at, available_at=b.available_at, open=b.open, high=b.high,

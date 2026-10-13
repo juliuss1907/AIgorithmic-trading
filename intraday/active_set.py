@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from intraday.assets import normalize_symbol
-from intraday.contracts import DecisionScope
+from intraday.contracts import DecisionScope, is_setup2_profile
 
 EXTENSION_VERSION = '1'
 MAX_COINS = 3
@@ -234,7 +234,7 @@ def setup2_soak_passed(store, symbol, market):
     scope = DecisionScope.SPOT_4H if market == 'spot' else DecisionScope.PERP_INTRADAY
     for row in store.list_scoped_rules(scope, symbol=symbol):
         rule = store.load_scoped_rule(row['id'])
-        if getattr(rule.parameters, 'entry_profile', None) == 'setup2_v1':
+        if is_setup2_profile(getattr(rule.parameters, 'entry_profile', None)):
             latest = repository.latest(rule.rule_id, kind='soak')
             if latest is not None and latest.status == 'pass':
                 return True

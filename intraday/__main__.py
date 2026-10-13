@@ -64,6 +64,7 @@ from intraday.contracts import (
     ProviderProfile,
     ProviderRole,
     SpotRuleParameters,
+    is_setup2_profile,
 )
 from intraday.cross_venue import (
     CrossVenuePolicy,
@@ -1691,7 +1692,7 @@ def _run_registered_asset_cycles(
                     )
                     if (spot_rule is not None
                             and (active_set_allows(store, symbol, scope) or active_set_watched(store, symbol))
-                            and getattr(spot_rule.parameters, "entry_profile", "donchian_v1") == "setup2_v1"):
+                            and is_setup2_profile(getattr(spot_rule.parameters, "entry_profile", "donchian_v1"))):
                         from intraday.setup2_store import coin_anchor, sync as setup2_sync
                         setup2_sync(store, symbol, "spot", anchor=coin_anchor(store, symbol), now=now)
                 result = run_asset_lifecycle_observation(
@@ -1733,7 +1734,7 @@ def _run_perp_setup2_cycles(store, provider, *, perp_markets, now):
             continue
         rule = (store.load_scoped_challenger(DecisionScope.PERP_INTRADAY, symbol=symbol)
                 or store.load_active_scoped_rule(DecisionScope.PERP_INTRADAY, symbol=symbol))
-        if rule is None or getattr(rule.parameters, "entry_profile", None) != "setup2_v1":
+        if rule is None or not is_setup2_profile(getattr(rule.parameters, "entry_profile", None)):
             continue
         job = f"asset_perp_setup2_{symbol.lower()}"
         slot = claim_cadence(store, job, now, 14_400)

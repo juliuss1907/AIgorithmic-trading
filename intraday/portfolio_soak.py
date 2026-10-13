@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from intraday.active_set import allows, record_skip, watched
 from intraday.assets import AssetStage
-from intraday.contracts import DecisionScope, FeatureSnapshot
+from intraday.contracts import DecisionScope, FeatureSnapshot, is_setup2_profile
 from intraday.journal import _fallback_trace, record_scoped_signal
 from intraday.scoped_rule_lifecycle import rule_allows_answers
 from intraday.spot_signal import evaluate_donchian
@@ -119,7 +119,7 @@ def run_spot_soak_observation(
     """Record a Spot heartbeat and call Jev only for a valid 1d/4h setup."""
     if scope not in {DecisionScope.SPOT_DAILY, DecisionScope.SPOT_4H}:
         raise ValueError("spot soak requires a Spot scope")
-    if rule is not None and getattr(rule.parameters, "entry_profile", "donchian_v1") == "setup2_v1":
+    if rule is not None and is_setup2_profile(getattr(rule.parameters, "entry_profile", "donchian_v1")):
         if scope is not DecisionScope.SPOT_4H:
             raise ValueError("setup2 rules run only on spot_4h")
         from intraday.setup2_store import run_setup2_observation
@@ -202,7 +202,7 @@ def run_asset_lifecycle_observation(
     if not allows(store, snapshot.symbol, scope):
         # Outside the operator active set (ADR-004): data only, never the model boundary.
         if (watched(store, snapshot.symbol) and spot_rule is not None and scope is DecisionScope.SPOT_4H
-                and getattr(spot_rule.parameters, "entry_profile", "donchian_v1") == "setup2_v1"):
+                and is_setup2_profile(getattr(spot_rule.parameters, "entry_profile", "donchian_v1"))):
             from intraday.setup2_store import run_setup2_observation
             # Rotation candidate: rule-only soak evidence; run_setup2_observation never calls Jev here.
             return run_setup2_observation(store, provider, snapshot, rule=spot_rule, market="spot", now=now)
