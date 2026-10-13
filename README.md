@@ -106,6 +106,9 @@ Spot-only và Perp3x intraday trailing dùng100% vốn, BTC/ETH/SOL và realized
 Spot60% + Short1x40%, BTC/ETH/SOL40/30/30:20 case Donchian20/30 x exit8/10,
 thêm EMA/ADX/volume/profile, ATR trailing H4 và riskM15; không thay rule đang chạy.
 [Setup và lệnh nghiên cứu offline](docs/donchian-filter-research.md).
+
+Replay 48 giờ cho mười setup và so sánh Perp long/short 100% vốn 1x/5x, stop giá 10%:
+[Cách chạy, kết quả lịch sử và kiểm toán](docs/perp-leverage-research.md). Chỉ nghiên cứu offline.
 Gate operator riêng: `aigt assets rules replay RULE_ID --engine v2`, sau passing
 evaluation mới explicit start validation 14 ngày và promote. Spot fee/slippage
 10/5 bps, Perp 5/5 bps mỗi fill; không rewrite v1 và không tự bật execution.

@@ -4,6 +4,17 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-13 — Replay 48 giờ và Perp long/short 1x/5x
+
+Nhánh riêng: `research/recent-48h-perp5x`, từ `7e36110`; [đặc tả, dự đoán và kết quả](docs/perp-leverage-research.md).
+
+- **Thêm:** `donchian_recent`, ba gói dữ liệu công khai theo tập coin, mười ca replay và kiểm tra tái hiện summary/result ID/toàn bộ journal; báo cáo lệnh, breakout bị chặn và vị thế đánh giá tại cuối cửa sổ.
+- **Thêm:** `PerpLeverageConfig` và sổ riêng cho 100% Perp ETH/NEAR/SOL thirds, long/short isolated 1x/5x, margin tách khỏi notional, ATR×3 trailing kết hợp stop giá 10%, daily loss 3% giữ nguyên. Thanh lý 5x dùng maintenance 0,4%, mất margin và tiếp tục replay; ghi rõ giả định thanh lý trước stop khi M15 không cho biết thứ tự.
+- **Thêm:** universe lịch sử `perp-leverage`, đối chứng H4, chi phí thường/×2 và năm tiêu chí cũ; script kiểm toán Decimal và hồi quy ba ca đã công bố. Cấu hình Basket/Rotation, ADR-005 và runtime không đổi.
+- **48 giờ 11/10 07:00 → 13/10 07:00 UTC+7:** cả mười ca không có lệnh; chín ca có một breakout bị ADX chặn, Setup-4 không có tín hiệu. Kết quả mô tả mẫu nhỏ, không phải bằng chứng để kích hoạt.
+- **Lịch sử 2022 → 02/10/2026:** 1x +129,99% / DD 21,08%; 5x **−68,12% / DD 94,74%** (chi phí ×2: −93,01%). Riêng 2026: 1x +16,12% / DD 18,75%; 5x +28,85% / DD 40,34%. Cả hai không qua năm tiêu chí cũ. 5x bị dừng lỗ ngày 327 lần trên cả cửa sổ và 47 lần trong 2026, không có stop 10% hay thanh lý; giả thuyết lợi nhuận tăng nhiều lần bị bác bỏ trên lịch sử dài.
+- **Xác minh:** 292 test nghiên cứu và 9 test kiểm toán/công cụ qua; kiểm toán Decimal 22 ca, hồi quy H4/ROT-SLOT/ZEC-ROT-SLOT giữ đúng số đã công bố và journal giao dịch/equity. Metadata mặc định Rotation đã thêm trước task được đối chiếu riêng, không sửa journal gốc. Full suite 1.522 qua/4 lỗi ngoài phần sửa; checkout gốc tái hiện các lỗi cũ và vấn đề hash SQLite phụ thuộc GC. Chi tiết và log trong tài liệu kết quả.
+
 ## 2026-10-13 — Giới hạn mỗi túi bằng số coin (đăng ký trước)
 
 Nhánh: `research/rotating-slots`. Nghiên cứu offline; thiết kế và dự đoán nằm trong [rotating-positions-research](docs/rotating-positions-research.md).
