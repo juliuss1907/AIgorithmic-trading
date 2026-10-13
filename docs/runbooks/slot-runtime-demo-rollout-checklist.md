@@ -73,8 +73,9 @@ aigt active-set init --profile setup2_slots_v1 --anchor 2024-01-01 --anchor HYPE
   --actor julius --reason "ADR-007 rollout" [--no-demo-portfolio]
 ```
 
-- [ ] **Neo là quyết định của Julius** (xem "Chạy thử trên database tạm"): `2024-01-01` cho ETH/NEAR/SOL/ZEC (30 tháng replay, 7 trong 8 route qua gate)
-      và `2025-06-01` cho HYPE (Perp chỉ có từ 2025-05-30); neo `2025-06-01` cho cả năm coin chỉ cho 6 trong 10 route qua gate.
+- [x] **Neo, Julius chốt 2026-10-13** (xem "Chạy thử trên database tạm"): `2024-01-01` cho ETH/NEAR/SOL/ZEC (30 tháng replay, 7 trong 8 route qua gate)
+      và `2025-06-01` cho HYPE (Perp chỉ có từ 2025-05-30). Neo chỉ chọn đoạn lịch sử mà gate dùng để chấm từng route; không đổi tín hiệu giao dịch
+      sau khi chỉ báo đã hội tụ. Neo `2025-06-01` cho cả năm coin chỉ cho 6 trong 10 route qua gate.
 - [ ] `aigt active-set show`: version 1, `rule_profile: setup2_slots_v1`, split 0,5/0,5, 5 coin, HYPE `both` kèm `warmup_bars: 400`, `spot_price_proxy_until` và `waive_min_trades: ["spot"]`.
 - [ ] Vòng Jev 30 giây tắt; coin ngoài danh sách ghi `skipped_inactive`.
 

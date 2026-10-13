@@ -138,3 +138,12 @@ averages). The Perp short rule fired 38 times since its warm-up, the latest on 2
 **Removal.** The proxy is data-plumbing for a young market, not a permanent design. When Spot HYPE reaches 600 own bars
 (2027-01-02) the operator removes `spot_price_proxy_until` and the waiver through an audited `active-set switch`
 (paused and flat); the waiver stops applying on its own at that point.
+
+## Addendum 2026-10-13: indicator anchors
+
+The operator chose the anchors after the scratch-database rehearsal of the rollout: `2024-01-01` for ETH, NEAR, SOL and ZEC (the
+replay gate then judges each route on 30 months and 31 to 47 closed trades) and `2025-06-01` for HYPE (Perp history starts
+2025-05-30). The anchor fixes where each coin's indicator series begins and therefore where the gate's replay window begins
+(anchor plus the coin's warm-up bars); it does not change live signals once the indicators have converged. With these anchors the
+rehearsal passed seven of eight routes for the four established coins; ZEC Perp was rejected (net -1,7%), and HYPE Perp was rejected
+in its only possible window (net -4,4%). Under the current rule a rejected route cannot be activated and simply does not trade.
