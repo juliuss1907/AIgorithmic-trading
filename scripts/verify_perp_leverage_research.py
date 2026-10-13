@@ -31,6 +31,9 @@ def equal(actual, expected, label):
 def audit_case(item):
     directory = Path(item['report_directory'])
     report = read_report(directory.parent, item['run_id'])
+    if (report['result_id'] != item['result_id'] or
+            report['summary'] != json.loads(encoded(item['summary']))):
+        raise ValueError('comparison case identity or summary changed')
     _, manifest = _manifest(directory.parent, item['run_id'])
     journals = {}
     for name in SERIES:
