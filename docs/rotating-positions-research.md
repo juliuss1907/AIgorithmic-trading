@@ -289,3 +289,39 @@ and 20 fail criterion 1. 2026: seven cases advance, all by margins of 0,1 to 1,3
 
 Conclusion: keep entry 30. The per-sleeve limit adds nothing over the pooled limit; if a limit is kept at all, the simpler
 three in total does the same.
+
+## Per-sleeve limit raised to the number of coins (registered before the run)
+
+The previous run showed that three positions per sleeve never bind on three coins and, on four coins, only blocked a fourth
+signal that arrived in the same sleeve as three open positions (66 `rotation_margin` blocks, never a 4th position in the other
+sleeve). Julius asked what happens when the per-sleeve limit equals the number of coins in the basket.
+
+- **Three coins:** three per sleeve is already the number of coins, so the case is the `ROT-SLOT6` already run (identical to
+  `ROT-SLOT`). Nothing new there.
+- **Four coins (ETH-NEAR-SOL-ZEC, ZEC for HYPE):** four per sleeve, up to eight positions in all. This is the only new case.
+
+**A confound in the engine.** A slot is sized at 1/`max_positions` of its sleeve, so raising the limit from three to four also
+shrinks every position from 1/3 to 1/4 of the sleeve. To separate the two effects the study adds a `slot_divisor` (default
+`max_positions`, so earlier cases are unchanged) and runs, on four coins, entry 30 / exit 10, slot design, per-sleeve limit:
+
+| Case | Per sleeve | Slot | Reads as |
+|---|---:|---:|---|
+| `ROT-SLOT6` (control, already run) | 3 | 1/3 | reference |
+| `ROT-SLOT4S` | 4 | 1/4 | Julius's request: limit and size together |
+| `ROT-SLOT4S-THIRD` | 4 | 1/3 | the limit alone |
+| `ROT-SLOT6-QUARTER` | 3 | 1/4 | the size alone |
+
+Each at normal cost and cost ×2, on the full window (2022-01-01 → 2026-10-02) and on 2026 alone. Universe `rotation-capacity`.
+Criteria: the five earlier ones, control `ROT-SLOT6`.
+
+Predictions, written before the run:
+
+- `ROT-SLOT6` reproduces +88,72% / DD 9,40% / 548 trades (2026: +22,81% / 9,43% / 82) and cost ×2 +59,05% (2026: +19,40%).
+- A fourth position per sleeve can now open, so the peak concurrency reaches four in `4S` and `THIRD`, three in `QUARTER`.
+- `ROT-SLOT6-QUARTER` (smaller positions, same count) earns less than the control with a lower drawdown: roughly the control
+  scaled by 3/4 where the book is full, so about +65% to +80% and DD about 7% to 9%.
+- `ROT-SLOT4S-THIRD` (more positions at the same size) earns more with a higher drawdown, since exposure per sleeve can
+  exceed 100% only up to the free principal: about +95% to +115% and DD about 10% to 13%.
+- `ROT-SLOT4S` lands between the two: return within ±15% of the control and DD within ±1,5 points. It is a diversification
+  of the same per-sleeve exposure (4 × 1/4 against 3 × 1/3), not extra leverage, so return per drawdown stays near the control's.
+- In 2026 the differences stay inside the noise (a few points on about 80 trades).

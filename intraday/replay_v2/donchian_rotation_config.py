@@ -35,6 +35,7 @@ class RotationConfig(HistoricalConfig):
     max_positions: Literal[3, 4] = 3  # Open positions in the limit's scope.
     limit_scope: Literal['total', 'sleeve'] = 'total'  # One pool of positions, or a limit per sleeve (max 6).
     position_cap: Literal['none', 'slot'] = 'none'  # 'slot': one position at most 1/max_positions of its sleeve.
+    slot_divisor: Literal[3, 4] | None = None  # Size a slot at 1/slot_divisor instead of 1/max_positions.
     rotation: Literal['off', 'adx'] = 'adx'  # How a full book makes room for a new signal.
     rotation_margin: Literal[5] = 5  # ADX points the candidate must beat the weakest open position by.
     pnl_gate: bool = True  # New entries only when nothing is open or the open book is in profit.
@@ -66,6 +67,8 @@ class RotationConfig(HistoricalConfig):
         if (not 3 <= len(self.basket) <= 4 or list(self.basket) != sorted(set(self.basket))
                 or not set(self.basket) <= set(CANDIDATES) or self.max_positions > len(self.basket)):
             raise ValueError('rotation basket is three or four sorted distinct frozen coins, at least max_positions')
+        if self.slot_divisor is not None and self.position_cap != 'slot':
+            raise ValueError('slot_divisor sizes the slot design only')
         shared = equal_weights(self.basket)
         if not matches(self, dict(weights=shared, perp_weights=shared, entry_cap=SPLIT, perp_cap=SPLIT)):
             raise ValueError('rotation study allocation or risk rules changed')
@@ -158,4 +161,23 @@ def rotation_window_cases(start, end):
                 for tail, cls in (('', RotationConfig), ('-cost2x', RotationStressConfig)):
                     cases.append((f'{prefix}-{label}{tail}', cls(
                         start=start, end=end, basket=basket, entry_window=window, limit_scope=scope, **shared)))
+    return cases
+
+
+def rotation_capacity_cases(start, end):
+    """Pre-registered: raise the per-sleeve limit to the number of coins on the four-coin basket, with the slot sized
+    at 1/4 (what the limit implies) and at the earlier 1/3 (the limit alone), plus the size change alone with the
+    old limit. The three-per-sleeve design at 1/3 is the control. Entry window 30, exit 10."""
+    basket = FOUR_COINS
+    w = equal_weights(basket)
+    shared = dict(weights=w, perp_weights=dict(w), position_cap='slot', limit_scope='sleeve')
+    prefix = basket_name(basket)
+    designs = (('ROT-SLOT6', dict(max_positions=3)),                         # control: 3 per sleeve, 1/3
+               ('ROT-SLOT4S', dict(max_positions=4)),                        # 4 per sleeve, 1/4: limit and size
+               ('ROT-SLOT4S-THIRD', dict(max_positions=4, slot_divisor=3)),  # 4 per sleeve, 1/3: limit alone
+               ('ROT-SLOT6-QUARTER', dict(max_positions=3, slot_divisor=4)))  # 3 per sleeve, 1/4: size alone
+    cases = []
+    for label, change in designs:
+        for tail, cls in (('', RotationConfig), ('-cost2x', RotationStressConfig)):
+            cases.append((f'{prefix}-{label}{tail}', cls(start=start, end=end, basket=basket, **shared, **change)))
     return cases

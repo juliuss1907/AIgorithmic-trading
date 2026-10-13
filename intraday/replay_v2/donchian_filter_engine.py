@@ -617,6 +617,7 @@ def result(config, prepared, book):
     if getattr(config, 'max_positions', None):
         variant['rotation'] = dict(max_positions=config.max_positions, position_cap=config.position_cap,
             limit_scope=getattr(config, 'limit_scope', 'total'),
+            slot_divisor=getattr(config, 'slot_divisor', None) or config.max_positions,
             rotation=config.rotation, rotation_margin=config.rotation_margin, pnl_gate=config.pnl_gate,
             hard_stop_pct=str(config.hard_stop_pct) if config.hard_stop_pct is not None else None)
     if prepared.regime_interval:
@@ -634,7 +635,8 @@ def result(config, prepared, book):
                         f'weights; at most {config.max_positions} open positions '+
                         ('across both sleeves, one per coin; ' if getattr(config,'limit_scope','total') == 'total' else
                          'in each sleeve, one per coin in that sleeve (a coin may hold both markets); ')+
-                        'a position uses '+('the free sleeve' if config.position_cap == 'none' else '1/'+str(config.max_positions)+' of its sleeve')+
+                        'a position uses '+('the free sleeve' if config.position_cap == 'none' else
+                                            '1/'+str(getattr(config,'slot_divisor',None) or config.max_positions)+' of its sleeve')+
                         ' times the ATR multiplier; entries ranked by ADX then volume ratio'
                         if getattr(config,'max_positions',None) else
                         f'{config.slots} shared slots of one realized pool ({len(config.weights)} coins); Spot long or Perp short1x, '

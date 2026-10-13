@@ -149,12 +149,36 @@ def evaluate_window(receipt):
     return result
 
 
+CAPACITY = ('ROT-SLOT4S', 'ROT-SLOT4S-THIRD', 'ROT-SLOT6-QUARTER')
+
+
+def evaluate_capacity(receipt):
+    """Per-sleeve limit raised to the number of coins (four), against three per sleeve with a 1/3 slot.
+
+    `ROT-SLOT4S` changes limit and slot size together; `-THIRD` keeps the 1/3 slot (the limit alone) and
+    `ROT-SLOT6-QUARTER` keeps three per sleeve with a 1/4 slot (the size alone)."""
+    by_name = {item['variant']: item for item in receipt['results']}
+    control = f'{FOUR}-ROT-SLOT6'
+    result = dict(reference={control: describe(by_name[control])}, candidates={})
+    result['reference'][control]['concurrency'] = concurrency(by_name[control]['report_directory'])
+    for design in CAPACITY:
+        name = f'{FOUR}-{design}'
+        entry = describe(by_name[name])
+        entry['concurrency'] = concurrency(by_name[name]['report_directory'])
+        entry.update(judge(receipt, by_name[name], by_name[name+'-cost2x'], by_name[control]))
+        result['candidates'][name] = entry
+    result['advancing'] = [n for n, v in result['candidates'].items() if v['advance']]
+    result['note'] = ('Seen data; ZEC stands in for HYPE. A pass proposes a frozen prospective test, never activation.')
+    return result
+
+
 def main(argv=None):
     args = list(argv or sys.argv[1:])
-    window = '--window' in args
     path = Path([a for a in args if not a.startswith('--')][0])
     receipt = json.loads(path.read_text())
-    print(json.dumps((evaluate_window if window else evaluate_rotation)(receipt), indent=2, default=str))
+    evaluate = (evaluate_window if '--window' in args else evaluate_capacity if '--capacity' in args
+                else evaluate_rotation)
+    print(json.dumps(evaluate(receipt), indent=2, default=str))
 
 
 if __name__ == '__main__':

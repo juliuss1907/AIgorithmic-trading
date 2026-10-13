@@ -346,3 +346,54 @@ def test_window_verdict_picks_the_same_design_at_thirty_as_the_control_and_repor
     # The first Spot trade closes at the instant the third opens, so they never overlap.
     assert verdict['ETH-NEAR-SOL-ROT-SLOT']['concurrency'] == dict(spot=1, perp=1, total=2)
     assert concurrency(names['ETH-NEAR-SOL-ROT-SLOT']['report_directory'])['total'] == 2
+
+
+def test_a_slot_divisor_sizes_the_position_independently_of_the_limit():
+    basket = ('ETH', 'NEAR', 'SOL', 'ZEC')
+    base = dict(basket=basket, side={c: 'spot' for c in basket},
+                change=dict(pnl_gate=False, position_cap='slot', limit_scope='sleeve'))
+
+    def first_cost(max_positions, divisor):
+        change = dict(base['change'], max_positions=max_positions)
+        if divisor:
+            change['slot_divisor'] = divisor
+        _, report = run(basket=basket, side=base['side'], change=change)
+        return {e['symbol']: D(e['notional']) for e in events(report, 'entry')}
+
+    third, quarter, limit_alone = first_cost(3, None), first_cost(4, None), first_cost(4, 3)
+    symbols = {c+'USDT' for c in basket}
+    assert set(quarter) == symbols and len(third) == 3              # the fourth coin fits only with four slots
+    assert all(quarter[s] < third[s] for s in third)                # 1/4 slot is smaller than a 1/3 slot
+    assert abs(quarter['ETHUSDT']/third['ETHUSDT'] - D(3)/D(4)) < D('0.01')
+    assert limit_alone['ETHUSDT'] == third['ETHUSDT'] and set(limit_alone) == symbols
+
+
+def test_a_slot_divisor_needs_the_slot_design():
+    import pytest
+    with pytest.raises(ValueError):
+        run(change=dict(slot_divisor=4))
+
+
+def test_capacity_verdict_judges_each_design_against_three_per_sleeve(tmp_path):
+    import json
+    from intraday.replay_v2.donchian_rotation_verdict import evaluate_capacity
+    trades = [dict(opened_at='2024-01-01T00:00:00+00:00', closed_at='2024-01-02T00:00:00+00:00', market='spot')]
+    names = {}
+    for design, ret, dd in (('ROT-SLOT6', 80.0, 10.0), ('ROT-SLOT4S', 85.0, 10.5),
+                            ('ROT-SLOT4S-THIRD', 95.0, 16.0), ('ROT-SLOT6-QUARTER', 60.0, 8.0)):
+        for tail, factor in (('', 1.0), ('-cost2x', 0.7)):
+            name = f'ETH-NEAR-SOL-ZEC-{design}{tail}'
+            item = _item(tmp_path, design+tail, ret*factor, dd)
+            item['variant'] = name
+            (tmp_path/item['report_directory'].split('/')[-1]/'trades.jsonl').write_text(
+                '\n'.join(json.dumps(x) for x in trades))
+            names[name] = item
+    receipt = dict(window=dict(start='2022-01-01T00:00:00+00:00', end='2026-10-02T00:00:00+00:00'),
+                   results=list(names.values()))
+    verdict = evaluate_capacity(receipt)
+    assert set(verdict['candidates']) == {f'ETH-NEAR-SOL-ZEC-{d}' for d in
+                                          ('ROT-SLOT4S', 'ROT-SLOT4S-THIRD', 'ROT-SLOT6-QUARTER')}
+    assert all(v['criteria'][0]['control_case'] == 'ETH-NEAR-SOL-ZEC-ROT-SLOT6' for v in verdict['candidates'].values())
+    assert verdict['candidates']['ETH-NEAR-SOL-ZEC-ROT-SLOT4S']['advance']
+    assert not verdict['candidates']['ETH-NEAR-SOL-ZEC-ROT-SLOT6-QUARTER']['advance']   # 60 < 80
+    assert not verdict['candidates']['ETH-NEAR-SOL-ZEC-ROT-SLOT4S-THIRD']['advance']    # DD 16% is above the 15% limit

@@ -160,7 +160,8 @@ class RotationBook(FilterBook):
 
     def __init__(self, config):
         super().__init__(config)
-        self.share = ONE if config.position_cap == 'none' else ONE/config.max_positions
+        divisor = getattr(config, 'slot_divisor', None) or config.max_positions
+        self.share = ONE if config.position_cap == 'none' else ONE/divisor
         self.weights = {s: self.share for s in self.weights}
 
     def perp_weight(self, symbol):
