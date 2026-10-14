@@ -4,6 +4,15 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-14 — Cổng G4 (phần replay) và luồng nền tự khởi động lại
+
+Nhánh: `feature/slot-runtime`, VPS chạy `4394683` (Julius duyệt push và deploy).
+
+- **G4, replay gate (Julius duyệt):** backfill 10 route, tạo candidate, loại 7 candidate cũ còn mở (`--retire-open`), gắn funding đến 2026-10-14T00:00Z. Kết quả gate v2: 9/10 qua — ETH Perp +5,44%, NEAR Perp +5,03% / Spot +9,38%, SOL Perp +4,54% / Spot +1,53%, ZEC Spot +15,09%, ZEC Perp −1,69% (miễn trừ lãi ròng), HYPE Perp −4,26% (miễn trừ lãi ròng, cách sàn −5% còn 0,74 điểm), HYPE Spot 0 lệnh (miễn trừ số lệnh). Danh sách id trên VPS: `~/.local/state/aigorithmic-trading/adr007/`.
+- **ETH Spot bị chặn:** campaign gate v2 cũ `cb13b4cb…` vẫn active dù candidate của nó đã bị loại. `4394683` sửa `--retire-open` để đóng campaign này và thêm `aigt setup2 retire-campaign` cho campaign mồ côi. Chưa chạy trên VPS.
+- **Deploy `4394683`:** web healthy, `doctor` ok, active set giữ nguyên. Sau khi worker lên, `_asset_rule_bootstrap_loop` vẫn chết vì `database is locked` ở một lần ghi thường (`claim_scheduler_run`), không phải ở khởi tạo schema. Đã khởi động lại riêng worker: 0 luồng chết.
+- **Sửa (chưa deploy):** mọi loop nền của worker chạy qua `_supervised_loop`; khi loop ném lỗi, worker ghi `{"background_loop": {"loop", "status": "restarting", "code"}}`, chờ 30 giây rồi chạy lại loop thay vì để luồng chết.
+
 ## 2026-10-14 — Deploy bản sửa khởi tạo database và LLM tự host; cổng G3 đã xong
 
 Nhánh: `feature/slot-runtime`, VPS chạy `35b9aca`.

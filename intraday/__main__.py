@@ -1136,20 +1136,12 @@ def _portfolio_cli(arguments) -> None:
                     return
                 if not background_started:
                     if config.news_enabled:
-                        threading.Thread(
-                            target=_news_loop, args=(config,), daemon=True
-                        ).start()
-                    threading.Thread(
-                        target=_analysis_loop, args=(config,), daemon=True
-                    ).start()
+                        _start_loop(_news_loop, config)
+                    _start_loop(_analysis_loop, config)
                     if config.external_context_enabled:
-                        threading.Thread(
-                            target=_external_context_loop, args=(config,), daemon=True
-                        ).start()
-                    threading.Thread(
-                        target=_asset_rule_bootstrap_loop, args=(config,), daemon=True
-                    ).start()
-                    threading.Thread(target=_gate_automation_loop,args=(config,),daemon=True).start()
+                        _start_loop(_external_context_loop, config)
+                    _start_loop(_asset_rule_bootstrap_loop, config)
+                    _start_loop(_gate_automation_loop, config)
                     background_started = True
                 time.sleep(max(1, interval))
         evaluated_at = (
@@ -1198,20 +1190,12 @@ def _portfolio_cli(arguments) -> None:
         )
         if not arguments.once:
             if config.news_enabled:
-                threading.Thread(
-                    target=_news_loop, args=(config,), daemon=True
-                ).start()
-            threading.Thread(
-                target=_analysis_loop, args=(config,), daemon=True
-            ).start()
+                _start_loop(_news_loop, config)
+            _start_loop(_analysis_loop, config)
             if config.external_context_enabled:
-                threading.Thread(
-                    target=_external_context_loop, args=(config,), daemon=True
-                ).start()
-            threading.Thread(
-                target=_asset_rule_bootstrap_loop, args=(config,), daemon=True
-            ).start()
-            threading.Thread(target=_gate_automation_loop,args=(config,),daemon=True).start()
+                _start_loop(_external_context_loop, config)
+            _start_loop(_asset_rule_bootstrap_loop, config)
+            _start_loop(_gate_automation_loop, config)
         cached_daily_close = None
         last_spot_check_day = None
         legacy_spot_observation = None
@@ -1517,6 +1501,23 @@ def _portfolio_cli(arguments) -> None:
             state, event_kind=command, actor="cli"
         )
     print(json.dumps(_parent_portfolio_payload(state), indent=2))
+
+
+def _supervised_loop(loop, config: IntradayConfig, *, restart_delay: float = 30) -> None:
+    """Run a background loop and restart it after an error, so one failed write does not end the thread."""
+    while True:
+        try:
+            loop(config)
+            return
+        except Exception as error:
+            print(json.dumps({"background_loop": {
+                "loop": loop.__name__, "status": "restarting", "code": type(error).__name__,
+            }}), flush=True)
+            time.sleep(restart_delay)
+
+
+def _start_loop(loop, config: IntradayConfig) -> None:
+    threading.Thread(target=_supervised_loop, args=(loop, config), daemon=True).start()
 
 
 def _news_loop(config: IntradayConfig) -> None:
@@ -2321,9 +2322,9 @@ def main() -> None:
     if config.cross_venue_mode == "active" and not store.cross_venue_activation_allowed():
         raise SystemExit("cross-venue active mode requires a recorded promote evaluation")
     if config.news_enabled and not arguments.once:
-        threading.Thread(target=_news_loop, args=(config,), daemon=True).start()
+        _start_loop(_news_loop, config)
     if not arguments.once:
-        threading.Thread(target=_analysis_loop, args=(config,), daemon=True).start()
+        _start_loop(_analysis_loop, config)
     notifier = (
         TelegramNotifier(token=config.telegram_bot_token, chat_id=config.telegram_chat_id)
         if config.telegram_enabled else None
