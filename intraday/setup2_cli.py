@@ -15,6 +15,13 @@ MARKETS = ('spot', 'perp')
 def add_setup2_parser(commands):
     parser = commands.add_parser("setup2", help="Setup-2 rule data and candidates (ADR-006)")
     actions = parser.add_subparsers(dest="setup2_command", required=True)
+    retire = actions.add_parser("retire-campaign",
+                                help="close the active v2 campaign of a route whose candidate was already rejected")
+    retire.add_argument("--database", default=None)
+    retire.add_argument("--symbol", type=ticker_symbol, required=True)
+    retire.add_argument("--market", choices=MARKETS, required=True)
+    retire.add_argument("--actor", required=True)
+    retire.add_argument("--reason", required=True)
     for name in ("backfill", "evaluate", "candidate"):
         command = actions.add_parser(name)
         command.add_argument("--database", default=None)
@@ -47,6 +54,9 @@ def candidate_rule(store, symbol, market, *, actor, reason, now, retire_open=Fal
             store.update_scoped_rule_status(row["id"], expected="queued", status="rejected")
         elif row["status"] == "challenger":
             store.reject_scoped_challenger(row["id"], now=now)
+            # A rejected challenger must not keep its v2 gate campaign active, or the route can never start a new one.
+            from intraday.replay_v2.gate_repository import GateRepository
+            GateRepository(store).retire(row["id"], now=now)
         else:
             raise ValueError("a replay-passed candidate must be started or rejected through its lifecycle first")
     champion = store.load_active_scoped_rule(scope, symbol=symbol)
@@ -67,6 +77,20 @@ def candidate_rule(store, symbol, market, *, actor, reason, now, retire_open=Fal
     return candidate
 
 
+def retire_campaign(store, symbol, market, *, actor, reason, now):
+    """Close an orphaned v2 campaign: the route's active campaign whose candidate is already rejected."""
+    from intraday.replay_v2.gate_repository import GateRepository
+    if not actor.strip() or not reason.strip():
+        raise ValueError("retiring a campaign requires an actor and a reason")
+    repository = GateRepository(store)
+    campaign = repository.current(symbol, setup2_store.SCOPES[market])
+    if not campaign or campaign["status"] != "active":
+        raise ValueError("the route has no active v2 campaign")
+    closed = repository.retire(campaign["candidate_id"], now=now)
+    return {"campaign_id": campaign["campaign_id"], "candidate_id": campaign["candidate_id"], "closed": closed,
+            "actor": actor.strip(), "reason": reason.strip(), "at": now.isoformat()}
+
+
 def dispatch_setup2(arguments):
     from intraday.store import IntradayStore
     database = resolve_database_path(arguments.database)
@@ -80,6 +104,10 @@ def dispatch_setup2(arguments):
             print(json.dumps(observation.payload(), indent=2))
             return
         store = IntradayStore(database)
+        if arguments.setup2_command == "retire-campaign":
+            print(json.dumps(retire_campaign(store, arguments.symbol, arguments.market, actor=arguments.actor,
+                                             reason=arguments.reason, now=now), indent=2))
+            return
         if arguments.setup2_command == "backfill":
             anchor = setup2_store.coin_anchor(store, arguments.symbol)
             result = setup2_store.sync(store, arguments.symbol, arguments.market, anchor=anchor, now=now)

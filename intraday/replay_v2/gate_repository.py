@@ -177,6 +177,21 @@ class GateRepository:
                                    (candidate.rule_id,candidate.scope.value))
         return campaign
 
+    def retire(self, candidate_id, *, now):
+        """Close the active v2 campaign of a candidate already rejected outside the gate (an operator retired it
+        to make room for a new candidate). Only the status changes; the campaign binding stays immutable.
+        Returns the number of campaigns closed (0 when the route never had one)."""
+        utc(now)
+        with self.store._connect() as connection:
+            if not self._exists(connection):
+                return 0
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT status FROM scoped_rules WHERE id=?", (candidate_id,)).fetchone()
+            if row is None or row["status"] != "rejected":
+                raise ValueError("only the campaign of a rejected candidate can be retired")
+            return connection.execute("UPDATE replay_gate_campaigns SET status='rejected' WHERE candidate_id=? "
+                                      "AND status='active'", (candidate_id,)).rowcount
+
     def finish(self, evaluation_id, *, now, promote=False):
         now = utc(now)
         evaluation = self.get(evaluation_id)
