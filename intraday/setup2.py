@@ -183,3 +183,17 @@ def trail_stop(side, entry_price, signal_atr, h4, *, entered_at, anchor, cap=STO
         return trail.stop
     floor = Decimal(str(entry_price))*(ONE-side*cap)
     return max(trail.stop, floor) if side > 0 else min(trail.stop, floor)
+
+
+def initial_stop(side, entry_price, signal_atr, *, cap=STOP_CAP):
+    """Stop at entry, before any bar ratchets it: ATR14×3 from the entry, capped at `cap`."""
+    return ATRTrail(side, Decimal(str(entry_price)), Decimal(str(signal_atr)), hard_pct=cap).stop
+
+
+def exit_level(h4, side):
+    """Donchian exit level the bar after `h4` is judged against: the lowest low (Spot long) or highest high
+    (Perp short) of the last EXIT closed bars. None before EXIT bars exist."""
+    rows = h4[-EXIT:]
+    if len(rows) < EXIT:
+        return None
+    return min(b.low for b in rows) if side > 0 else max(b.high for b in rows)

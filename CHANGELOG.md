@@ -4,6 +4,15 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-14 — Thông báo Telegram cho tín hiệu soak và lệnh Binance Demo
+
+Nhánh: `feature/slot-runtime`. Julius chọn: báo cả soak và Demo, hiện mức thoát thay cho target, khối lượng soak theo % túi, dùng bot của timer BTC paper.
+
+- **Soak (`intraday/trade_alerts.py`, `setup2_store.run_setup2_observation`):** mỗi lần luật Setup-2 nổ và Jev trả lời, worker xếp một tin vào `notification_outbox` (một tin cho mỗi rule, thị trường và nến): coin, Spot LONG / Perp SHORT, Jev xác nhận hay từ chối, giá vào tham chiếu (giá đóng nến), khối lượng `1/3 túi × min(1; 0,02/ATR%)`, stop ban đầu (ATR14×3, tối đa 5%), mức kênh thoát 10 nến. Soak không đặt lệnh, không theo dõi thoát, và không áp giới hạn 3 vị thế, PnL gate hay xoay vòng.
+- **Demo (`execution demo run --multi`):** sau mỗi chu kỳ, runtime đọc journal và gửi một lần cho mỗi sự kiện: vào lệnh (khối lượng khớp, giá trung bình, stop đầu tiên, mức kênh thoát), dời stop, thoát lệnh (lý do: kênh thoát, chạm stop, xoay vòng, giới hạn lỗ...) kèm PnL (Perp: PnL sàn đã trừ phí; Spot: PnL theo giá). Lần chạy đầu chỉ ghi mốc, không gửi lại lịch sử; gửi lỗi thì thử lại tối đa 5 lần. Bảng mới `execution_notifications` trong journal Demo.
+- **Setup-2 không có chốt lời cố định:** tin nhắn hiện stop và mức kênh thoát thay cho target.
+- **Cấu hình:** dùng `TELEGRAM_ENABLED`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` của `.env.intraday`. Service `demo-execution` nhận đúng ba biến này (không nhận cả file env). Lỗi gửi hay lỗi đọc journal không làm dừng worker hay runtime.
+
 ## 2026-10-14 — Cổng G4: 10/10 route qua replay gate, soak 14 ngày bắt đầu; luồng nền tự khởi động lại
 
 Nhánh: `feature/slot-runtime`, VPS chạy `fcd6136` (Julius duyệt push, deploy, đóng campaign ETH Spot và bắt đầu soak).

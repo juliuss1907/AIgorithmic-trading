@@ -57,6 +57,11 @@ class ExecutionJournal:
                     account TEXT NOT NULL, symbol TEXT NOT NULL, payload TEXT NOT NULL,
                     PRIMARY KEY(account, symbol)
                 );
+                CREATE TABLE IF NOT EXISTS execution_notifications (
+                    account TEXT NOT NULL, key TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('baseline', 'delivered', 'failed')),
+                    attempts INTEGER NOT NULL, at TEXT NOT NULL, PRIMARY KEY(account, key)
+                );
             """)
         self.path.chmod(0o600)
 
@@ -239,6 +244,29 @@ class ExecutionJournal:
         with self.connect() as connection:
             rows = connection.execute("SELECT intent, latest FROM execution_orders WHERE account=? ORDER BY rowid", (account.key,)).fetchall()
         return [(OrderIntent.model_validate_json(row[0]), OrderUpdate.model_validate_json(row[1])) for row in rows]
+
+    def all_orders(self):
+        """Every journaled order by account key, in submission order (alerts read all accounts)."""
+        with self.connect() as connection:
+            rows = connection.execute("SELECT account, intent, latest FROM execution_orders ORDER BY rowid").fetchall()
+        orders = {}
+        for row in rows:
+            orders.setdefault(row[0], []).append(
+                (OrderIntent.model_validate_json(row[1]), OrderUpdate.model_validate_json(row[2])))
+        return orders
+
+    def notifications(self):
+        with self.connect() as connection:
+            rows = connection.execute("SELECT account, key, status, attempts FROM execution_notifications").fetchall()
+        return {(row[0], row[1]): (row[2], row[3]) for row in rows}
+
+    def record_notifications(self, items, *, now, status):
+        with self.connect() as connection:
+            for account, key in items:
+                connection.execute(
+                    "INSERT INTO execution_notifications VALUES (?, ?, ?, 1, ?) ON CONFLICT(account, key) DO UPDATE "
+                    "SET status=excluded.status, attempts=attempts+1, at=excluded.at",
+                    (account, key, status, now.isoformat()))
 
     def cash_pnl(self, account: AccountRef):
         from decimal import Decimal

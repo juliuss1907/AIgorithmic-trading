@@ -115,3 +115,24 @@ def test_setup2_replay_gate_uses_anchored_bars_split_caps_and_capped_trail(store
     assert {t['exit_reason'] for t in trades} <= {'donchian_exit', 'trailing_stop', 'trailing_stop_gap',
                                                             'window_end', 'daily_loss_limit', 'max_drawdown'}
     assert trades and 'minimum_600_anchored_h4_bars' not in evaluation.reason_codes
+
+
+def test_soak_signal_queues_one_telegram_alert_per_bar(store, series, monkeypatch):
+    large, _ = series
+    now = large[-1].available_at+timedelta(minutes=1)
+    rule = candidate_rule(store, 'ETHUSDT', 'spot', actor='julius', reason='Setup-2 candidate for ETH', now=now)
+    observed = setup2_store.evaluate(store, 'ETHUSDT', 'spot', anchor=FIRST, now=now)
+    forced = observed.__class__(**{**observed.__dict__, 'entry': True})
+    monkeypatch.setattr(setup2_store, 'evaluate', lambda *a, **k: forced)
+    for _ in range(2):
+        setup2_store.run_setup2_observation(store, Provider(), snapshot('ETHUSDT', DecisionScope.SPOT_4H),
+                                            rule=rule, market='spot', now=now)
+    [alert] = store.list_pending_notifications()
+    text = alert['message']
+    assert alert['kind'] == 'setup2_signal'
+    assert text.startswith('[SOAK] ETHUSDT Spot LONG: Jev từ chối, không vào')   # the fake Jev answers HOLD
+    stop = setup2.initial_stop(1, forced.close, forced.atr, cap=setup2.stop_cap('setup2_v1'))
+    level = min(b.low for b in large[-setup2.EXIT:])
+    assert f'Stop ban đầu: {float(stop):.6g}' in text
+    assert f'Thoát khi nến 4h đóng dưới: {float(level):.6g} (kênh 10 nến)' in text
+    assert f'{forced.size_multiplier/3*100:.1f}% túi Spot' in text

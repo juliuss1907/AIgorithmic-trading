@@ -104,6 +104,7 @@ from intraday.journal import (
 )
 from intraday.market import BinanceUsdMClient, MultiCadenceMarketCache, StaleMarketData
 from intraday.notifications import TelegramNotifier, drain_outbox
+from intraday.trade_alerts import drain as drain_trade_alerts
 from intraday.outcomes import evaluate_pending_outcomes
 from intraday.provider_client import ProviderPreflightClient
 from intraday.provider_connect import _masked_api_key, connect_provider
@@ -951,6 +952,7 @@ def _portfolio_cli(arguments) -> None:
             )
             asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config, store=store)
             interval = config.risk_interval_seconds
+            notifier = _trade_alert_notifier(config)
             background_started = False
             hyperliquid = (
                 _start_portfolio_hyperliquid(config) if not arguments.once else None
@@ -1131,6 +1133,8 @@ def _portfolio_cli(arguments) -> None:
                             "signal_outcomes", outcome_slot, status="success",
                             finished_at=now,
                         )
+                if notifier is not None and (delivery := drain_trade_alerts(store, notifier, now=now)):
+                    result["notifications"] = delivery
                 print(json.dumps(result), flush=True)
                 if arguments.once:
                     return
@@ -1185,6 +1189,7 @@ def _portfolio_cli(arguments) -> None:
         )
         asset_perp_markets, asset_spot_markets = _new_asset_market_caches(config, store=store)
         interval = config.risk_interval_seconds
+        notifier = _trade_alert_notifier(config)
         hyperliquid = (
             _start_portfolio_hyperliquid(config) if not arguments.once else None
         )
@@ -1438,6 +1443,8 @@ def _portfolio_cli(arguments) -> None:
                             "daily_retrospective", retrospective_slot,
                             status="success", finished_at=now,
                         )
+            if notifier is not None and (delivery := drain_trade_alerts(store, notifier, now=now)):
+                result["notifications"] = delivery
             print(json.dumps(result), flush=True)
             if arguments.once:
                 return
@@ -1501,6 +1508,13 @@ def _portfolio_cli(arguments) -> None:
             state, event_kind=command, actor="cli"
         )
     print(json.dumps(_parent_portfolio_payload(state), indent=2))
+
+
+def _trade_alert_notifier(config: IntradayConfig) -> TelegramNotifier | None:
+    """Setup-2 signal alerts go through the worker's Telegram settings (TELEGRAM_ENABLED and its bot)."""
+    if not config.telegram_enabled:
+        return None
+    return TelegramNotifier(token=config.telegram_bot_token, chat_id=config.telegram_chat_id)
 
 
 def _supervised_loop(loop, config: IntradayConfig, *, restart_delay: float = 30) -> None:

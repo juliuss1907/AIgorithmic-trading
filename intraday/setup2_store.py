@@ -212,6 +212,14 @@ def heartbeat(store, symbol, market, rule_id, *, start, end):
     return min(1.0, len(seen)/expected)
 
 
+def exit_level(store, symbol, market, *, now):
+    """Donchian exit level of the next closed H4 bar (alerts show it in place of a target)."""
+    settings = coin_settings(store, symbol)
+    bars = proxied_bars(store, symbol, market, '4h', since=settings.anchor, until=setup2.floor_h4(now),
+                        settings=settings)
+    return setup2.exit_level(bars, 1 if market == 'spot' else -1)
+
+
 def coin_anchor(store, symbol):
     return coin_settings(store, symbol).anchor
 
@@ -237,12 +245,14 @@ def run_setup2_observation(store, provider, snapshot, *, rule, market, now):
         signal_id = record_scoped_signal(store, snapshot, scoped, gate_passed=False,
                                          gate_reason='setup2_soak_observation_only', rule_id=rule.rule_id)
         answers = (scoped.trace or _fallback_trace(snapshot, scoped)).jev_answers
+        allowed = rule_allows_answers(rule, answers)
         challenger = store.load_scoped_challenger(scope, symbol=symbol)
         if challenger and challenger.rule_id == rule.rule_id:
             store.record_scoped_rule_soak_tick(
                 candidate_id=rule.rule_id, signal_id=signal_id, champion_allowed=False,
-                challenger_allowed=rule_allows_answers(rule, answers), champion_score=0, challenger_score=0,
+                challenger_allowed=allowed, champion_score=0, challenger_score=0,
                 created_at=now)
+        _alert(store, symbol, market, rule, observation, answers, allowed, now)
     except RuntimeError:
         status, jev = 'provider_error', 'provider_error'
     except (ValueError, sqlite3.Error):
@@ -252,3 +262,15 @@ def run_setup2_observation(store, provider, snapshot, *, rule, market, now):
     record_observation(store, symbol, market, rule.rule_id, observation, active=True, jev_status=jev, now=now)
     store.record_portfolio_soak_tick(symbol=symbol, scope=scope, status=status, created_at=now)
     return status
+
+
+def _alert(store, symbol, market, rule, observation, answers, allowed, now):
+    """Queue the Telegram alert of a soak signal; an alert never changes the observation or its heartbeat."""
+    from intraday.trade_alerts import enqueue_soak_signal
+    try:
+        enqueue_soak_signal(store, symbol=symbol, market=market, rule=rule, observation=observation,
+                            answers=answers, allowed=allowed, now=now,
+                            exit_level=exit_level(store, symbol, market, now=now))
+    except Exception as error:
+        print(json.dumps({'setup2_alert': {'symbol': symbol, 'market': market, 'status': 'error',
+                                           'code': type(error).__name__}}), flush=True)

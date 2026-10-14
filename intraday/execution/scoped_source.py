@@ -141,6 +141,11 @@ class ScopedEvidenceSource(EvidenceSource):
         return setup2.trail_stop(side, entry_price, signal_atr, bars, entered_at=entered_at, anchor=anchor,
                                  cap=setup2.stop_cap(profile))
 
+    def setup2_exit_level(self, *, now):
+        """Donchian exit level of the next closed H4 bar, shown in trade alerts."""
+        from intraday.setup2_store import exit_level
+        return exit_level(self._reader(), self.symbol, self.market, now=now)
+
     def spot_setup(self, *, now, rule):
         if self.market != "spot":
             raise ValueError("Spot setup requires Spot scope")

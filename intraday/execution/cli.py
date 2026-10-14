@@ -131,9 +131,15 @@ def _dispatch_multi(arguments,journal,credentials,source,*,now):
     elif action=="flatten":
         _print(runner.flatten(now=now))
     else:
+        from intraday.trade_alerts import notify_demo, telegram_from_environment
+        notifier = telegram_from_environment()
+        exit_level_for = lambda symbol,market,at: source_factory(symbol,market).setup2_exit_level(now=at)
         while True:
             started = time.monotonic()
             _print(runner.cycle(now=datetime.now(timezone.utc)))
+            if notifier is not None and (delivery := notify_demo(journal,notifier,exit_level_for=exit_level_for,
+                                                                  now=datetime.now(timezone.utc))):
+                _print({"notifications":delivery})
             if arguments.once:
                 break
             time.sleep(max(0,arguments.interval_seconds-(time.monotonic()-started)))

@@ -3352,6 +3352,15 @@ class IntradayStore:
             ).fetchone()
         return None if row is None else RuleCandidate.model_validate_json(row["payload_json"])
 
+    def enqueue_notification(self, delivery_key: str, kind: str, message: str, *, created_at: datetime) -> None:
+        """Queue one Telegram message; a repeated delivery key is ignored."""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO notification_outbox "
+                "(delivery_key, kind, message, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+                (delivery_key, kind, message, created_at.isoformat()),
+            )
+
     def list_pending_notifications(self, limit: int = 100) -> list[dict]:
         if not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")

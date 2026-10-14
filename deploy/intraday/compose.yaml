@@ -77,6 +77,11 @@ services:
       dockerfile: deploy/intraday/Dockerfile
     user: "${AIGT_EXECUTION_UID:-1000}:${AIGT_EXECUTION_GID:-1000}"
     command: ["execution", "demo", "run", "--multi", "--source-database", "/app/state/intraday/intraday.sqlite3", "--execution-database", "/app/state/execution/binance-demo.sqlite3", "--secrets-file", "/run/execution-secrets/binance-demo.json", "--interval-seconds", "30"]
+    # Trade alerts only: the Telegram settings of the env file, nothing else from it.
+    environment:
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
       - type: volume
         source: intraday-state
