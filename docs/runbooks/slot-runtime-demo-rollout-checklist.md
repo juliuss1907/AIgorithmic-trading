@@ -97,6 +97,11 @@ Lặp cho từng route (ETH, NEAR, SOL, ZEC, HYPE: spot và perp), 10 route:
       Chưa đủ lệnh thì `deferred`, chạy lại hằng tuần.
 - [ ] Julius duyệt G4, rồi `aigt assets rules start-soak CANDIDATE_ID [--evaluation-id REPLAY_EVALUATION_ID]`; soak ≥ 14 ngày, heartbeat ≥ 95%.
 - [ ] `aigt assets rules evaluate CANDIDATE_ID`, rồi `aigt assets rules activate CANDIDATE_ID --evaluation-id SOAK_EVALUATION_ID`.
+- [ ] **HYPE Spot (quyết định 2026-10-14):** snapshot Spot 4h cần ≥ 35 nến 1d trên Binance Spot, HYPE Spot đủ vào khoảng 2026-10-29,
+      trước đó route báo `error:StaleMarketData` và không ghi heartbeat. Sau mốc đó, khi worker log `HYPEUSDT:spot_4h` không còn lỗi:
+      `aigt setup2 candidate --symbol HYPE --market spot --profile setup2_slots_v1 --actor julius --reason "restart soak after 1d history" --retire-open`
+      (đóng cả campaign cũ), `aigt setup2 backfill --symbol HYPE --market spot`, `aigt assets rules replay NEW_ID --engine v2`,
+      rồi `start-soak` lại. Soak HYPE Spot sớm nhất xong khoảng 2026-11-12; 9 route kia không phụ thuộc.
 
 ## Giai đoạn 5: cấu hình và kích hoạt Demo (G5, G6)
 

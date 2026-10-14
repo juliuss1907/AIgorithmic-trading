@@ -4,14 +4,19 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
-## 2026-10-14 — Cổng G4 (phần replay) và luồng nền tự khởi động lại
+## 2026-10-14 — Cổng G4: 10/10 route qua replay gate, soak 14 ngày bắt đầu; luồng nền tự khởi động lại
 
-Nhánh: `feature/slot-runtime`, VPS chạy `4394683` (Julius duyệt push và deploy).
+Nhánh: `feature/slot-runtime`, VPS chạy `fcd6136` (Julius duyệt push, deploy, đóng campaign ETH Spot và bắt đầu soak).
 
 - **G4, replay gate (Julius duyệt):** backfill 10 route, tạo candidate, loại 7 candidate cũ còn mở (`--retire-open`), gắn funding đến 2026-10-14T00:00Z. Kết quả gate v2: 9/10 qua — ETH Perp +5,44%, NEAR Perp +5,03% / Spot +9,38%, SOL Perp +4,54% / Spot +1,53%, ZEC Spot +15,09%, ZEC Perp −1,69% (miễn trừ lãi ròng), HYPE Perp −4,26% (miễn trừ lãi ròng, cách sàn −5% còn 0,74 điểm), HYPE Spot 0 lệnh (miễn trừ số lệnh). Danh sách id trên VPS: `~/.local/state/aigorithmic-trading/adr007/`.
-- **ETH Spot bị chặn:** campaign gate v2 cũ `cb13b4cb…` vẫn active dù candidate của nó đã bị loại. `4394683` sửa `--retire-open` để đóng campaign này và thêm `aigt setup2 retire-campaign` cho campaign mồ côi. Chưa chạy trên VPS.
+- **ETH Spot bị chặn:** campaign gate v2 cũ `cb13b4cb…` vẫn active dù candidate của nó đã bị loại. `4394683` sửa `--retire-open` để đóng campaign này và thêm `aigt setup2 retire-campaign` cho campaign mồ côi.
 - **Deploy `4394683`:** web healthy, `doctor` ok, active set giữ nguyên. Sau khi worker lên, `_asset_rule_bootstrap_loop` vẫn chết vì `database is locked` ở một lần ghi thường (`claim_scheduler_run`), không phải ở khởi tạo schema. Đã khởi động lại riêng worker: 0 luồng chết.
-- **Sửa (chưa deploy):** mọi loop nền của worker chạy qua `_supervised_loop`; khi loop ném lỗi, worker ghi `{"background_loop": {"loop", "status": "restarting", "code"}}`, chờ 30 giây rồi chạy lại loop thay vì để luồng chết.
+- **ETH Spot:** Julius chạy `aigt setup2 retire-campaign --symbol ETH --market spot` (đóng `cb13b4cb…` lúc 04:06Z). Replay lại lần đầu `deferred` vì nến 4h mới nhất cũ 4,1 giờ (ngưỡng 14.700 giây); sau `setup2 backfill` (thêm 1 nến 4h, 16 nến 15m) thì qua: 36 lệnh, +1,98%, DD 5,26%, eval `8053585e…`.
+- **Soak 14 ngày:** `start-soak` cho cả 10 route với eval replay đã qua, campaign bắt đầu 2026-10-14 04:09–04:10Z (sớm nhất có thể đánh giá: 2026-10-28 04:10Z). Kết quả từng route lưu ở `~/.local/state/aigorithmic-trading/adr007/soak-*.out` trên VPS.
+- **Heartbeat soak:** đếm theo dòng `setup2_observations` của candidate, mỗi nến H4 một dòng, từ `started_at` của campaign (`provider_error`/`gate_error` không tính). 5 route Perp đã ghi nến 04:00Z (trước giờ bắt đầu soak nên chưa tính); 4 route Spot đầu tiên sẽ ghi từ slot 08:00Z.
+- **HYPE Spot không ghi được heartbeat:** snapshot Spot 4h cần ít nhất 35 nến đóng cho mỗi khung 4h, 8h, 1d trên Binance Spot; HYPE Spot mới có 20 nến 1d (niêm yết 2026-09-24), nên route báo `error:StaleMarketData` mỗi slot cho tới khoảng 2026-10-29. Vì độ phủ heartbeat tính từ `started_at`, campaign HYPE Spot hiện tại sẽ không đạt 95% và phải bắt đầu lại sau mốc đó (hoặc sửa code). Jev cũng không xác nhận được lệnh Spot HYPE trong khoảng này. **Julius chọn:** không sửa code, bắt đầu lại soak HYPE Spot sau 2026-10-29 (sớm nhất xong khoảng 2026-11-12); các bước ghi trong checklist rollout, giai đoạn 4.
+- **Deploy `fcd6136` (bản sửa luồng nền):** web trước, worker sau; `doctor` ok, 0 luồng chết, 0 `database is locked`.
+- **Sửa:** mọi loop nền của worker chạy qua `_supervised_loop`; khi loop ném lỗi, worker ghi `{"background_loop": {"loop", "status": "restarting", "code"}}`, chờ 30 giây rồi chạy lại loop thay vì để luồng chết (`fcd6136`).
 
 ## 2026-10-14 — Deploy bản sửa khởi tạo database và LLM tự host; cổng G3 đã xong
 
