@@ -7,6 +7,8 @@ import hashlib
 import math
 import re
 import sqlite3
+import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -49,6 +51,36 @@ def _json(model) -> str:
     return json.dumps(model.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
 
 
+# Schema setup runs once per database file in a process. Every writer thread opens its own store; when
+# each one also ran the DDL, a starting worker's threads contended for the write lock and a background
+# loop could die on "database is locked". Another process (web, admin) can still hold the lock, so the
+# one-time setup retries briefly instead of failing at once.
+_SCHEMA_READY: set = set()
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_RETRIES = 6
+
+
+def _file_identity(path: Path):
+    stat = path.stat()
+    return str(path), stat.st_dev, stat.st_ino
+
+
+def _initialize_once(store) -> None:
+    with _SCHEMA_LOCK:
+        if store.database.exists() and _file_identity(store.database) in _SCHEMA_READY:
+            return
+        for attempt in range(_SCHEMA_RETRIES):
+            try:
+                store._initialize()
+                store._migrate_v23()
+                break
+            except sqlite3.OperationalError as error:
+                if "locked" not in str(error) or attempt == _SCHEMA_RETRIES-1:
+                    raise
+                time.sleep(min(2**attempt, 8))
+        _SCHEMA_READY.add(_file_identity(store.database))
+
+
 class IntradayStore:
     def __init__(self, database: str | Path, *, read_only: bool = False):
         self.database = Path(database).resolve()
@@ -68,8 +100,7 @@ class IntradayStore:
                 raise ValueError("readiness requires a readable source schema v23") from None
             return
         self.database.parent.mkdir(parents=True, exist_ok=True)
-        self._initialize()
-        self._migrate_v23()
+        _initialize_once(self)
 
     def _migrate_v23(self) -> None:
         """Add configuration only; never rewrite market/rule/soak evidence."""
