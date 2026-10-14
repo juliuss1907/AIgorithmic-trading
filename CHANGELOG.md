@@ -4,6 +4,16 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-14 — Deploy bản sửa khởi tạo database và LLM tự host; cổng G3 đã xong
+
+Nhánh: `feature/slot-runtime`, VPS chạy `35b9aca`.
+
+- **Cổng G3 (2026-10-13 14:00Z, Julius duyệt):** `active-set init` ghi version 1 (`c3d57eda19cd`), profile `setup2_slots_v1`, 5 coin với neo 2024-01-01 (HYPE 2025-06-01), proxy giá HYPE, ngưỡng 400 và hai miễn trừ. Từ 14:01:32Z vòng Jev 30 giây ghi `skipped_inactive` cho mọi coin.
+- **LLM tự host:** profile LLM OpenAI/Anthropic-compatible nhận HTTP tới máy chủ cục bộ hoặc nội bộ (`localhost`, IP private, `host.docker.internal`); worker và admin có `host.docker.internal` trỏ về VPS; `aigt connect` in mã lỗi preflight. Container admin gọi được gateway ở `http://host.docker.internal:20128/v1` (401 khi không có key).
+- **Sửa lỗi luồng nền chết khi khởi động:** mỗi `IntradayStore` ghi đều chạy lại DDL và migration nên các luồng của worker tranh khoá; nay schema chỉ khởi tạo một lần cho mỗi tệp trong mỗi tiến trình, có thử lại khi tiến trình khác giữ khoá. Sau deploy: 0 luồng chết, 0 `database is locked` ở worker và web (lần deploy trước có 2 đến 3 luồng chết mỗi lần khởi động).
+- **Sau deploy:** `doctor` ok, `status` ok (paper, `execution_enabled: false`, schema 23), `/healthz` 200, active set giữ nguyên.
+- **LLM đang dùng:** `anthropic/claude-sonnet-5.5` qua OpenRouter (profile `llm-openai-compatible-3ba62fbf`); chu kỳ phân tích đầu tiên sau deploy báo `schema_validation` (đầu ra của model không khớp schema). Không ảnh hưởng luật Setup-2 hay Jev.
+
 ## 2026-10-13 — Deploy mã ADR-007 lên VPS (cổng G2)
 
 VPS `julius-vps`, clone `~/AIgorithmic-trading`, Julius duyệt push và deploy. Chỉ deploy mã: **chưa** `active-set init`, chưa soak, chưa đụng Demo.
