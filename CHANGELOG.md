@@ -4,6 +4,17 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-15 — Chuẩn bị G5/G6 Binance Demo cho runtime slot ADR-007
+
+Nhánh: `prep/g5-demo`, worktree `system-trading-g5-prep` từ `18f15da`. Chỉ chuẩn bị và diễn tập local; VPS chỉ đọc, không push/deploy/kết nối key hay gửi lệnh Demo. Chi tiết, lệnh và bằng chứng: [checklist G5/G6](docs/runbooks/slot-runtime-demo-rollout-checklist.md#chạy-thử-g5-trên-database-tạm-2026-10-15).
+
+- Đối chiếu `--help` và code cho connect, leverage, scan/venue, configure, preflight, activate, run/once, status, pause, flatten. Checklist sửa thứ tự venue → leverage → configure, đường source/journal/key trong container, tách cổng G5 và G6; ghi rõ `--once` có thể đặt lệnh, cách đưa key lên VPS với quyền 0700/0600 và UID:GID 1000:1000. Hai bind directory trên VPS hiện chưa có.
+- Đọc ID/hash campaign hiện tại để điền 9 route của đợt đầu; mốc đánh giá chung an toàn 2026-10-28 04:11Z, Perp cần funding snapshot mới. Giữ active set cả 10 route: configure paused được khi HYPE Spot chưa có soak đạt, chỉ activate 9 route; test chứng minh HYPE Spot bị từ chối không làm đổi portfolio đã active 9 route. Không sửa Jev, cách dùng `rule_allows_answers` hay tham số/hash rule.
+- Chép backup 2,17 GB và manifest về `~/.local/state/aigorithmic-trading/g5-rehearsal/`, verify integrity và SHA-256 `6d25bf92…caefeaa5`; dựng active set/candidate trên bản sao thứ hai. CLI thật dừng do thiếu key. Với boundary fixture, configure ghi paused, gross/Perp/margin 100%/50%/50%, giới hạn lỗ 3%/15%, cap 166,67 USDT; preflight/activate dùng source bản sao dừng vì chưa có champion, không tạo evaluation giả.
+- Scan công khai 9 route (thêm HYPE Spot để kiểm cấu hình đủ), đọc Demo exchangeInfo và tính cỡ lệnh 166,67/66,67 USDT: đều vượt minimum ở multiplier 1/0,40; ETH Perp minimum 20 USDT, các route khác 5. Tại 0,40, NEAR Perp tròn xuống giảm 2,875%, ZEC khoảng 1,1–1,2%. Multiplier không có sàn 0,40 nên vốn/cỡ nhỏ hơn vẫn có thể `rejected_quantity`.
+- Xác nhận Compose nhận đúng 3 biến Telegram, lần đầu chỉ ghi BASELINE; kiểm bằng fixture, không gửi Telegram thật. Worker ID và active-set ID trên VPS giữ nguyên; checksum backup và số evaluation của bản sao không đổi sau diễn tập.
+- Kiểm thử cuối: **1.748 qua, 1 lỗi có sẵn được cho phép** `test_perp_collection_migration`, 23 cảnh báo deprecation; không skip/xfail. Hai lỗi tìm được (help argparse và thiếu mẫu Hermes) được sửa ở các mục dưới. Còn chờ key/quyền giao dịch, mode/leverage thật, soak đạt, quyết định Jev và G5/G6 của Julius.
+
 ## 2026-10-15 — Khôi phục file mẫu cài đặt Hermes trong checkout sạch
 
 Nhánh: `prep/g5-demo`. Phát hiện khi chạy toàn bộ pytest cho chuẩn bị G5.
