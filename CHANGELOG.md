@@ -4,6 +4,13 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-15 — Sửa trợ giúp CLI cho bước chuẩn bị G5
+
+Nhánh: `prep/g5-demo`, worktree riêng; chưa push hay deploy.
+
+- Sửa `active-set init/switch --help` bị lỗi định dạng do ký tự `%` trong mô tả `--waive-net-return`; không đổi tham số, hash rule hay cổng Jev.
+- Kiểm thử hồi quy cho cả hai lệnh: tái hiện lỗi trước khi sửa, kiểm trợ giúp in được sàn −5% sau khi sửa.
+
 ## 2026-10-15 — Tín hiệu soak đầu tiên; cổng Jev chặn mọi lệnh Setup-2
 
 Nhánh: `feature/slot-runtime`. Chỉ đọc dữ liệu trên VPS, không sửa code, không deploy.

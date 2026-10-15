@@ -91,3 +91,14 @@ def test_allocation_requires_equal_sleeves_and_sizes_a_third_of_the_realized_sle
     assert setup2.SLOT_DIVISOR == 3 and setup2.SLOT_MAX_POSITIONS == 3 and setup2.ROTATION_MARGIN == 5
     with pytest.raises(ValueError, match='slot profile'):
         allocation(profile='setup2_v1', spot_split=D('.6'), perp_split=D('.4')).slot_cap(D(1), D(1), D(1))
+
+
+@pytest.mark.parametrize("action", ["init", "switch"])
+def test_active_set_help_explains_the_net_return_waiver(action, capsys):
+    from intraday.__main__ import _parser
+
+    with pytest.raises(SystemExit) as stopped:
+        _parser().parse_args(["active-set", action, "--help"])
+    assert stopped.value.code == 0
+    output = capsys.readouterr().out
+    assert "--waive-net-return" in output and "-5% floor" in output

@@ -38,7 +38,7 @@ def add_active_set_parser(commands):
                              help="waive the replay gate's six-closed-trades criterion for a Perp-proxied Spot route")
         command.add_argument("--waive-net-return", action="append", default=[], metavar="COIN:MARKET",
                              help="operator exception: waive the replay gate's net-profit criterion for one route "
-                                  "(down to a -5% floor; trades, drawdown and coverage still apply)")
+                                  "(down to a -5%% floor; trades, drawdown and coverage still apply)")
         command.add_argument("--anchor", action="append", default=[], metavar="[COIN=]YYYY-MM-DD",
                              help="indicator anchor for new coins (UTC date at an H4 boundary); `COIN=DATE` sets one "
                                   "coin, a bare date the rest. An earlier anchor gives the replay gate more history")
