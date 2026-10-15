@@ -4,6 +4,13 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-15 — Tín hiệu soak đầu tiên; cổng Jev chặn mọi lệnh Setup-2
+
+Nhánh: `feature/slot-runtime`. Chỉ đọc dữ liệu trên VPS, không sửa code, không deploy.
+
+- **Tín hiệu soak đầu tiên:** nến H4 đóng 2026-10-15 04:00Z, ETH, HYPE, ZEC Perp cùng ra SHORT; bot Telegram gửi cả 3 tin ngay lần đầu. Jev từ chối cả ba (Strong Buy 0,49 / Buy 0,37 / Strong Buy 0,42).
+- **Phát hiện:** trên 115.164 câu trả lời Jev `perp_intraday` (25/09–15/10), cổng `perp_setup2_entry` qua 0 lần ở ngưỡng 0,85 và ở sàn 0,69; khi RSI14 < 30, Jev chọn mua 99,4%. Jev nhận snapshot 1h chung, không biết luật đã ra tín hiệu, và trả lời theo kiểu đảo chiều. Nếu giữ nguyên, Demo sẽ không vào lệnh nào. Soak và mốc 2026-10-28 không bị ảnh hưởng. Chi tiết và các lựa chọn: [docs/jev-setup2-confirmation-2026-10-15.md](docs/jev-setup2-confirmation-2026-10-15.md).
+
 ## 2026-10-14 — Thông báo Telegram cho tín hiệu soak và lệnh Binance Demo
 
 Nhánh: `feature/slot-runtime`. Julius chọn: báo cả soak và Demo, hiện mức thoát thay cho target, khối lượng soak theo % túi, dùng bot của timer BTC paper.
