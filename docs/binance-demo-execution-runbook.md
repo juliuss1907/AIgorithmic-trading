@@ -134,11 +134,40 @@ started as part of implementation.
 - At most **three open positions across both sleeves**, one per coin. Each H4 bar is ranked once: Donchian exits
   first, then every rule-confirmed candidate by ADX (volume ratio as tie-break), a PnL gate (entries only while the
   open book is in profit, or nothing is open) and rotation (a full book replaces its weakest position only for a
-  candidate more than 5 ADX points stronger, and only after the rule and Jev confirmed the candidate).
+  candidate more than 5 ADX points stronger, and only after the rule and risk limits allow the candidate;
+  in `gate` mode Jev must also confirm).
 - Stop is the nearer of the ATR×3 trail and 5% from entry, tightened only; the route's Spot emergency stop is 5%.
 - The portfolio journal records the last ranking under `slot_selection` (open positions, book PnL, one step per
   candidate: `free`, `rotate` or `blocked` with the reason).
 - The route's champion rule must have the allocation's profile; a `setup2_v1` champion is refused.
+
+### Jev policy for Demo slots
+
+Julius chose `advisory` for the slot rollout (2026-10-15). Configure explicitly, with the same source/journal/key
+paths and other options as the rollout command:
+
+```bash
+execution_demo configure --from-active-set --jev-mode advisory --capital 1000 \
+  --source-database "$demo_source" --secrets-file "$demo_key"
+execution_demo status --multi
+```
+
+Here `execution_demo` is the container wrapper defined in the [G5 checklist](runbooks/slot-runtime-demo-rollout-checklist.md).
+The CLI accepts `--jev-mode {gate,advisory}`; the default `gate` is omitted from serialized allocation for compatibility.
+Only `setup2_slots_v1` accepts `advisory`. Changing either way requires the existing portfolio to be **paused and flat**;
+rollback uses the same configure command with `--jev-mode gate` and the same paths/options.
+
+In advisory mode the rule creates the entry and deterministic sizing/risk gates still apply. Missing or failed Jev answers
+wait at most **120 seconds from H4 close**, then do not veto the entry. A readable opposing answer does not delay it.
+The current quote must remain within **1% of the H4 close**, with spread at most **0.1%**. Rotation rechecks price and risk
+before closing the victim. The source key `setup2:{rule_id}:{bar}` prevents another entry for the same rule/bar after
+a restart or late answer; it is distinct from `close:` reasons.
+
+Status includes `allocation.jev_mode=advisory`, `slot_selection.steps[].jev` and each entry route's `entry_jev`.
+Cycle results include the same opinion (`direction`, `confidence`, `would_allow`, `reasons`) or `"unavailable"`.
+`would_allow` applies the old Jev filters for comparison; it does not authorize an advisory entry. Telegram displays
+that entry-time opinion when available and continues sending fills if optional advice cannot be read.
+Soak heartbeat and `challenger_allowed` are unchanged. See the [ADR-007 addendum](decisions/007-slot-rotation-five-coin-runtime.md#jev-chỉ-tư-vấn-2026-10-15).
 
 ## Legacy BTC-only compatibility path
 

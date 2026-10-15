@@ -1,10 +1,10 @@
 # Checklist: đưa runtime slot 1/3 túi, 5 coin lên Binance Demo (ADR-007)
 
 Trạng thái 2026-10-15: **G2/G3 đã triển khai, G4 đang soak; G5/G6 chưa thực hiện.** Chuẩn bị G5 đã diễn tập local;
-key, soak đạt và quyết định Jev còn chờ Julius. G5 và G6 vẫn cần duyệt riêng.
+key và soak đạt còn chờ. Julius đã chọn Jev chỉ tư vấn cho Demo slot (phụ lục ADR-007 ngày 15/10); G5 và G6 vẫn cần duyệt riêng.
 Cơ sở: [ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md), [ADR-006](../decisions/006-three-coin-runtime.md),
 [checklist 3 coin](three-coin-demo-rollout-checklist.md) (chỉ có trên nhánh `feature/three-coin-runtime`),
-[Demo runbook](../binance-demo-execution-runbook.md). Lệnh dưới đây đã đối chiếu với CLI của nhánh `feature/slot-runtime`.
+[Demo runbook](../binance-demo-execution-runbook.md). Lệnh dưới đây đã đối chiếu với CLI của nhánh `feature/jev-advisory` (kế thừa `prep/g5-demo`).
 
 ## 0. Cấu hình sẽ chạy
 
@@ -14,7 +14,7 @@ Cơ sở: [ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md), [ADR-0
 | Coin | ETH, NEAR, SOL, ZEC và HYPE, tất cả `both`. HYPE Spot chạy trên **proxy giá Perp** trước 2026-09-24 (ngưỡng làm nóng 400 nến, miễn trừ gate ≥ 6 lệnh), xem phụ lục ADR-007 |
 | Túi | Spot 50% / Perp short 1x 50%, tách riêng; vị thế tối đa **1/3 vốn thực hiện của túi** nhân hệ số ATR |
 | Danh mục | Tối đa **3 vị thế** trên hai túi, một vị thế mỗi coin; cổng PnL sổ đang mở; xoay vị thế khi ADX hơn > 5 điểm |
-| Jev | Luật tạo tín hiệu, Jev xác nhận (short cần SELL/STRONG_SELL); xoay vị thế chỉ đóng vị thế yếu **sau** khi ứng viên được xác nhận |
+| Jev | `jev_mode=advisory`: luật và cổng rủi ro quyết định; Jev chỉ tư vấn. Thiếu câu trả lời thì chờ tối đa 120 giây từ đóng nến; xoay chỉ sau khi luật và rủi ro cho phép |
 | Rủi ro | Dừng lỗ ngày 3%, DD 15%, Perp 1x isolated |
 | Vốn Demo | 1.000 USDT (mặc định nghiên cứu) |
 
@@ -22,7 +22,7 @@ Cơ sở: [ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md), [ADR-0
 
 - [ ] **5 coin và HYPE chưa được đo.** Stage 0 (`rotation-five`, BTC thay HYPE) kiểm tra cơ chế 5 coin trên 3 vị thế; kết quả phải được ghi vào
       `docs/rotating-positions-research.md` **trước G3**, dù là "qua" hay không.
-- [ ] Kết quả Demo không bằng replay: Jev loại bớt lệnh, khớp lệnh thật có trượt giá, xoay vị thế chờ xác nhận.
+- [ ] Demo dùng tín hiệu luật như replay; Jev chỉ tư vấn, chưa được đo là có ích. Khớp lệnh thật có trượt giá, xoay vị thế đóng rồi mở và chờ tư vấn tối đa 120 giây có thể làm kết quả khác replay.
 - [ ] Nửa vốn nằm ở túi Perp, chỉ hoạt động khi có tín hiệu short; có thể nhàn rỗi nhiều tuần.
 - [ ] `active-set init`/`switch` đổi hành vi thật: tắt soak Jev cũ của các coin ngoài danh sách (bằng chứng được giữ).
 - [ ] **Neo chỉ báo (anchor) quyết định thời gian chờ replay gate.** Cửa sổ replay v2 bắt đầu tại `anchor + 600 nến H4` và cần ≥ 6 lệnh đóng cho từng
@@ -257,7 +257,7 @@ for coin in ETH NEAR SOL ZEC HYPE; do
     --execution-database "$demo_journal" --secrets-file "$demo_key" || break
 done
 # Kiểm cả leverage sàn và cấu hình đều 1x, Isolated, không pending/unknown request, paused hoặc not_activated.
-execution_demo configure --from-active-set --capital 1000 \
+execution_demo configure --from-active-set --jev-mode advisory --capital 1000 \
   --source-database "$demo_source" --secrets-file "$demo_key"
 execution_demo status --multi
 ```
@@ -267,7 +267,7 @@ execution_demo status --multi
 - [ ] Leverage ghi request vào **cùng journal sẽ chạy Demo**, POST settings khi cần đổi sau Confirm, rồi GET xác minh; không đặt lệnh.
       Dù sàn đã là 1x, vẫn Confirm 1 để lưu verified setting vào journal (mặc định journal mới là 3x).
 - [ ] `configure` gọi GET kiểm cả 10 route và ghi journal, không đòi champion hay soak. Kết quả:
-      `profile=setup2_slots_v1`, `paused=true`, `enabled=false`, 10 route trong allocation, chưa route nào được activate;
+      `profile=setup2_slots_v1`, `jev_mode=advisory`, `paused=true`, `enabled=false`, 10 route trong allocation, chưa route nào được activate;
       Spot stop 5%, gross 100%, Perp 50%, margin 50%, dừng lỗ ngày 3%, DD 15%.
 - [ ] HYPE Spot không cần champion/soak để configure. Nó **không tự active**; chỉ activate 9 route dưới đây.
       Runtime vẫn đọc quote/account của các route trong allocation để quản lý rủi ro; lỗi API chung có thể pause portfolio.
@@ -296,8 +296,8 @@ execution_demo status --multi
       Vì vậy **chưa bật runner** khi đang activate các route; nếu runner đã tồn tại phải dừng riêng nó trước khi cấu hình batch.
 - [ ] Cuối G5: đúng 9 route active; **không có `spot:HYPEUSDT` active**. Không có fake soak trên DB bản sao hoặc VPS.
 - [ ] Key, quyền đặt lệnh, read-back leverage và preflight có tài khoản thật: **chờ key**. Soak: **chờ 28/10**, chưa bảo đảm pass.
-- [ ] Quyết định Jev: **chờ Julius** theo [báo cáo Jev](../jev-setup2-confirmation-2026-10-15.md).
-      Giữ code hiện tại thì rule vào lệnh vẫn bị runtime từ chối; chuẩn bị G5 không tự sửa cổng này.
+- [ ] Quyết định Jev: **đã chọn chế độ tư vấn** (`--jev-mode advisory`) theo [phụ lục ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md#jev-chỉ-tư-vấn-2026-10-15).
+      Kiểm allocation đúng chế độ; luật và cổng rủi ro quyết định, Jev không phủ quyết. Đổi chế độ cần paused và flat.
 
 ## Giai đoạn 6: chạy có giám sát và đối chiếu (G6 riêng)
 
@@ -334,7 +334,7 @@ Nếu chu kỳ báo paused/error/unknown, giữ giám sát và đối soát trư
       Dùng `execution demo status`, không dùng `aigt positions` (vị thế paper).
 - [ ] Đối chiếu `setup2_observations` với replay cùng cửa sổ: ADX, ATR, cờ vào/thoát; giữ khác biệt Jev/fill trong báo cáo.
 - [ ] Acceptance có giám sát: entry đủ điều kiện → stop gốc được sàn xác nhận → close → fills/phí/số dư khớp journal.
-      Không có tín hiệu do Jev thì ghi đúng điểm chặn, không tạo tín hiệu giả để nghiệm thu.
+      Thiếu/lỗi Jev chỉ chờ tối đa 120 giây từ đóng nến; sau đó luật vẫn được vào nếu rủi ro/giá cho phép. Ghi rõ điểm chặn của luật, rủi ro hoặc giá; không tạo tín hiệu giả để nghiệm thu.
 - [ ] Stop là bên gần hơn giữa ATR×3 và 5%, chỉ siết; thoát `donchian_exit`/`rotation_exit`. `portfolio_loss_limit`,
       cash drift, `protection_failed` hoặc `active_set_changed_reconfigure` cần dừng entry và xử lý có giám sát.
 - [ ] Compose truyền riêng `TELEGRAM_ENABLED`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`; không truyền toàn bộ env file vào Demo.
@@ -367,7 +367,7 @@ Sau đó mới `active-set switch` về version trước nếu Julius duyệt ri
 
 - Acceptance có giám sát với tiền Demo cho đường lệnh, stop và đối soát (chưa từng có), cũng như ghi và đọc lại leverage.
 - Hành vi thật của Demo với HYPE, ZEC (thanh khoản, bước giá, lệnh tối thiểu).
-- Hiệu ứng của Jev lên tập lệnh so với replay; xoay vị thế chạy tuần tự (đóng rồi mở) nên có trượt giá giữa hai lệnh.
+- Jev chỉ được ghi để đối chiếu, chưa được đo là có ích; xoay vị thế chạy tuần tự (đóng rồi mở) nên có trượt giá giữa hai lệnh.
 
 ## Chạy thử trên database tạm (2026-10-13, dữ liệu công khai, chỉ đọc)
 
@@ -544,6 +544,8 @@ Bảng là phép tính theo snapshot, không phải order đã được sàn ch�
   Không suy từ `quantityPrecision` sang step và không dùng một minimum chung cho tất cả cặp.
 
 ### Jev và Telegram
+
+Phần dưới giữ nguyên kết quả diễn tập trên `cad8779`; quyết định mới xem [phụ lục Jev chỉ tư vấn của ADR-007](../decisions/007-slot-rotation-five-coin-runtime.md#jev-chỉ-tư-vấn-2026-10-15).
 
 Không sửa cổng Jev. `ScopedEvidenceSource.latest_decision` đòi primary signal tươi (Perp ≤45 giây, Spot ≤4 giờ) và provenance đúng.
 Trong `_slots_cycle`, thiếu/stale/provenance sai câu trả lời trả `waiting_for_eligible_evidence`, có thể

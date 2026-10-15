@@ -164,3 +164,36 @@ Evidence the operator accepted: ZEC Perp lost 1,7% over 30 months (31 trades, dr
 Final rehearsal on a scratch database with the exact rollout command (anchors 2024-01-01 and HYPE 2025-06-01, HYPE proxy and both
 waivers): all ten routes pass the replay gate; three of them through a waiver (ZEC Perp and HYPE Perp on net profit, HYPE Spot on
 the trade count).
+
+
+## Jev chỉ tư vấn (2026-10-15)
+
+**Lý do và quyết định.** Julius chọn hướng A trong [báo cáo Jev](../jev-setup2-confirmation-2026-10-15.md):
+trên 115.164 câu trả lời thật, cổng xác nhận Jev không qua lần nào; các lỗi `circuit_open`, `insufficient_credits`
+và `access_denied` còn làm thiếu câu trả lời. Với **Demo và chỉ profile `setup2_slots_v1`**, luật quyết định
+tín hiệu; Jev tiếp tục được gọi, lưu và hiển thị nhưng chỉ tư vấn. Đặt `--jev-mode advisory` ở allocation Demo,
+không đặt trong active set. Mặc định vẫn là `gate`; profile `legacy` và `setup2_v1` không được dùng advisory.
+
+**Thực thi.** Nếu ứng viên chưa có câu trả lời của đúng route/rule/nến H4, chờ tối đa **120 giây kể từ lúc đóng nến**,
+rồi vẫn xếp hạng và cho luật cùng cổng rủi ro quyết định. Có câu trả lời phản đối cũng không chặn lệnh. Không áp tuổi
+45 giây hay provenance của cổng Jev cho dữ liệu tư vấn. Kiểm giá lệch tối đa 1% so với **giá đóng nến H4**, spread
+tối đa 0,1%, rồi kiểm lại trước khi xoay/đặt lệnh. Trước khi đóng vị thế yếu, ứng viên phải qua luật và cổng rủi ro.
+
+Khóa nguồn `setup2:{rule_id}:{bar}` và `identity(campaign_id, symbol, market, khóa_nguồn, "entry")` gắn lệnh với
+rule và nến, nên restart hay Jev trả lời muộn không tạo lần vào thứ hai. Journal lưu ý kiến trong `slot_selection.steps`,
+kết quả chu kỳ và `route.entry_jev`: hướng, độ tin, `would_allow`, lý do cổng Jev cũ; thiếu thì `unavailable`.
+Telegram soak ghi tín hiệu luật và ý kiến đồng ý/phản đối; Telegram Demo đọc ý kiến tại reservation của lệnh.
+
+**Giữ nguyên.** Không đổi tham số rule, candidate `content_hash`, active-set version, dữ liệu/campaign soak,
+`challenger_allowed`, heartbeat, thuật toán replay hay `select_entries`. Vẫn Spot long và Perp short 1x isolated,
+hai túi 50/50, cỡ slot 1/3 nhân ATR, tối đa ba vị thế/một coin một vị thế, cổng PnL, chênh ADX **lớn hơn 5**,
+stop, giới hạn gross/Perp/margin, dừng lỗ ngày 3% và DD 15%. Đường per-route cũ và chế độ `gate` giữ hành vi cũ.
+
+**Hệ quả.** Demo dùng tín hiệu luật đã qua replay gate; khớp lệnh, phí, giá và xoay tuần tự vẫn có thể khác replay.
+Chưa có phép đo chứng minh Jev làm chiến lược tốt hơn; ý kiến được giữ để đối chiếu sau. Soak pass vẫn là điều kiện
+activate, không chứng minh giá trị dự báo của Jev. Thay đổi này không cấp quyền deploy, G5 hay G6.
+
+**Đường lui.** Pause và xác nhận portfolio **flat**, rồi chạy lại `execution demo configure --from-active-set
+--jev-mode gate` với cùng vốn/source/journal/key; kiểm status trước khi activate lại theo quy trình. Đổi `jev_mode`
+là đổi allocation, nên cả hai chiều đều dùng điều kiện paused + flat hiện có. Payload mặc định bỏ `jev_mode=gate`
+để giữ nguyên từng byte cấu hình cũ. Xem [checklist G5/G6](../runbooks/slot-runtime-demo-rollout-checklist.md).

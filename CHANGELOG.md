@@ -4,6 +4,11 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-15 — Quy trình Demo slot dùng Jev tư vấn
+
+- Bổ sung quyết định của Julius vào ADR-007, checklist G5/G6 và Demo runbook: configure với `--jev-mode advisory`, kiểm status và đường lui về `gate` khi paused + flat.
+- Giữ nguyên lịch sử diễn tập 15/10; không đổi active set/candidate/soak, không triển khai hay kích hoạt giao dịch trong đợt này.
+
 ## 2026-10-15 — Ý kiến Jev trong Telegram
 
 - Tin soak nêu rõ tín hiệu đến từ luật; dòng Jev ghi đồng ý hoặc phản đối, không còn báo không vào lệnh vì Jev.
