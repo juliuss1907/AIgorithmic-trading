@@ -7,6 +7,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+!integrations/hermes/trading-ops/.env.template
 data/
 runs/
 state/

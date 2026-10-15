@@ -4,6 +4,13 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-15 — Khôi phục file mẫu cài đặt Hermes trong checkout sạch
+
+Nhánh: `prep/g5-demo`. Phát hiện khi chạy toàn bộ pytest cho chuẩn bị G5.
+
+- Gói `integrations/hermes/trading-ops` thiếu file mẫu cài đặt vì `.gitignore` bỏ mọi `.env.*`; thêm ngoại lệ đúng đường dẫn và mẫu công khai chỉ có URL loopback, hai trường token để trống. Không đọc cấu hình hay token runtime, không cài/bật Hermes trên VPS.
+- Test distribution có sẵn tái hiện lỗi thiếu file trên worktree mới; kiểm lại gói cài đặt sau khi bổ sung.
+
 ## 2026-10-15 — Sửa trợ giúp CLI cho bước chuẩn bị G5
 
 Nhánh: `prep/g5-demo`, worktree riêng; chưa push hay deploy.
