@@ -4,6 +4,11 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-15 — Ổn định checksum của fixture A/B
+
+- Toàn bộ test lần xác nhận phát hiện lỗi hash ngẫu nhiên ở `test_compact_ab`, tái hiện cả trên gốc `cad8779`: connection ghi chưa được dọn khiến WAL checkpoint sau lúc chốt checksum, dù dump logic không đổi.
+- Chỉ checkpoint/truncate WAL trong fixture trước khi đóng băng input; thêm test dọn connection rồi kiểm hash. Không đổi mã replay hay bỏ/nới assertion bảo toàn checksum.
+
 ## 2026-10-15 — Bảo toàn audit advisory khi stop lỗi
 
 - Review độc lập phát hiện nhánh stop bảo vệ thất bại chưa lưu `slot_selection` và làm mất kết quả ứng viên. Lưu audit cùng reservation/failure và trả kết quả Jev cả khi portfolio phải pause, có test Spot/Perp gây lỗi stop.

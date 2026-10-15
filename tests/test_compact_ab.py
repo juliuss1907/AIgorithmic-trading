@@ -2,6 +2,7 @@ import hashlib
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from contextlib import closing
 
 import pytest
 
@@ -56,6 +57,9 @@ def build_source(tmp_path, ticks=96, tampered=()):
                 forward_return_pct=move, max_upside_pct=max(0, move), max_downside_pct=min(0, move),
                 directional_return_pct=move, mfe_pct=max(0, move), mae_pct=min(0, move), sample_count=31,
                 coverage_pct=100))
+    # Writer connections can be collected later; settle their WAL before freezing file bytes.
+    with closing(sqlite3.connect(store.database)) as connection:
+        assert connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone() == (0, 0, 0)
     return tmp_path/'source.sqlite'
 
 
@@ -165,3 +169,13 @@ def test_fewer_pairs_than_the_stock_minimum_is_inconclusive_not_eligible(tmp_pat
     summary = compact_ab.run(path, tmp_path/'report', provider_factory=make_provider(), per_coin=30, rounds=100)
     assert summary['status'] == 'inconclusive' and summary['reason_codes'] == ['minimum_pairs_not_met']
     assert summary['min_pairs'] == 1000
+
+
+def test_fixture_checksum_is_stable_when_old_writer_connections_are_collected(tmp_path):
+    import gc
+    path = build_source(tmp_path, ticks=4)
+    wal = path.with_name(path.name+'-wal')
+    assert not wal.exists() or wal.stat().st_size == 0
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    gc.collect()
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
