@@ -57,6 +57,8 @@ def add_execution_parser(commands):
     configure.add_argument("--perp-weight", action="append", default=[], metavar="COIN=FRACTION")
     configure.add_argument("--from-active-set", action="store_true",
                            help="Setup-2 profile: weights and splits copied from the current audited active set")
+    configure.add_argument("--jev-mode", choices=("gate", "advisory"), default="gate",
+                           help="Jev confirms entries by default; advisory is restricted to the slot Demo profile")
     configure.set_defaults(multi=True)
 
 
@@ -79,7 +81,8 @@ def _allocation(arguments,source):
     stop = arguments.spot_stop_percent/100
     if not arguments.from_active_set:
         return DemoAllocation(capital=arguments.capital,spot_weights=_weights(arguments.spot_weight),
-                              perp_weights=_weights(arguments.perp_weight),spot_emergency_stop_pct=stop)
+                              perp_weights=_weights(arguments.perp_weight),spot_emergency_stop_pct=stop,
+                              jev_mode=arguments.jev_mode)
     if arguments.spot_weight or arguments.perp_weight:
         raise ValueError("--from-active-set takes weights from the active set; omit manual weights")
     from intraday.active_set import current
@@ -96,7 +99,7 @@ def _allocation(arguments,source):
                           spot_weights={s:c.spot_weight for s,c in coins.items() if c.spot_weight > 0},
                           perp_weights={s:c.perp_weight for s,c in coins.items() if c.perp_weight > 0},
                           spot_split=version.plan.spot_split,perp_split=version.plan.perp_split,
-                          active_set_version_id=version.version_id)
+                          active_set_version_id=version.version_id,jev_mode=arguments.jev_mode)
 
 
 def _dispatch_multi(arguments,journal,credentials,source,*,now):

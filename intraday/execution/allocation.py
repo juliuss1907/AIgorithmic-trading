@@ -19,10 +19,13 @@ class DemoAllocation(ExecutionModel):
     spot_split: Decimal | None = Field(default=None, ge=0, le=1)
     perp_split: Decimal | None = Field(default=None, ge=0, le=1)
     active_set_version_id: str | None = None
+    jev_mode: Literal["gate", "advisory"] = "gate"
 
     @model_serializer(mode="wrap")
     def serialize_allocation(self, handler):
         payload = handler(self)
+        if self.jev_mode == "gate":
+            payload.pop("jev_mode", None)
         if self.profile == "legacy":
             for key in ("profile", "spot_split", "perp_split", "active_set_version_id"):
                 payload.pop(key, None)
@@ -40,6 +43,8 @@ class DemoAllocation(ExecutionModel):
 
     @model_validator(mode="after")
     def nonempty_allocation(self):
+        if self.jev_mode == "advisory" and self.profile != "setup2_slots_v1":
+            raise ValueError("advisory mode requires the setup2_slots_v1 Demo profile")
         if not any(self.spot_weights.values()) and not any(self.perp_weights.values()):
             raise ValueError("allocate at least one coin explicitly")
         setup2 = (self.spot_split, self.perp_split, self.active_set_version_id)

@@ -4,6 +4,14 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-15 — Cờ Jev advisory riêng cho allocation Demo slot
+
+Nhánh: `feature/jev-advisory` từ `cad8779`; chỉ làm local.
+
+- Thêm `DemoAllocation.jev_mode` và `configure --jev-mode gate|advisory`; mặc định gate không xuất thêm trường khi serialize, giữ payload cũ từng byte. Advisory chỉ hợp lệ với `setup2_slots_v1`, không nằm trong active set hay tham số rule.
+- Cổng advisory chấp nhận thiếu/khác ý kiến Jev nhưng vẫn đòi luật nổ và gọi coordinator rủi ro với cách tính cỡ lệnh cũ; cổng mặc định và profile cũ giữ hành vi. Hàm thuần `jev_advice` dùng cùng logic lý do của cổng cũ.
+- Kiểm thử tập trung: 46 test allocation/CLI/cổng và hồi quy cổng cũ, Setup-2 Perp, active set qua. Chưa triển khai hay đổi trạng thái Demo/VPS.
+
 ## 2026-10-15 — Chuẩn bị G5/G6 Binance Demo cho runtime slot ADR-007
 
 Nhánh: `prep/g5-demo`, worktree `system-trading-g5-prep` từ `18f15da`. Chỉ chuẩn bị và diễn tập local; VPS chỉ đọc, không push/deploy/kết nối key hay gửi lệnh Demo. Chi tiết, lệnh và bằng chứng: [checklist G5/G6](docs/runbooks/slot-runtime-demo-rollout-checklist.md#chạy-thử-g5-trên-database-tạm-2026-10-15).
