@@ -4,6 +4,15 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-15 — Runtime slot dùng luật và ghi ý kiến Jev theo nến
+
+Nhánh: `feature/jev-advisory`; chỉ làm local.
+
+- Advisory đọc câu trả lời primary đúng route/rule/nến, không đòi provenance hay tuổi 45 giây; thiếu/lỗi thì chờ tối đa 120 giây từ lúc đóng H4 rồi vẫn xếp hạng theo luật. Giữ kiểm champion/soak, giá lệch 1% từ giá đóng H4, spread 0,1%, filters, stop, đối soát và giới hạn danh mục.
+- Định danh entry theo `setup2:{rule_id}:{bar}`, bền qua restart và câu trả lời muộn; audit ghi `jev` trong kết quả, từng bước lựa chọn và route khi reserve lệnh. Kiểm lại giá/rủi ro trước khi đóng vị thế để xoay, giá trước submit.
+- Hai điểm phụ cần để hỗ trợ đúng đường mới: mở riêng giới hạn `OrderIntent.source_id` từ 128 lên 160 ký tự để chứa rule ID dài tối đa; truyền đúng dấu âm của vị thế short cho coordinator **chỉ trong advisory**. Test nhiều vị thế Perp ban đầu chỉ mở được một do dấu dương bị hiểu là flip, nay mở/xoay được; nhánh gate và per-route cũ giữ nguyên.
+- 39 test runtime/source/slot/G5 qua. Hai đối chứng H4 và 8 ca slot 4/5 coin năm 2026 tái chạy giữ nguyên 10 `result_id` và summary; dữ liệu/replay engine không đổi. Không thay tham số/hash rule, active set, heartbeat hay cách lưu `challenger_allowed`.
+
 ## 2026-10-15 — Cờ Jev advisory riêng cho allocation Demo slot
 
 Nhánh: `feature/jev-advisory` từ `cad8779`; chỉ làm local.

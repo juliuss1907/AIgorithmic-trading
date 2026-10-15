@@ -16,9 +16,10 @@ from intraday.execution.allocation import DemoAllocation
 from intraday.execution.contracts import ExecutionUnavailable, OrderIntent
 from intraday.execution.journal import OrderCoordinator
 from intraday.portfolio_coordinator import ParentPortfolioCoordinator, ParentPortfolioPolicy, ParentPortfolioState
-from intraday.scoped_gate import ScopedEntryGate
+from intraday.scoped_gate import ScopedEntryGate, jev_advice
 
 
+JEV_ADVISORY_WAIT_SECONDS = 120
 JEV_GRACE_SECONDS = 600  # How long a bar's ranking waits for the other coins' Jev answers (ADR-007).
 
 
@@ -534,7 +535,7 @@ class MultiDemoRuntime:
         snapshot = markets[(symbol,market)][1]
         state = ParentPortfolioState(initial_equity=float(plan.capital),realized_pnl=float(equity-plan.capital),
             spot_quantity=float(spot_gross),spot_entry_price=1 if spot_gross else None,
-            perp_quantity=float(perp_gross),perp_entry_price=1 if perp_gross else None,
+            perp_quantity=float(-perp_gross if plan.jev_mode=="advisory" else perp_gross),perp_entry_price=1 if perp_gross else None,
             mark_price=1,spot_price=1,perp_mark_price=1,day_start_equity=float(p["day_start_equity"]),
             high_water_mark=float(p["high_water_mark"]),entries_paused=False,paper_active=True,updated_at=now)
         sleeve_equity,used = sleeves[market]
@@ -553,9 +554,10 @@ class MultiDemoRuntime:
         multiplier = float(observation.size_multiplier)
         auth = (gate.spot_entry(state,decision,rule.parameters,donchian_entry=observation.entry,
                                 size_multiplier=multiplier,scope=DecisionScope.SPOT_4H,
-                                projected_isolated_margin_pct=projected_margin) if market == "spot" else
+                                projected_isolated_margin_pct=projected_margin,advisory=plan.jev_mode=="advisory") if market == "spot" else
                 gate.perp_setup2_entry(state,decision,rule.parameters,setup_entry=observation.entry,
-                                       size_multiplier=multiplier,projected_isolated_margin_pct=projected_margin))
+                                       size_multiplier=multiplier,projected_isolated_margin_pct=projected_margin,
+                                       advisory=plan.jev_mode=="advisory"))
         if not auth.allowed or not auth.target_notional:
             return auth,Decimal(0)
         return auth,min(cap,abs(Decimal(str(auth.target_notional))))
@@ -566,6 +568,8 @@ class MultiDemoRuntime:
         route,decision,observation,bar = candidate["route"],candidate["decision"],candidate["observation"],candidate["bar"]
         self._account_check(venue,market,snapshot)
         quote = venue.quote(symbol,now=self.clock())
+        if "jev" in candidate and (reason := self._advisory_quote_reason(quote,observation)):
+            return reason
         rules = venue.instrument(symbol)
         amount = rules.round_quantity(cap/quote.ask)
         try:
@@ -581,17 +585,20 @@ class MultiDemoRuntime:
             return "insufficient_margin"
         if market=="perp" and hasattr(venue,"leverage_limit") and snapshot.leverage > venue.leverage_limit(abs(amount*quote.ask)):
             return "leverage_limit"
-        entry_id = identity(p["campaign_id"],symbol,market,decision.decision_id,"entry")
+        source_id = (f"setup2:{candidate['rule'].rule_id}:{bar}" if "jev" in candidate else decision.decision_id)
+        entry_id = identity(p["campaign_id"],symbol,market,source_id,"entry")
         if self.journal.order(venue.account_ref,entry_id):
             return "already_submitted"
         if (self.clock()-quote.observed_at).total_seconds()>20:
             return "stale_quote"
         route.update(entry_id=entry_id,consumed_bar=bar,signal_atr=str(observation.atr),
                      entered_at=self.clock().isoformat(),trail_stop=None)
+        if "jev" in candidate:
+            route["entry_jev"] = candidate["jev"]
         self._save(p,"portfolio_entry_reserved")
         intent = OrderIntent(intent_id=entry_id,account=venue.account_ref,symbol=symbol,market=market,
                              side="BUY" if market=="spot" or auth.target_notional>0 else "SELL",quantity=amount,
-                             source_id=decision.decision_id,created_at=self.clock())
+                             source_id=source_id,created_at=self.clock())
         coordinator = OrderCoordinator(self.journal,venue)
         update = coordinator.submit(intent)
         if update.status in {"NEW","PARTIALLY_FILLED"}:
@@ -616,12 +623,28 @@ class MultiDemoRuntime:
             raise ExecutionUnavailable("entry fill unconfirmed")
         return update.status
 
+    @staticmethod
+    def _advisory_quote_reason(quote, observation):
+        if abs(quote.mark/Decimal(str(observation.close))-1) > Decimal('.01'):
+            return 'price_gap'
+        if quote.ask/quote.bid-1 > Decimal('.001'):
+            return 'spread_limit'
+        return None
+
     def _slots_cycle(self,p,plan,equity,spot_gross,perp_gross,markets,*,now):
         """Slot design (ADR-007): rank every confirmed candidate once per bar, fill free positions and
-        rotate out the weakest only after the replacing entry is confirmed by the rule and Jev."""
+        rotate after rule/risk approval; Jev confirms only in the default gate mode."""
         from intraday.replay_v2.donchian_rotation_select import (Candidate, Held, adx_of, pnl_gate_blocks,
                                                                  select_entries, trend_strength, volume_ratio)
         results,observed,exited = [],{},False
+        advisory = plan.jev_mode == "advisory"
+        advice,preselection = {},[]
+
+        def result(symbol,market,**payload):
+            if advisory:
+                payload["jev"] = advice[(symbol,market)]
+            results.append(dict(symbol=symbol,market=market,**payload))
+
         # 1. Evidence and Donchian exits first: an exit frees its position before the book is ranked.
         for route in p["routes"].values():
             symbol,market = route["symbol"],route["market"]
@@ -679,36 +702,64 @@ class MultiDemoRuntime:
             if route.get("consumed_bar") == bar:
                 continue                  # this bar was already ranked: one decision per bar, as in the replay
             considered.append((route,bar))
-            try:
-                research,decision,rule_id = source.latest_decision(now=self.clock())
-            except (ValueError,KeyError,TypeError):
-                waiting_bar = bar
-                results.append({"symbol":symbol,"market":market,"status":"waiting_for_eligible_evidence"})
-                continue
-            if rule_id != route["rule_id"]:
-                continue
-            if (self.clock()-decision.created_at).total_seconds() > 14400:
-                continue
-            if int(decision.created_at.timestamp()*1000) < bar:
-                waiting_bar = bar         # Jev has not answered this bar yet
-                continue
+            if advisory:
+                decision = None
+                try:
+                    answer = source.advice_for_bar(bar,rule.rule_id)
+                    advice[(symbol,market)] = jev_advice(rule,answer) if answer is not None else "unavailable"
+                except Exception:
+                    advice[(symbol,market)] = "unavailable"
+            else:
+                try:
+                    research,decision,rule_id = source.latest_decision(now=self.clock())
+                except (ValueError,KeyError,TypeError):
+                    waiting_bar = bar
+                    results.append({"symbol":symbol,"market":market,"status":"waiting_for_eligible_evidence"})
+                    continue
+                if rule_id != route["rule_id"]:
+                    continue
+                if (self.clock()-decision.created_at).total_seconds() > 14400:
+                    continue
+                if int(decision.created_at.timestamp()*1000) < bar:
+                    waiting_bar = bar         # Jev has not answered this bar yet
+                    continue
             venue = markets[(symbol,market)][0]
             quote = venue.quote(symbol,now=self.clock())
-            price = Decimal(str(research.features["reference_price" if market=="spot" else "mark_price"]))
-            if abs(quote.mark/price-1) > Decimal(".01") or quote.ask/quote.bid-1 > Decimal(".001"):
-                continue
+            if advisory:
+                if reason := self._advisory_quote_reason(quote,observation):
+                    result(symbol,market,status="blocked",reason=reason)
+                    preselection.append(dict(kind="blocked",symbol=symbol,market=market,reason=reason,
+                                             jev=advice[(symbol,market)]))
+                    continue
+            else:
+                price = Decimal(str(research.features["reference_price" if market=="spot" else "mark_price"]))
+                if abs(quote.mark/price-1) > Decimal(".01") or quote.ask/quote.bid-1 > Decimal(".001"):
+                    continue
             candidate = dict(symbol=symbol,market=market,route=route,rule=rule,decision=decision,
                              observation=observation,bar=bar)
+            if advisory:
+                candidate["jev"] = advice[(symbol,market)]
             auth,cap = self._slot_authorization(p,plan,gate,candidate,equity,spot_gross,perp_gross,markets,sleeves,
                                                 now=now,ranking=True)
             if not cap:
-                results.append({"symbol":symbol,"market":market,"status":"not_authorized",
-                                "reasons":list(auth.reason_codes)})
+                result(symbol,market,status="not_authorized",reasons=list(auth.reason_codes))
+                if advisory:
+                    preselection.append(dict(kind="blocked",symbol=symbol,market=market,reason="not_authorized",
+                                             reasons=list(auth.reason_codes),jev=advice[(symbol,market)]))
                 continue
+            if advisory and advice[(symbol,market)] == "unavailable":
+                waiting_bar = bar if waiting_bar is None else max(waiting_bar,bar)
             candidates[(symbol,market)] = candidate
             pool.append(Candidate(market,symbol,Decimal(str(observation.size_multiplier)),
                                   adx_of(observation.features),volume_ratio(observation.features)))
-        if waiting_bar is not None and self.clock().timestamp()*1000-(waiting_bar+1) < JEV_GRACE_SECONDS*1000:
+        wait_seconds = JEV_ADVISORY_WAIT_SECONDS if advisory else JEV_GRACE_SECONDS
+        if waiting_bar is not None and self.clock().timestamp()*1000-(waiting_bar+1) < wait_seconds*1000:
+            if advisory:
+                for symbol,market in candidates:
+                    result(symbol,market,status="waiting_for_jev_advice")
+                p["slot_selection"] = dict(at=now.isoformat(),open_positions=len(held),open_book_pnl=str(book_pnl),
+                    steps=preselection+[dict(kind="waiting",symbol=s,market=m,reason="waiting_for_jev_advice",jev=advice[(s,m)])
+                                        for s,m in candidates])
             # Rank once, with every answer: wait for the other coins' Jev answers for a short grace period.
             results.append({"status":"waiting_for_jev_answers"})
             self._save(p,"portfolio_cycle")
@@ -716,10 +767,13 @@ class MultiDemoRuntime:
                     "perp_gross":str(perp_gross),"routes":results}
         for route,bar in considered:
             route["consumed_bar"] = bar    # blocked or unanswered candidates are not re-ranked in this bar
-        audit = dict(at=now.isoformat(),open_positions=len(held),open_book_pnl=str(book_pnl),steps=[])
+        audit = dict(at=now.isoformat(),open_positions=len(held),open_book_pnl=str(book_pnl),steps=preselection)
         if pool and pnl_gate_blocks(len(held),book_pnl):
             for c in pool:
-                results.append({"symbol":c.symbol,"market":c.market,"status":"blocked","reason":"pnl_gate"})
+                result(c.symbol,c.market,status="blocked",reason="pnl_gate")
+                if advisory:
+                    audit["steps"].append(dict(kind="blocked",symbol=c.symbol,market=c.market,reason="pnl_gate",
+                                               jev=advice[(c.symbol,c.market)]))
             pool = []
         # 4. Ranking, rotation and execution in the research order.
         steps = select_entries(pool,held,max_positions=setup2_module.SLOT_MAX_POSITIONS,limit_scope="total",
@@ -728,11 +782,23 @@ class MultiDemoRuntime:
             key = (step.symbol,step.market)
             audit["steps"].append(dict(kind=step.kind,symbol=step.symbol,market=step.market,reason=step.reason,
                                        victim=list(step.victim) if step.victim else None))
+            if advisory:
+                audit["steps"][-1]["jev"] = advice[key]
             if step.kind == "blocked":
-                results.append({"symbol":step.symbol,"market":step.market,"status":"blocked","reason":step.reason})
+                result(step.symbol,step.market,status="blocked",reason=step.reason)
                 continue
             candidate = candidates[key]
             if step.kind == "rotate":
+                if advisory:
+                    venue = markets[key][0]
+                    reason = self._advisory_quote_reason(venue.quote(step.symbol,now=self.clock()),candidate["observation"])
+                    auth,cap = self._slot_authorization(p,plan,gate,candidate,equity,spot_gross,perp_gross,markets,sleeves,
+                                                        now=self.clock(),ranking=True)
+                    if reason or not cap:
+                        reason = reason or "not_authorized"
+                        audit["steps"][-1].update(kind="blocked",reason=reason)
+                        result(step.symbol,step.market,status="blocked",reason=reason)
+                        continue
                 victim_market,victim_symbol = step.victim   # select_entries names a position (market, symbol)
                 victim = next(r for r in p["routes"].values()
                               if (r["symbol"],r["market"]) == (victim_symbol,victim_market))
@@ -744,12 +810,11 @@ class MultiDemoRuntime:
             auth,cap = self._slot_authorization(p,plan,gate,candidate,equity,spot_gross,perp_gross,markets,sleeves,
                                                 now=self.clock())
             if not cap:
-                results.append({"symbol":step.symbol,"market":step.market,"status":"not_authorized",
-                                "reasons":list(auth.reason_codes)})
+                result(step.symbol,step.market,status="not_authorized",reasons=list(auth.reason_codes))
                 continue
             venue,snapshot,_ = markets[key]
             status = self._place_slot_entry(p,candidate,cap,auth,venue,snapshot,now=self.clock())
-            results.append({"symbol":step.symbol,"market":step.market,"status":status})
+            result(step.symbol,step.market,status=status)
             if status == "protection_failed":
                 return {"status":"paused","reason":"protection_failed"}
             # Recompute the shared exposure after every mutation before the next entry.

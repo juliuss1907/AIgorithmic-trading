@@ -63,7 +63,7 @@ class OrderIntent(ExecutionModel):
     order_type: Literal["MARKET", "STOP_MARKET", "STOP_LOSS"] = "MARKET"
     reduce_only: bool = False
     stop_price: Decimal | None = Field(default=None, gt=0)
-    source_id: str | None = Field(default=None, max_length=128)
+    source_id: str | None = Field(default=None, max_length=160)
     created_at: datetime
 
     @model_validator(mode="after")

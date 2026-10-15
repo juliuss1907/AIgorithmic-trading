@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from intraday.assets import ticker_symbol
 from intraday.contracts import DecisionScope, FeatureSnapshot, JevDecision, ScopedRuleCandidate, is_setup2_profile
@@ -112,6 +112,25 @@ class ScopedEvidenceSource(EvidenceSource):
                                direction=parsed[0],direction_confidence=parsed[1],regime=parsed[2],
                                toxic_flow=parsed[3],entry_quality=parsed[4],risk_level=parsed[5],model_ref=model_ref,created_at=at)
         return snapshot,decision,row["rules_version"]
+
+    def advice_for_bar(self, bar, rule_id):
+        """Decoded Jev advice for this rule/H4 bar only; never an execution provenance gate."""
+        try:
+            start = datetime.fromtimestamp(bar/1000,timezone.utc)
+            end = datetime.fromtimestamp((bar+1)/1000,timezone.utc)+timedelta(hours=4)
+            with self.connect() as c:
+                row = c.execute("SELECT jev_answers FROM signals WHERE symbol=? AND scope=? AND rules_version=? "
+                    "AND decision_mode='primary' AND timestamp>=? AND timestamp<? "
+                    "ORDER BY timestamp DESC,id DESC LIMIT 1",
+                    (self.symbol,self.scope.value,rule_id,start.isoformat(),end.isoformat())).fetchone()
+            if row is None:
+                return None
+            answers = json.loads(row['jev_answers'])
+            JevDecisionProvider._parse_answers({'answers':answers})
+            return answers
+        except Exception:
+            # Missing/malformed advice, a busy DB or an old schema cannot veto a deterministic entry.
+            return None
 
     def _reader(self):
         from intraday.store import IntradayStore
