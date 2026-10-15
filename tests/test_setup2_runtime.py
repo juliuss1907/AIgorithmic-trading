@@ -130,7 +130,8 @@ def test_soak_signal_queues_one_telegram_alert_per_bar(store, series, monkeypatc
     [alert] = store.list_pending_notifications()
     text = alert['message']
     assert alert['kind'] == 'setup2_signal'
-    assert text.startswith('[SOAK] ETHUSDT Spot LONG: Jev từ chối, không vào')   # the fake Jev answers HOLD
+    assert text.startswith('[SOAK] ETHUSDT Spot LONG: tín hiệu luật (soak, không đặt lệnh)')
+    assert 'Jev: HOLD' in text and '(phản đối)' in text   # the fake Jev answers HOLD
     stop = setup2.initial_stop(1, forced.close, forced.atr, cap=setup2.stop_cap('setup2_v1'))
     level = min(b.low for b in large[-setup2.EXIT:])
     assert f'Stop ban đầu: {float(stop):.6g}' in text

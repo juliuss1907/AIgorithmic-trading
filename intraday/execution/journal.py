@@ -172,6 +172,18 @@ class ExecutionJournal:
             connection.execute("INSERT INTO execution_events(account,at,kind,payload) VALUES (?,?,?,?)",
                                (account.key, now.isoformat(), kind, encoded))
 
+    def entry_jev(self, intent):
+        """Read advice from the immutable reservation for this entry, including delayed alerts."""
+        route = f'{intent.market}:{intent.symbol}'
+        path = f'$.routes."{route}".entry_id'
+        account = intent.account.model_copy(update={"market": None})
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload FROM execution_events WHERE account=? AND kind='portfolio_entry_reserved' "
+                "AND json_extract(payload, ?)=? ORDER BY id DESC LIMIT 1",
+                (account.key, path, intent.intent_id)).fetchone()
+        return json.loads(row[0])["routes"][route].get("entry_jev") if row else None
+
     def spot_inventory(self, account, symbol, *, require_valued_fees=True):
         """Only journal-owned fills count. Never derive ownership from exchange balances."""
         from decimal import Decimal

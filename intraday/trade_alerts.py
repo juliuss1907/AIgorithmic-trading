@@ -10,6 +10,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from intraday import setup2
+from intraday.scoped_gate import jev_advice
 
 MARKET_LABEL = {"spot": "Spot", "perp": "Perp"}
 # Marker row of the Demo alert journal: present once the orders that existed before alerts were recorded.
@@ -50,7 +51,7 @@ def soak_signal_message(*, symbol, market, observation, profile, exit_level, dir
     entry = Decimal(str(observation.close))
     share = Decimal(str(observation.size_multiplier)) / setup2.SLOT_DIVISOR
     stop = setup2.initial_stop(side, entry, observation.atr, cap=setup2.stop_cap(profile))
-    verdict = "Jev xác nhận (soak, không đặt lệnh)" if allowed else "Jev từ chối, không vào (soak)"
+    verdict = "tín hiệu luật (soak, không đặt lệnh)"
     return "\n".join([
         f"[SOAK] {symbol} {MARKET_LABEL[market]} {_side_label(side)}: {verdict}",
         f"Nến 4h đóng: {observation.bar_close:%Y-%m-%d %H:%M} UTC",
@@ -59,17 +60,17 @@ def soak_signal_message(*, symbol, market, observation, profile, exit_level, dir
         f"(1/{setup2.SLOT_DIVISOR} túi × {float(observation.size_multiplier):.2f}, ATR {float(observation.atr / entry) * 100:.2f}%)",
         f"Stop ban đầu: {_num(stop)} ({_pct(stop / entry - 1)})",
         _exit_line(side, exit_level),
-        f"Jev: {direction} {confidence:.2f}",
+        f"Jev: {direction} {confidence:.2f} ({'đồng ý' if allowed else 'phản đối'})",
     ])
 
 
 def enqueue_soak_signal(store, *, symbol, market, rule, observation, answers, allowed, now, exit_level) -> None:
     """One outbox message per rule, market and closed bar; a repeated cycle never sends twice."""
-    choice = answers["direction"]["choice"]
+    advice = jev_advice(rule, answers)
     message = soak_signal_message(
         symbol=symbol, market=market, observation=observation,
         profile=getattr(rule.parameters, "entry_profile", "setup2_v1"), exit_level=exit_level,
-        direction=choice.upper(), confidence=float(answers["direction"]["probabilities"].get(choice, 0)),
+        direction=advice["direction"].upper().replace("_", " "), confidence=advice["confidence"],
         allowed=allowed)
     key = f"setup2_signal:{rule.rule_id}:{observation.bar_close.isoformat()}"
     store.enqueue_notification(key, "setup2_signal", message, created_at=now)
@@ -122,13 +123,22 @@ def _events(orders):
             yield f"{intent.intent_id}:fill", intent, update, "exit", entries.get(route)
 
 
-def _entry_message(intent, update, stop, exit_level) -> str:
+def _entry_message(intent, update, stop, exit_level, advice=None) -> str:
     side = 1 if intent.side == "BUY" else -1
     price = _average(update)
     lines = [f"[DEMO] VÀO {intent.symbol} {MARKET_LABEL[intent.market]} {_side_label(side)}",
              f"Khớp: {_num(update.executed_quantity)} @ {_num(price)} ({_num(update.executed_quantity * price)} USDT)"]
     lines.append(f"Stop: {_num(stop)} ({_pct(stop / price - 1)})" if stop is not None else "Stop: chưa xác nhận")
     lines.append(_exit_line(side, exit_level))
+    if advice == "unavailable":
+        lines.append("Jev (tư vấn): không có câu trả lời")
+    elif isinstance(advice, dict):
+        try:
+            direction = advice["direction"].upper().replace("_", " ")
+            lines.append(f"Jev (tư vấn): {direction} {advice['confidence']:.2f}, "
+                         + ("đồng ý" if advice["would_allow"] else "phản đối"))
+        except (KeyError, TypeError, AttributeError, ValueError):
+            pass       # Optional evidence must not prevent a fill notification.
     return "\n".join(lines)
 
 
@@ -179,7 +189,11 @@ def notify_demo(journal, notifier, *, exit_level_for, now, max_attempts=5) -> di
                         level = exit_level_for(intent.symbol, intent.market, now)
                     except Exception:
                         level = None
-                    message = _entry_message(intent, update, stop[1].stop_price if stop else None, level)
+                    try:
+                        advice = journal.entry_jev(intent)
+                    except Exception:
+                        advice = None
+                    message = _entry_message(intent, update, stop[1].stop_price if stop else None, level, advice)
                     also = [(account, stop[0])] if stop else []
                 elif kind == "stop":
                     message = _stop_message(intent, entry)

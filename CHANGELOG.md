@@ -4,6 +4,11 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-15 — Ý kiến Jev trong Telegram
+
+- Tin soak nêu rõ tín hiệu đến từ luật; dòng Jev ghi đồng ý hoặc phản đối, không còn báo không vào lệnh vì Jev.
+- Tin Demo đọc ý kiến tại thời điểm đặt lệnh từ reservation bất biến trong journal; giữ nguyên chống gửi trùng và retry khi Telegram lỗi.
+
 ## 2026-10-15 — Runtime slot dùng luật và ghi ý kiến Jev theo nến
 
 Nhánh: `feature/jev-advisory`; chỉ làm local.
