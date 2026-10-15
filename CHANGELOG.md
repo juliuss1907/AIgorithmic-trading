@@ -4,6 +4,11 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-15 — Key Binance Demo lên VPS (chuẩn bị G5)
+
+- Key Demo cũ (30/9) không đọc được cả Spot lẫn Futures nên `connect` từ chối Clear/Replace; Julius đổi tên file cũ thành `binance-demo.json.old-20260930` (chờ xoá, mục H1 trong delete request) rồi nhập key mới bằng `aigt connect bnb demo`.
+- Trên VPS: tạo `state/execution` và `state/execution-secrets` (700, 1000:1000), chép `binance-demo.json` (600, 1000:1000). Container `demo-execution` chưa bật; không configure/activate, không đặt lệnh. Còn chờ: cài tài khoản Demo (One-way, Single-asset, Isolated, ≥ 500 USDT mỗi ví), soak 28/10, deploy `199f800` và G5/G6 duyệt riêng.
+
 ## 2026-10-15 — Chốt kiểm chứng Jev advisory
 
 - Toàn bộ trên `80e9dfd`: **1808 qua, 1 lỗi migration có sẵn được cho phép**, 23 cảnh báo. Parity và slot qua; không skip/xfail. Review Standards/Spec không còn finding mở.
