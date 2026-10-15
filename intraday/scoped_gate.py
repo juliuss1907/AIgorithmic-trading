@@ -189,7 +189,7 @@ class ScopedEntryGate:
         projected_isolated_margin_pct: float | None = None,
         advisory: bool = False,
     ) -> PortfolioAuthorization:
-        """Setup-2 short (ADR-006): the rule picks the side; Jev must confirm SELL or STRONG_SELL."""
+        """Setup-2 short: the rule picks the side; Jev confirms unless slot Demo opts into advice."""
         scope = DecisionScope.PERP_INTRADAY
         if not setup_entry:
             return self._deny(state, scope, ("no_setup2_short_setup",))

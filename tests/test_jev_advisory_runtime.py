@@ -195,3 +195,18 @@ def test_changing_jev_mode_still_requires_paused_and_flat(tmp_path):
         run.configure(gated,now=world['now'])
     run.flatten(now=world['now'])
     assert run.configure(gated,now=world['now'])['allocation'].get('jev_mode','gate') == 'gate'
+
+
+@pytest.mark.parametrize('market', ['spot', 'perp'])
+def test_failed_protection_keeps_candidate_advice_in_persisted_selection_and_result(tmp_path, market):
+    run, exchange, world, _ = build(tmp_path, market)
+    world.update(signals={'ETHUSDT': dict(entry=True, adx=40)}, default_advice=opposition())
+    exchange.stop_failure = True
+    report = run.cycle(now=world['now'])
+    assert report['status'] == 'paused' and report['reason'] == 'protection_failed'
+    assert len(entries(exchange)) == 1
+    p = run._portfolio()
+    advice = p['routes'][market+':ETHUSDT']['entry_jev']
+    assert p['slot_selection']['steps'][0]['jev'] == advice
+    assert next(r['jev'] for r in report['routes'] if r['status'] == 'protection_failed') == advice
+    assert any((i.source_id or '') == 'close:protection_failure' for i,u in exchange.orders.values())

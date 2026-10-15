@@ -4,6 +4,11 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-15 — Bảo toàn audit advisory khi stop lỗi
+
+- Review độc lập phát hiện nhánh stop bảo vệ thất bại chưa lưu `slot_selection` và làm mất kết quả ứng viên. Lưu audit cùng reservation/failure và trả kết quả Jev cả khi portfolio phải pause, có test Spot/Perp gây lỗi stop.
+- Truyền chế độ advisory tường minh vào bước đặt lệnh, không suy chế độ từ sự có mặt của trường ý kiến Jev.
+
 ## 2026-10-15 — Quy trình Demo slot dùng Jev tư vấn
 
 - Bổ sung quyết định của Julius vào ADR-007, checklist G5/G6 và Demo runbook: configure với `--jev-mode advisory`, kiểm status và đường lui về `gate` khi paused + flat.

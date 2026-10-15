@@ -529,7 +529,8 @@ class MultiDemoRuntime:
         """Cap and gate answer for one candidate against the current exposure; zero cap means no entry.
 
         While ranking, a full book has no free principal and a rotation candidate must still be considered
-        (the weakest position is closed first), so only the Jev and loss-limit answer counts there."""
+        (the weakest position is closed first). Check rule/risk (and Jev in gate mode) here;
+        enforce free-principal and projected exposure caps again after closing the victim."""
         symbol,market = candidate["symbol"],candidate["market"]
         observation,decision,rule = candidate["observation"],candidate["decision"],candidate["rule"]
         snapshot = markets[(symbol,market)][1]
@@ -562,13 +563,13 @@ class MultiDemoRuntime:
             return auth,Decimal(0)
         return auth,min(cap,abs(Decimal(str(auth.target_notional))))
 
-    def _place_slot_entry(self,p,candidate,cap,auth,venue,snapshot,*,now):
+    def _place_slot_entry(self,p,candidate,cap,auth,venue,snapshot,*,now,advisory=False):
         """Order placement of one confirmed entry; mirrors the legacy per-route path (same checks and protection)."""
         symbol,market = candidate["symbol"],candidate["market"]
         route,decision,observation,bar = candidate["route"],candidate["decision"],candidate["observation"],candidate["bar"]
         self._account_check(venue,market,snapshot)
         quote = venue.quote(symbol,now=self.clock())
-        if "jev" in candidate and (reason := self._advisory_quote_reason(quote,observation)):
+        if advisory and (reason := self._advisory_quote_reason(quote,observation)):
             return reason
         rules = venue.instrument(symbol)
         amount = rules.round_quantity(cap/quote.ask)
@@ -585,7 +586,7 @@ class MultiDemoRuntime:
             return "insufficient_margin"
         if market=="perp" and hasattr(venue,"leverage_limit") and snapshot.leverage > venue.leverage_limit(abs(amount*quote.ask)):
             return "leverage_limit"
-        source_id = (f"setup2:{candidate['rule'].rule_id}:{bar}" if "jev" in candidate else decision.decision_id)
+        source_id = (f"setup2:{candidate['rule'].rule_id}:{bar}" if advisory else decision.decision_id)
         entry_id = identity(p["campaign_id"],symbol,market,source_id,"entry")
         if self.journal.order(venue.account_ref,entry_id):
             return "already_submitted"
@@ -593,7 +594,7 @@ class MultiDemoRuntime:
             return "stale_quote"
         route.update(entry_id=entry_id,consumed_bar=bar,signal_atr=str(observation.atr),
                      entered_at=self.clock().isoformat(),trail_stop=None)
-        if "jev" in candidate:
+        if advisory:
             route["entry_jev"] = candidate["jev"]
         self._save(p,"portfolio_entry_reserved")
         intent = OrderIntent(intent_id=entry_id,account=venue.account_ref,symbol=symbol,market=market,
@@ -691,7 +692,7 @@ class MultiDemoRuntime:
             if seen is not None:
                 strength = trend_strength(seen["observation"].features,1 if market == "spot" else -1)
             held.append(Held(market,symbol,strength,gain,seen is not None))
-        # 3. Candidates: rule entry, one position per coin, fresh unconsumed Jev answer and an allowed gate.
+        # 3. Candidates: rule entry, one position per coin, optional advice or strict Jev gate.
         gate,sleeves,candidates,pool = self._gate_for(plan),self._sleeves(p,plan,markets,now=now),{},[]
         considered,waiting_bar = [],None
         for (symbol,market),seen in observed.items():
@@ -775,6 +776,9 @@ class MultiDemoRuntime:
                     audit["steps"].append(dict(kind="blocked",symbol=c.symbol,market=c.market,reason="pnl_gate",
                                                jev=advice[(c.symbol,c.market)]))
             pool = []
+        # Persist this audit with every reservation/failure, even if execution cannot finish the cycle.
+        if advisory:
+            p["slot_selection"] = audit
         # 4. Ranking, rotation and execution in the research order.
         steps = select_entries(pool,held,max_positions=setup2_module.SLOT_MAX_POSITIONS,limit_scope="total",
                                rotation=True,margin=setup2_module.ROTATION_MARGIN)
@@ -813,10 +817,10 @@ class MultiDemoRuntime:
                 result(step.symbol,step.market,status="not_authorized",reasons=list(auth.reason_codes))
                 continue
             venue,snapshot,_ = markets[key]
-            status = self._place_slot_entry(p,candidate,cap,auth,venue,snapshot,now=self.clock())
+            status = self._place_slot_entry(p,candidate,cap,auth,venue,snapshot,now=self.clock(),advisory=advisory)
             result(step.symbol,step.market,status=status)
             if status == "protection_failed":
-                return {"status":"paused","reason":"protection_failed"}
+                return {"status":"paused","reason":"protection_failed",**({"routes":results} if advisory else {})}
             # Recompute the shared exposure after every mutation before the next entry.
             equity,spot_gross,perp_gross,markets = self._risk(p,now=self.clock())
             sleeves = self._sleeves(p,plan,markets,now=self.clock())
