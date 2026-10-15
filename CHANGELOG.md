@@ -4,6 +4,12 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-15 — Chốt kiểm chứng Jev advisory
+
+- Toàn bộ trên `80e9dfd`: **1808 qua, 1 lỗi migration có sẵn được cho phép**, 23 cảnh báo. Parity và slot qua; không skip/xfail. Review Standards/Spec không còn finding mở.
+- 10/10 ca tham chiếu giữ `result_id` và summary; 99 hash source bảo vệ, payload mặc định và hash candidate giữ nguyên. Báo cáo: [Jev advisory](docs/jev-advisory-verification-2026-10-15.md), có commit/file, sai khác kế hoạch và manifest checksum.
+- Chỉ commit local; không đổi VPS, key, active set hay soak; G5/G6 vẫn duyệt riêng.
+
 ## 2026-10-15 — Ổn định checksum của fixture A/B
 
 - Toàn bộ test lần xác nhận phát hiện lỗi hash ngẫu nhiên ở `test_compact_ab`, tái hiện cả trên gốc `cad8779`: connection ghi chưa được dọn khiến WAL checkpoint sau lúc chốt checksum, dù dump logic không đổi.
