@@ -11,6 +11,9 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   chốt trước khi xem kết quả lệnh; thiếu dữ liệu thành token unknown.
 - Thêm ba câu hỏi nguyên tử cho lệnh giữ nhiều ngày, parser nghiêm ngặt và nhãn A
   với hệ số tối đa ×1. Chưa gọi Jev thật; runtime và rule giữ nguyên.
+- Cache nghiên cứu riêng ghi thêm, cấm UPDATE/DELETE và kiểm checksum khi đọc;
+  fingerprint chỉ ghép tập câu trả lời thực sự dùng, kể cả khóa thiếu, nên thêm
+  câu trả lời không liên quan không đổi danh tính replay.
 
 ## 2026-10-16 — Đo hiệu chỉnh của Jev và cỡ mẫu tín hiệu lịch sử
 
