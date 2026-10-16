@@ -59,6 +59,8 @@ def test_failed_answers_are_not_cached_and_missing_digest_changes_on_fill(tmp_pa
         before = cache.used_digest([STATE])
         with pytest.raises(ValueError, match='invalid'):
             cache.put(STATE, {'model': MODEL})
+        with pytest.raises(ValueError, match='invalid'):
+            cache.put(STATE, payload(model='typesafe/jev-1.14'))
         assert cache.get(STATE) is None
         cache.record_attempt(STATE, 'invalid_response')
         cache.put(STATE, payload())

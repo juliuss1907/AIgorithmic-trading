@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from intraday.active_set_cli import add_active_set_parser, dispatch_active_set
 from intraday.setup2_cli import add_setup2_parser, dispatch_setup2
+from intraday.jev_review_cli import add_jev_review_parser, dispatch_jev_review
 from intraday.active_set import (allows as active_set_allows, is_active as active_set_is_active,
                                  record_skip as active_set_skip, watched as active_set_watched)
 from intraday.assets import ASSET_REGISTRY, asset_spec
@@ -196,6 +197,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.choices["cross-venue-evaluate"].add_argument("--evidence", required=True)
     add_active_set_parser(commands)
     add_setup2_parser(commands)
+    add_jev_review_parser(commands)
     serve = commands.add_parser("serve")
     serve.add_argument("--database", default=None)
     serve.add_argument("--execution-database", type=Path, default=None, help="opt-in Perp controller journal; never exchange credentials")
@@ -2028,6 +2030,9 @@ def main() -> None:
     arguments = parser.parse_args()
     if arguments.command is None:
         parser.print_help()
+        return
+    if arguments.command == 'jev-review':
+        dispatch_jev_review(arguments)
         return
     if arguments.command == "execution":
         dispatch_execution(arguments)

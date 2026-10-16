@@ -18,6 +18,12 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   `jev_review_veto`, gắn phiên bản/ngưỡng/hash câu trả lời vào fingerprint. Ghép
   lệnh luật đơn độc theo rule/nến; trường hợp không có lệnh tham chiếu ghi thiếu,
   không giả định PnL bằng 0. Chỉ sửa ba file replay bảo vệ đã được duyệt.
+- Thêm `aigt jev-review collect --dry-run` để quét mọi tín hiệu và khử trùng state,
+  không đọc credential hay gọi mạng. `--execute` là bước riêng, phải khớp hash
+  dry-run đã được duyệt; gọi qua credential/transport hiện có, có rate limit,
+  retry hữu hạn, circuit breaker và chạy tiếp khóa thiếu. Chỉ kiểm bằng provider giả.
+- Thêm paired replay đọc cache và công cụ dựng dữ liệu nghiên cứu từ bản sao G5/
+  nguồn công khai, cùng công cụ so checksum toàn bộ output với checkout gốc.
 
 ## 2026-10-16 — Đo hiệu chỉnh của Jev và cỡ mẫu tín hiệu lịch sử
 

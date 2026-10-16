@@ -70,12 +70,13 @@ def test_parser_accepts_complete_distribution_and_records_returned_model():
     assert answer == ReviewAnswer('typesafe/jev-1.13-20260917', D('.7'), D('.2'), D('.1'), D('.2'), D('.1'))
 
 
-@pytest.mark.parametrize('change', ['missing', 'nan', 'bool', 'sum', 'choice', 'model', 'extra'])
+@pytest.mark.parametrize('change', ['missing', 'nan', 'bool', 'string', 'sum', 'choice', 'model', 'extra'])
 def test_parser_returns_no_view_for_malformed_answer(change):
     p = payload()
     if change == 'missing': del p['answers']['exhaustion']
     if change == 'nan': p['answers']['disorderly']['noul'] = float('nan')
     if change == 'bool': p['answers']['exhaustion']['noul'] = True
+    if change == 'string': p['answers']['exhaustion']['noul'] = '0.2'
     if change == 'sum': p['answers']['action']['probabilities']['skip'] = .6
     if change == 'choice': p['answers']['action']['choice'] = 'skip'
     if change == 'model': del p['model']

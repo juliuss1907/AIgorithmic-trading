@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-from intraday.setup2_review import MODEL, QUESTION_SET_VERSION, STATE_VERSION, parse_answer
+from intraday.setup2_review import MODEL, QUESTION_SET_VERSION, STATE_VERSION, parse_answer, pinned_returned_model
 
 DEFAULT_CACHE = Path.home()/'.local/state/aigorithmic-trading/jev-review/answers.sqlite3'
 
@@ -75,7 +75,7 @@ class AnswerCache:
                 row['model'], row['question_version'], row['state_version']) != (model, QUESTION_SET_VERSION, STATE_VERSION):
                 raise ValueError('cache checksum or identity mismatch')
             answer = parse_answer(payload)
-            if answer is None or answer.model != row['returned_model']:
+            if answer is None or answer.model != row['returned_model'] or not pinned_returned_model(answer.model):
                 raise ValueError('invalid immutable cached answer')
         return row
 
@@ -90,7 +90,7 @@ class AnswerCache:
     def put(self, state, payload, *, model=MODEL):
         self._writer()
         answer = parse_answer(payload)
-        if answer is None:
+        if answer is None or not pinned_returned_model(answer.model):
             raise ValueError('invalid review answer cannot be cached')
         row = self._row(state, model)
         checksum = digest(payload)

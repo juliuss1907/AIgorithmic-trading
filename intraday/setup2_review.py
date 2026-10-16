@@ -46,6 +46,15 @@ def _number(value):
         return None
 
 
+def pinned_returned_model(model):
+    return isinstance(model, str) and re.fullmatch(r'(typesafe/jev-1\.13(?:-\d{8})?|jev-1\.13\.0)', model) is not None
+
+
+def _probability(value):
+    # JSON numeric strings and booleans are malformed opinions, not probabilities.
+    return _number(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def _band(prefix, value, cut_name, names):
     if value is None:
         return prefix+'_unknown'
@@ -175,11 +184,11 @@ def parse_answer(payload):
         action, probs = answers['action'], answers['action']['probabilities']
         if set(probs) != {'enter_full', 'reduce', 'skip'} or action['choice'] not in probs:
             return None
-        values = [_number(probs[k]) for k in ('enter_full', 'reduce', 'skip')]
-        if None in values or _number(probs[action['choice']]) != max(values):
+        values = [_probability(probs[k]) for k in ('enter_full', 'reduce', 'skip')]
+        if None in values or _probability(probs[action['choice']]) != max(values):
             return None
-        return ReviewAnswer(payload['model'], *values, _number(answers['exhaustion']['noul']),
-                            _number(answers['disorderly']['noul']))
+        return ReviewAnswer(payload['model'], *values, _probability(answers['exhaustion']['noul']),
+                            _probability(answers['disorderly']['noul']))
     except (KeyError, TypeError, ValueError, InvalidOperation):
         return None
 
