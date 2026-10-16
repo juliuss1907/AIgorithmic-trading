@@ -13,6 +13,8 @@ from intraday.provider_profiles import ProviderSecretStore
 from intraday.replay_v2.artifacts import publish_report
 from intraday.replay_v2.contracts import utc
 
+BUDGET_FILE = DEFAULT_CACHE.parent/'collection-costs.sqlite3'
+
 
 def add_jev_review_parser(commands):
     parser = commands.add_parser('jev-review', help='offline Setup-2 branch-A research; never changes runtime')
@@ -81,10 +83,11 @@ def dispatch_jev_review(args):
             except (ValueError, OSError, KeyError):
                 raise ValueError('review provider credential unavailable; inspect the profile securely') from None
             provider = ReviewProvider(credential)
-            with AnswerCache(cache_path, writable=True) as cache:
+            with AnswerCache(cache_path, writable=True) as cache, AnswerCache(BUDGET_FILE, writable=True) as cost_journal:
                 if cache.used_digest(s.tokens for s in signals) != plan['used_answers_sha256']:
                     raise ValueError('cache changed since the approved collection plan')
-                budget = CollectionBudget(cache, args.max_cost_usd)
+                budget = CollectionBudget(cost_journal, args.max_cost_usd)
+                budget.include_previous(cache)
                 collected = collect_missing((s.tokens for s in signals), cache, provider,
                                             interval=args.interval, retries=args.retries, budget=budget)
                 collected['budget'] = budget.payload()

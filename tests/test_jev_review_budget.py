@@ -45,3 +45,19 @@ def test_retry_is_charged_even_without_success(tmp_path):
         out = collect_missing([TOKENS], cache, Provider(), budget=budget, sleep=lambda _: None)
         assert out['network_calls'] == 1 and out['stopped_reason'] == 'cost_limit'
         assert budget.payload()['reserved_calls'] == 1
+
+
+def test_durable_journal_keeps_spend_when_answer_cache_changes(tmp_path):
+    limit = Decimal(RESERVATION)/1_000_000_000
+    with AnswerCache(tmp_path/'original.sqlite3',writable=True) as original:
+        assert CollectionBudget(original,limit).reserve()
+        with AnswerCache(tmp_path/'durable.sqlite3',writable=True) as journal:
+            budget = CollectionBudget(journal,limit)
+            budget.include_previous(original)
+            budget.include_previous(original)
+            assert budget.payload()['reserved_calls'] == 1
+    with AnswerCache(tmp_path/'replacement.sqlite3',writable=True) as replacement:
+        with AnswerCache(tmp_path/'durable.sqlite3',writable=True) as journal:
+            budget = CollectionBudget(journal,limit)
+            budget.include_previous(replacement)
+            assert budget.reserve() is None

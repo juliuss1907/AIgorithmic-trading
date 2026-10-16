@@ -49,6 +49,7 @@ def test_execute_requires_matching_plan_before_reading_credentials(tmp_path, mon
 
 def test_fake_execute_populates_only_dedicated_cache_and_resumes(tmp_path, monkeypatch, capsys):
     cli, signal = install_scan(monkeypatch)
+    monkeypatch.setattr(cli, 'BUDGET_FILE', tmp_path/'cost-ledger.sqlite3')
     receipt = tmp_path/'approved-plan.json'
     argv(monkeypatch, tmp_path, '--dry-run', '--output', str(receipt))
     main()

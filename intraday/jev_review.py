@@ -64,10 +64,10 @@ def authorize_plan(current, approved, expected_hash):
         raise ValueError('missing keys exceed the approved plan; cache loss or replacement needs a new dry-run')
 
 
-def scan_route(config, data):
+def scan_route(config, data, *, prepared=None):
     """Every entry=True bar, regardless of position occupancy; no PnL is inspected."""
     side = 1 if config.market == 'spot' else -1
-    series, observations = setup2.series_observations(list(data.candles), list(data.profile_candles),
+    series, observations = prepared if prepared is not None else setup2.series_observations(list(data.candles), list(data.profile_candles),
         side=side, anchor=data.indicator_anchor, profile=data.rule.parameters.entry_profile,
         warmup_bars=data.warmup_bars or setup2.WARMUP_BARS, own_from=data.price_proxy_until)
     if series is None:

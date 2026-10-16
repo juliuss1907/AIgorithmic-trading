@@ -53,6 +53,23 @@ class CollectionBudget:
         return self.db.execute('''SELECT COALESCE(SUM(COALESCE(s.nano,r.nano)),0)
             FROM cost_reservations r LEFT JOIN cost_settlements s ON r.id=s.id''').fetchone()[0]
 
+    def include_previous(self, cache):
+        """Carry the original in-answer-cache ledger into the durable journal once.
+
+        IDs make repeated migration idempotent. Keeping this journal outside the
+        answer cache prevents a different cache path resetting the paid-call cap.
+        """
+        if not cache.connection.execute("SELECT 1 FROM sqlite_master WHERE name='cost_reservations'").fetchone():
+            return
+        for table in ('cost_reservations', 'cost_settlements'):
+            rows = list(cache.connection.execute(f'SELECT id,nano FROM {table}'))
+            with self.db:
+                for identifier, nano in rows:
+                    existing = self.db.execute(f'SELECT nano FROM {table} WHERE id=?',(identifier,)).fetchone()
+                    if existing is not None and existing[0] != nano:
+                        raise ValueError('conflicting immutable cost ledger')
+                    self.db.execute(f'INSERT OR IGNORE INTO {table} VALUES (?,?)',(identifier,nano))
+
     def reserve(self):
         # Serialize concurrent collectors. A crash leaves a charged reservation, never free calls.
         self.db.execute('BEGIN IMMEDIATE')

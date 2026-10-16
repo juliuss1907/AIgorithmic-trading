@@ -10,6 +10,11 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   không thêm hoặc thay phần dẫn khác. Chạy lại dry-run 796 tín hiệu / 379 state.
 - Thêm sổ chi phí append-only, đặt chỗ trước mỗi call và cộng dồn qua retry/resume;
   CLI giới hạn tối đa 1 USD. Chốt giao thức 16 ngưỡng tuning trước collect thật.
+- Đánh giá tuning/test thành hai lần chạy riêng; khóa ngưỡng và hash receipt trước
+  test. Tính CI bootstrap, calibration/Brier, phản thực và DD của tổng tài khoản độc lập.
+  Điểm tuning dùng vòng Setup-2 gốc; kiểm lại điểm thắng bằng replay chuẩn.
+- Sổ chi phí dùng đường dẫn cố định riêng với cache câu trả lời, chuyển khoản đã
+  ghi bằng ID bất biến; đổi cache hoặc chạy lại không đặt lại trần chi phí.
 - Receipt và hash: [báo cáo v2](docs/jev-setup2-review-evaluation-2026-10-16.md).
 
 ## 2026-10-16 — Jev Setup-2 review offline và kiểm chứng dry-run
