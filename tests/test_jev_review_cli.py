@@ -49,7 +49,8 @@ def test_execute_requires_matching_plan_before_reading_credentials(tmp_path, mon
 
 def test_fake_execute_populates_only_dedicated_cache_and_resumes(tmp_path, monkeypatch, capsys):
     cli, signal = install_scan(monkeypatch)
-    argv(monkeypatch, tmp_path, '--dry-run')
+    receipt = tmp_path/'approved-plan.json'
+    argv(monkeypatch, tmp_path, '--dry-run', '--output', str(receipt))
     main()
     plan = json.loads(capsys.readouterr().out)
     from intraday.jev_review_provider import ReviewCall
@@ -60,6 +61,7 @@ def test_fake_execute_populates_only_dedicated_cache_and_resumes(tmp_path, monke
     monkeypatch.setattr(cli.ProviderSecretStore, 'get', lambda *a: 'fake-credential')
     monkeypatch.setattr(cli, 'ReviewProvider', lambda *a, **kw: Fake())
     argv(monkeypatch, tmp_path, '--execute', '--expected-plan-hash', plan['plan_hash'],
+         '--approved-plan', str(receipt),
          '--secrets-file', str(tmp_path/'fake-only'), '--profile-id', 'fake-profile')
     main()
     output = json.loads(capsys.readouterr().out)
@@ -68,6 +70,7 @@ def test_fake_execute_populates_only_dedicated_cache_and_resumes(tmp_path, monke
         assert cache.get(signal.tokens) is not None
     # The same approved request set remains valid after a successful/partial run.
     argv(monkeypatch, tmp_path, '--execute', '--expected-plan-hash', plan['plan_hash'],
+         '--approved-plan', str(receipt),
          '--secrets-file', str(tmp_path/'fake-only'), '--profile-id', 'fake-profile')
     main()
     resumed = json.loads(capsys.readouterr().out)

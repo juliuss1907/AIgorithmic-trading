@@ -4,7 +4,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 
-from intraday.jev_review import build_plan, database_routes, paired_replay, route_identity, scan_route
+from intraday.jev_review import authorize_plan, build_plan, database_routes, paired_replay, route_identity, scan_route
 from intraday.jev_review_cache import AnswerCache, DEFAULT_CACHE, canonical
 from intraday.jev_review_provider import ReviewProvider, collect_missing
 from intraday.provider_profiles import ProviderSecretStore
@@ -27,6 +27,7 @@ def add_jev_review_parser(commands):
             mode.add_argument('--dry-run', action='store_true', help='default: estimate only, no credentials/network')
             mode.add_argument('--execute', action='store_true', help='paid collection; requires separate operator approval')
             command.add_argument('--expected-plan-hash', help='the exact dry-run plan approved by the operator')
+            command.add_argument('--approved-plan', type=Path, help='original approved dry-run JSON, also used on resume')
             command.add_argument('--secrets-file', type=Path)
             command.add_argument('--profile-id')
             command.add_argument('--interval', type=float, default=1, help='minimum seconds between calls')
@@ -64,8 +65,10 @@ def dispatch_jev_review(args):
             if not args.execute:
                 _write_output(args.output, plan)
                 return
-            if args.expected_plan_hash != plan['plan_hash']:
-                raise ValueError('execute requires the matching approved dry-run plan hash')
+            if args.approved_plan is None or not args.expected_plan_hash:
+                raise ValueError('execute requires the approved plan receipt and its hash')
+            approved = json.loads(args.approved_plan.read_text())
+            authorize_plan(plan, approved, args.expected_plan_hash)
             if args.secrets_file is None or not args.profile_id:
                 raise ValueError('execute requires explicit credential file and profile id')
             # No credential values or raw provider errors are printed or persisted here.
@@ -79,7 +82,8 @@ def dispatch_jev_review(args):
                     raise ValueError('cache changed since the approved collection plan')
                 collected = collect_missing((s.tokens for s in signals), cache, provider,
                                             interval=args.interval, retries=args.retries)
-            _write_output(args.output, dict(plan_hash=plan['plan_hash'], collection=collected))
+            _write_output(args.output, dict(approved_plan_hash=approved['plan_hash'],
+                                           current_plan_hash=plan['plan_hash'], collection=collected))
             return
         results = []
         with AnswerCache(cache_path) as cache:

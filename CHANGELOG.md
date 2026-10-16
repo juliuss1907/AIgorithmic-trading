@@ -28,9 +28,10 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   nguồn công khai, cùng công cụ so checksum toàn bộ output với checkout gốc.
 - Review bổ sung test response HTTP bị cắt giữa chừng: chuyển thành lỗi mạng
   đã che nội dung, áp retry/circuit hữu hạn; không làm rơi receipt thu thập.
-- Hash duyệt ràng buộc tập request/câu hỏi/dataset/giá, giữ ổn định khi cache được
-  điền thêm để chạy tiếp cùng phê duyệt; checksum snapshot riêng ràng buộc số khóa
-  thiếu, câu trả lời đã có và dự toán ở từng lần dry-run.
+- Hash tập request/câu hỏi/dataset/giá giữ ổn định khi điền cache. `plan_hash`
+  ràng buộc cả tập khóa thiếu/dự toán đã được duyệt; `--approved-plan` giữ receipt
+  gốc để chạy tiếp chỉ phần con còn thiếu. Cache mất khóa ngoài phạm vi đã duyệt
+  bị từ chối. Control giả kiểm toàn bộ dataset/cấu hình/tín hiệu trước khi ghi artifact.
 
 ## 2026-10-16 — Đo hiệu chỉnh của Jev và cỡ mẫu tín hiệu lịch sử
 

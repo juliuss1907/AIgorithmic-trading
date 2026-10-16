@@ -2,7 +2,8 @@ from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal as D
 
-from intraday.jev_review import ReviewSignal, build_plan, scan_route, valid_plan
+from intraday.jev_review import ReviewSignal, authorize_plan, build_plan, scan_route, valid_plan
+import pytest
 from intraday.jev_review_cache import AnswerCache
 from intraday.replay_v2.contracts import FundingHistory, FundingSettlement
 from intraday.setup2_review import encode_state
@@ -36,9 +37,12 @@ def test_plan_deduplicates_states_and_reports_only_missing_calls_without_writes(
     with AnswerCache(tmp_path/'cache.sqlite3') as cache:
         cached = build_plan(signals, cache)
     assert cached['missing_states'] == cached['estimated_input_tokens'] == 0
-    assert plan['plan_hash'] == cached['plan_hash']
-    assert plan['snapshot_sha256'] != cached['snapshot_sha256']
+    assert plan['request_set_hash'] == cached['request_set_hash']
+    assert plan['plan_hash'] != cached['plan_hash']
     assert valid_plan(plan) and valid_plan(cached)
+    authorize_plan(cached, plan, plan['plan_hash'])
+    with pytest.raises(ValueError, match='exceed'):
+        authorize_plan(plan, cached, cached['plan_hash'])
     changed = dict(plan, request_template_sha256='f'*64)
     assert not valid_plan(changed)
 

@@ -37,8 +37,8 @@ class ReviewSignal:
 
 
 def _plan_identity(plan):
-    # Approval binds requests/data, not mutable cache coverage. A partial fill must be resumable
-    # under the same approval, while any changed question, state, route or price requires a new plan.
+    # Immutable request identity is separate from the full approved estimate/cache envelope.
+    # A partial fill can resume only as a subset of that original envelope.
     fields = ('workflow', 'model', 'state_version', 'question_set_version', 'cut_points',
               'request_template_sha256', 'route_inputs', 'signals', 'entry_bars', 'unique_states',
               'tuning_end_exclusive', 'test_start', 'input_usd_per_million', 'output_usd_per_million',
@@ -48,10 +48,20 @@ def _plan_identity(plan):
 
 def valid_plan(plan):
     try:
-        return digest(_plan_identity(plan)) == plan['plan_hash'] and digest(
-            {k:v for k,v in plan.items() if k != 'snapshot_sha256'}) == plan['snapshot_sha256']
+        return digest(_plan_identity(plan)) == plan['request_set_hash'] and digest(
+            {k:v for k,v in plan.items() if k != 'plan_hash'}) == plan['plan_hash']
     except (KeyError, TypeError, ValueError):
         return False
+
+
+def authorize_plan(current, approved, expected_hash):
+    """Resume only a subset of the exact missing-key envelope whose full estimate was approved."""
+    if not valid_plan(approved) or approved['plan_hash'] != expected_hash:
+        raise ValueError('execute requires the matching approved dry-run plan receipt and hash')
+    if current['request_set_hash'] != approved['request_set_hash']:
+        raise ValueError('request set or dataset differs from the approved plan')
+    if not set(current['missing_keys']) <= set(approved['missing_keys']):
+        raise ValueError('missing keys exceed the approved plan; cache loss or replacement needs a new dry-run')
 
 
 def scan_route(config, data):
@@ -98,8 +108,8 @@ def build_plan(signals, cache, *, route_inputs=()):
         tuning_end_exclusive='2026-01-01T00:00:00+00:00', test_start='2026-01-01T00:00:00+00:00',
         route_inputs=list(route_inputs), signals=[s.payload() for s in signals],
         missing_keys=sorted(missing), used_answers_sha256=cache.used_digest(unique.values()))
-    result = dict(payload, plan_hash=digest(_plan_identity(payload)))
-    return dict(result, snapshot_sha256=digest(result))
+    result = dict(payload, request_set_hash=digest(_plan_identity(payload)))
+    return dict(result, plan_hash=digest(result))
 
 
 def database_routes(database, end, *, funding_dir):
