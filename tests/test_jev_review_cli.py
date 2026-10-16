@@ -66,6 +66,12 @@ def test_fake_execute_populates_only_dedicated_cache_and_resumes(tmp_path, monke
     assert output['collection']['successful'] == 1
     with AnswerCache(tmp_path/'absent'/'cache.sqlite3') as cache:
         assert cache.get(signal.tokens) is not None
+    # The same approved request set remains valid after a successful/partial run.
+    argv(monkeypatch, tmp_path, '--execute', '--expected-plan-hash', plan['plan_hash'],
+         '--secrets-file', str(tmp_path/'fake-only'), '--profile-id', 'fake-profile')
+    main()
+    resumed = json.loads(capsys.readouterr().out)
+    assert resumed['collection']['network_calls'] == 0
     argv(monkeypatch, tmp_path, '--dry-run')
     main()
     assert json.loads(capsys.readouterr().out)['missing_states'] == 0

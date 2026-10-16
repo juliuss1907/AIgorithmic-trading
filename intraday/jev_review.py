@@ -36,6 +36,24 @@ class ReviewSignal:
                     key=answer_key(self.tokens))
 
 
+def _plan_identity(plan):
+    # Approval binds requests/data, not mutable cache coverage. A partial fill must be resumable
+    # under the same approval, while any changed question, state, route or price requires a new plan.
+    fields = ('workflow', 'model', 'state_version', 'question_set_version', 'cut_points',
+              'request_template_sha256', 'route_inputs', 'signals', 'entry_bars', 'unique_states',
+              'tuning_end_exclusive', 'test_start', 'input_usd_per_million', 'output_usd_per_million',
+              'price_source', 'price_observed_at', 'token_estimate_method')
+    return {k: plan[k] for k in fields}
+
+
+def valid_plan(plan):
+    try:
+        return digest(_plan_identity(plan)) == plan['plan_hash'] and digest(
+            {k:v for k,v in plan.items() if k != 'snapshot_sha256'}) == plan['snapshot_sha256']
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def scan_route(config, data):
     """Every entry=True bar, regardless of position occupancy; no PnL is inspected."""
     side = 1 if config.market == 'spot' else -1
@@ -80,7 +98,8 @@ def build_plan(signals, cache, *, route_inputs=()):
         tuning_end_exclusive='2026-01-01T00:00:00+00:00', test_start='2026-01-01T00:00:00+00:00',
         route_inputs=list(route_inputs), signals=[s.payload() for s in signals],
         missing_keys=sorted(missing), used_answers_sha256=cache.used_digest(unique.values()))
-    return dict(payload, plan_hash=digest(payload))
+    result = dict(payload, plan_hash=digest(_plan_identity(payload)))
+    return dict(result, snapshot_sha256=digest(result))
 
 
 def database_routes(database, end, *, funding_dir):
