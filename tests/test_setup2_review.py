@@ -65,6 +65,13 @@ def test_questions_have_three_atomic_judgments_and_multi_day_stops():
     assert 'five percent' in str(q) and 'ten percent' in str(q)
 
 
+def test_questions_v2_remove_only_the_leading_rsi_sentence():
+    from intraday.setup2_review import QUESTION_SET_VERSION
+    from intraday.jev_review_cache import digest
+    assert QUESTION_SET_VERSION == 'setup2-review-questions-v2'
+    assert digest(questions()) == 'ee1b7367ad9228d4f1accd94e75515052468354b0da0a473b40e6125468fab60'
+
+
 def test_parser_accepts_complete_distribution_and_records_returned_model():
     answer = parse_answer(payload())
     assert answer == ReviewAnswer('typesafe/jev-1.13-20260917', D('.7'), D('.2'), D('.1'), D('.2'), D('.1'))

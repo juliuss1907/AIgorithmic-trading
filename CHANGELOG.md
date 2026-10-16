@@ -4,6 +4,14 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-16 — Jev review v2 và trần chi phí collect
+
+- Bỏ đúng câu dẫn về RSI, nâng phiên bản câu hỏi lên v2; test hash bảo đảm
+  không thêm hoặc thay phần dẫn khác. Chạy lại dry-run 796 tín hiệu / 379 state.
+- Thêm sổ chi phí append-only, đặt chỗ trước mỗi call và cộng dồn qua retry/resume;
+  CLI giới hạn tối đa 1 USD. Chốt giao thức 16 ngưỡng tuning trước collect thật.
+- Receipt và hash: [báo cáo v2](docs/jev-setup2-review-evaluation-2026-10-16.md).
+
 ## 2026-10-16 — Jev Setup-2 review offline và kiểm chứng dry-run
 
 - Thêm encoder 14 token cố định, không tên coin/ngày/giá/chữ số; chỉ dùng H4 đã đóng,

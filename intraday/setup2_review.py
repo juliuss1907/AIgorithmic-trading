@@ -8,7 +8,7 @@ from intraday import setup2
 
 D = Decimal
 STATE_VERSION = 'setup2-review-state-v1'
-QUESTION_SET_VERSION = 'setup2-review-questions-v1'
+QUESTION_SET_VERSION = 'setup2-review-questions-v2'
 LABEL_CONFIG_VERSION = 'setup2-review-labels-v1'
 MODEL = 'typesafe/jev-1.13'
 # Technical cut points fixed before reading trade outcomes. No outcome-dependent fitting.
@@ -135,8 +135,8 @@ def questions():
         'not an intraday reversal trade. Exit on the opposite ten-bar channel or the trailing stop. '
         'The initial stop is the closer of three ATR and the profile cap: five percent for '
         'breakout_twenty_five, ten percent for breakout_thirty; it never loosens. '
-        'Slow EMA means two hundred bars; fast EMA means fifty bars. RSI extremes alone do not veto '
-        'a multi-day trend. Move_six is the absolute six-bar move measured in ATR; trigger is '
+        'Slow EMA means two hundred bars; fast EMA means fifty bars. '
+        'Move_six is the absolute six-bar move measured in ATR; trigger is '
         'the trigger high-low range in ATR. Funding is a settled rate, not a forecast. '
         'Unknown tokens provide no evidence. Use only supplied tokens. '
     )

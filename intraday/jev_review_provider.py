@@ -1,6 +1,7 @@
 """Explicit research collection over the existing Jev transport/credentials, no journal writes."""
 
 from dataclasses import dataclass
+from decimal import Decimal
 from http.client import HTTPException
 import json
 import math
@@ -9,6 +10,7 @@ import time
 import urllib.error
 
 from intraday.jev_review_cache import answer_key, canonical
+from intraday.jev_review_budget import response_cost
 from intraday.provider_client import http_transport
 from intraday.providers import JevDecisionProvider
 from intraday.setup2_review import MODEL, TOKEN_GROUPS, parse_answer, pinned_returned_model, questions
@@ -28,6 +30,7 @@ class ReviewCall:
     status: str
     payload: dict | None = None
     retry_after: float = 0
+    cost_usd: Decimal | None = None
 
 
 class ReviewProvider:
@@ -71,14 +74,16 @@ class ReviewProvider:
         except (ValueError, TypeError):
             return ReviewCall('invalid_response')
         answer = parse_answer(payload)
+        cost = response_cost(payload)
         if answer is None:
-            return ReviewCall('invalid_response')
+            return ReviewCall('invalid_response', cost_usd=cost)
         if not pinned_returned_model(answer.model):
-            return ReviewCall('model_mismatch')
-        return ReviewCall('success', payload)
+            return ReviewCall('model_mismatch', cost_usd=cost)
+        return ReviewCall('success', payload, cost_usd=cost)
 
 
-def collect_missing(states, cache, provider, *, interval=1, retries=2, circuit_failures=3, sleep=time.sleep):
+def collect_missing(states, cache, provider, *, interval=1, retries=2, circuit_failures=3, sleep=time.sleep,
+                    budget=None):
     """Bounded sequential calls; each success commits before the next request, resumable after interruption."""
     if not math.isfinite(interval) or not 0 < interval <= 60 or not 0 <= retries <= 2 or not 1 <= circuit_failures <= 10:
         raise ValueError('invalid collection limits')
@@ -93,8 +98,14 @@ def collect_missing(states, cache, provider, *, interval=1, retries=2, circuit_f
         for attempt in range(retries+1):
             if result['network_calls']:
                 sleep(delay)
+            reservation = budget.reserve() if budget is not None else None
+            if budget is not None and reservation is None:
+                result['stopped_reason'] = 'cost_limit'
+                return result
             call = provider.request(state)
             result['network_calls'] += 1
+            if budget is not None:
+                budget.settle(reservation, call.cost_usd)
             delay = interval
             if call.status == 'success':
                 cache.put(state, call.payload)

@@ -1,11 +1,13 @@
 """Explicit local Jev review commands; dry-run never reads credentials or calls a provider."""
 
 from datetime import datetime
+from decimal import Decimal
 import json
 from pathlib import Path
 
 from intraday.jev_review import authorize_plan, build_plan, database_routes, paired_replay, route_identity, scan_route
 from intraday.jev_review_cache import AnswerCache, DEFAULT_CACHE, canonical
+from intraday.jev_review_budget import CollectionBudget
 from intraday.jev_review_provider import ReviewProvider, collect_missing
 from intraday.provider_profiles import ProviderSecretStore
 from intraday.replay_v2.artifacts import publish_report
@@ -32,6 +34,8 @@ def add_jev_review_parser(commands):
             command.add_argument('--profile-id')
             command.add_argument('--interval', type=float, default=1, help='minimum seconds between calls')
             command.add_argument('--retries', type=int, choices=(0, 1, 2), default=2)
+            command.add_argument('--max-cost-usd', type=Decimal, default=Decimal('1'),
+                                 help='cumulative cache cost limit, at most one USD including retries')
         else:
             command.add_argument('--report-dir', type=Path, required=True)
 
@@ -80,8 +84,10 @@ def dispatch_jev_review(args):
             with AnswerCache(cache_path, writable=True) as cache:
                 if cache.used_digest(s.tokens for s in signals) != plan['used_answers_sha256']:
                     raise ValueError('cache changed since the approved collection plan')
+                budget = CollectionBudget(cache, args.max_cost_usd)
                 collected = collect_missing((s.tokens for s in signals), cache, provider,
-                                            interval=args.interval, retries=args.retries)
+                                            interval=args.interval, retries=args.retries, budget=budget)
+                collected['budget'] = budget.payload()
             _write_output(args.output, dict(approved_plan_hash=approved['plan_hash'],
                                            current_plan_hash=plan['plan_hash'], collection=collected))
             return
