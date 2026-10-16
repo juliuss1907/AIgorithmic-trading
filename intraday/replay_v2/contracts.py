@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import math
-from typing import Literal
+from typing import Literal, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from intraday.jev_review_overlay import ReviewOverlay
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, model_serializer
 
@@ -242,3 +245,5 @@ class ReplayDataset:
     # ADR-007 addendum, Setup-2 only: per-coin warm-up and the boundary before which Spot H4 bars are Perp prices.
     warmup_bars: int | None = None
     price_proxy_until: datetime | None = None
+    # Offline branch-A research only; absent by default and omitted from legacy fingerprints.
+    jev_review: ReviewOverlay | None = None

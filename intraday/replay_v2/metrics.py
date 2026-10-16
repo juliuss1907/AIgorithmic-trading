@@ -33,7 +33,8 @@ def dataset_fingerprint(data):
                **({"warmup_bars": data.warmup_bars} if data.warmup_bars else {}),
                **({"price_proxy_until": data.price_proxy_until.isoformat()} if data.price_proxy_until else {})}
               if data.indicator_anchor else {})
-    return fingerprint({**setup2, "rule": data.rule.model_dump(mode="json"),
+    review = {"jev_review": data.jev_review.payload()} if data.jev_review is not None else {}
+    return fingerprint({**setup2, **review, "rule": data.rule.model_dump(mode="json"),
         "candles": [c.model_dump(mode="json") for c in data.candles],
         "quotes": [q.model_dump(mode="json") for q in data.quotes],
         "decisions": [{"decision": d.decision.model_dump(mode="json"),
@@ -99,4 +100,6 @@ def build_result(config, data, book, limitations):
         result["summary"].update(exchange_fee_known=float(book.exchange_fees),
                                   slippage_cost_known=float(book.slippage_costs))
         result["methodology"]["costs"] = "published regular-user fee plus assumed cash-charged slippage per fill; quote spread implicit and funding separate"
+    if data.jev_review is not None:
+        result["inputs"]["jev_review"] = json.loads(encoded(data.jev_review.payload()))
     return result

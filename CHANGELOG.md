@@ -14,6 +14,10 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
 - Cache nghiên cứu riêng ghi thêm, cấm UPDATE/DELETE và kiểm checksum khi đọc;
   fingerprint chỉ ghép tập câu trả lời thực sự dùng, kể cả khóa thiếu, nên thêm
   câu trả lời không liên quan không đổi danh tính replay.
+- Lớp phủ replay Setup-2 mặc định tắt; khi bật chỉ giảm/giữ cỡ, veto ghi
+  `jev_review_veto`, gắn phiên bản/ngưỡng/hash câu trả lời vào fingerprint. Ghép
+  lệnh luật đơn độc theo rule/nến; trường hợp không có lệnh tham chiếu ghi thiếu,
+  không giả định PnL bằng 0. Chỉ sửa ba file replay bảo vệ đã được duyệt.
 
 ## 2026-10-16 — Đo hiệu chỉnh của Jev và cỡ mẫu tín hiệu lịch sử
 

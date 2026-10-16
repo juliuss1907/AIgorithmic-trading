@@ -172,7 +172,14 @@ def _setup2(config, data, book, limitations, side=1):
                 else:
                     stop_distance = min(3*signal.atr/candle.open, setup2.stop_cap(profile))
                     target = min(config.capital, book.equity(candle.open))*book.entry_fraction*signal.size_multiplier
-                    if book.enter(candle.opened_at, candle.open, target, side=side, stop_distance=stop_distance):
+                    if data.jev_review is not None:
+                        multiplier = data.jev_review.size_for(data.rule.rule_id, signal.bar_close)
+                        if multiplier == 0:
+                            book.deny(candle.opened_at, candle.open, "jev_review_veto")
+                            target = None
+                        else:
+                            target *= multiplier
+                    if target is not None and book.enter(candle.opened_at, candle.open, target, side=side, stop_distance=stop_distance):
                         trail = ATRTrail(side, candle.open, signal.atr)
             elif not book.quantity and signal.donchian_entry:
                 book.deny(candle.opened_at, candle.open, "setup2_filters",
@@ -205,6 +212,11 @@ def simulate(config: ReplayConfig, data: ReplayDataset) -> dict:
     if (data.rule.rule_id, data.rule.symbol, data.rule.scope) != (config.rule_id, config.symbol, config.scope):
         raise ValueError("replay rule identity mismatch")
     limitations = set(data.limitations)
+    if data.jev_review is not None:
+        from intraday.jev_review_overlay import ReviewOverlay
+        if not isinstance(data.jev_review, ReviewOverlay) or not is_setup2(data.rule):
+            raise ValueError("Jev review overlay requires a frozen Setup-2 research overlay")
+        limitations.add("setup2_review_uses_frozen_offline_opinions_not_live_jev")
     limitations.add("stored_binance_prices_not_verified_historical_demo_quotes")
     if data.rule.created_at > config.start:
         limitations.add("rule_selected_ex_post_not_out_of_sample")
