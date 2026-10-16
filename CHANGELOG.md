@@ -16,6 +16,15 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
 - Sổ chi phí dùng đường dẫn cố định riêng với cache câu trả lời, chuyển khoản đã
   ghi bằng ID bất biến; đổi cache hoặc chạy lại không đặt lại trần chi phí.
 - Receipt và hash: [báo cáo v2](docs/jev-setup2-review-evaluation-2026-10-16.md).
+- Đợt 2 đã collect đủ 379 state v2 qua 380 request, tổng provider báo
+  **0,016022832 USD**, dưới trần 1 USD; model trả về ghim Jev 1.13.
+- Khóa ngưỡng từ tuning (`skip/exh=0,7`, `reduce/disorderly=0,5`), rồi kiểm 2026:
+  103 lệnh/nhánh, PnL luật 197,72 USD → A 132,77 USD; CI 95% chênh lệch TB/lệnh
+  [-3,65; 2,31] USD chứa 0. Chưa có bằng chứng A có ích. Brier hai xác suất kém nền.
+- **1.868 test qua, 1 lỗi migration baseline được phép**; 10/10 ID/summary tham chiếu
+  và toàn bộ output 10 route mặc định tắt giữ nguyên. 96 source bảo vệ còn nguyên,
+  ba ngoại lệ không đổi thêm. Đã sửa link manifest gốc sang vị trí lưu ngoài worktree.
+  Không merge, push, deploy hay thay runtime/soak.
 
 ## 2026-10-16 — Jev Setup-2 review offline và kiểm chứng dry-run
 

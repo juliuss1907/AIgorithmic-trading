@@ -1,5 +1,8 @@
 # Jev Setup-2 review — đợt 1 offline, 2026-10-16
 
+Đợt 2 theo phê duyệt tiếp theo của Julius: [collect thật v2 và đánh giá tuning/test](jev-setup2-review-evaluation-2026-10-16.md).
+Nội dung dưới đây ghi trạng thái và bằng chứng tại thời điểm kết thúc đợt 1.
+
 Trạng thái: **hoàn tất đợt 1, dừng chờ duyệt gọi Jev thật; chưa đánh giá giá trị dự báo của A**.
 Yêu cầu: `/home/julius/julius-workspace/tasks/inbox/note-2026-10-16-1102.md`.
 Worktree `system-trading-jev-review`, nhánh `feature/jev-setup2-review`, base

@@ -46,7 +46,9 @@ bật/tắt và toàn bộ pytest theo ghi chú. Đây là điều kiện sẽ k
 ## Bằng chứng
 
 Manifest nguồn:
-`/home/julius/julius-workspace/ai-labs/projects/system-trading-jev-advisory/state/verification/jev-advisory-20261015T114503Z/protected-before.json`.
+`/home/julius/.local/state/aigorithmic-trading/verification/jev-advisory-20261015T114503Z/protected-before.json`.
+Julius đã chuyển receipt ra khỏi worktree advisory được gỡ; đợt 2 đọc lại tại
+đường dẫn này, SHA256 vẫn là `95a91cf9f9a8afdaa6566ac5bc5b2b994dfea0508bfea4a6bf5701487f071efa`.
 
 SHA-256 manifest: `95a91cf9f9a8afdaa6566ac5bc5b2b994dfea0508bfea4a6bf5701487f071efa`.
 Receipt kiểm hiện tại:
