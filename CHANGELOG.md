@@ -4,6 +4,11 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-16 — Đo hiệu chỉnh của Jev và cỡ mẫu tín hiệu lịch sử
+
+- Chỉ đọc database VPS và kết quả G4. Replay G4 có 340 lệnh đóng trên 10 route trong khoảng 30 tháng (2–3 lệnh/tuần).
+- 3.880 mẫu Jev (1 mỗi coin mỗi 15 phút, từ 115.164 câu trả lời): Brier của xác suất hướng kém hơn đoán theo tỉ lệ nền ở 1h, 4h và 24h; Jev quá tự tin. Khi RSI < 30, nhịp hồi Jev chọn đúng sau 4h (lên 70%) nhưng mất sau 24h. Chi tiết: [Jev calibration](docs/jev-calibration-2026-10-16.md).
+
 ## 2026-10-15 — Key Binance Demo lên VPS (chuẩn bị G5)
 
 - Key Demo cũ (30/9) không đọc được cả Spot lẫn Futures nên `connect` từ chối Clear/Replace; Julius đổi tên file cũ thành `binance-demo.json.old-20260930` (chờ xoá, mục H1 trong delete request) rồi nhập key mới bằng `aigt connect bnb demo`.
