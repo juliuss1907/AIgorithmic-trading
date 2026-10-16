@@ -4,6 +4,14 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-16 — State và câu hỏi Jev cho review Setup-2 offline
+
+- Thêm encoder 14 token cố định, không tên coin/ngày/giá/chữ số; chỉ dùng H4 đã đóng,
+  đặc trưng Setup-2, profile và funding đã công bố. Ngưỡng kỹ thuật có phiên bản,
+  chốt trước khi xem kết quả lệnh; thiếu dữ liệu thành token unknown.
+- Thêm ba câu hỏi nguyên tử cho lệnh giữ nhiều ngày, parser nghiêm ngặt và nhãn A
+  với hệ số tối đa ×1. Chưa gọi Jev thật; runtime và rule giữ nguyên.
+
 ## 2026-10-16 — Đo hiệu chỉnh của Jev và cỡ mẫu tín hiệu lịch sử
 
 - Chỉ đọc database VPS và kết quả G4. Replay G4 có 340 lệnh đóng trên 10 route trong khoảng 30 tháng (2–3 lệnh/tuần).
