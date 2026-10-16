@@ -4,6 +4,12 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-16 — Tắt analyst LLM chạy mỗi giờ trên VPS
+
+- Analyst chỉ phân tích BTC (`store.latest_snapshot()` mặc định `BTCUSDT`), thesis không đi vào soak, Demo hay Jev, tốn khoảng 0,75 USD/ngày. Julius duyệt tắt; vai trò này sẽ do nhánh B (hội đồng LLM theo tín hiệu) đảm nhận sau.
+- 08:06Z (sau nến H4 08:00Z): `aigt provider deactivate llm` qua service `admin`; `doctor` báo `llm: null`, Jev giữ nguyên `jev-openrouter-65b8e694`. Không sửa `.env`, không restart worker; news loop vẫn chạy. Vòng analysis và tự đề xuất rule kiểu cũ bỏ qua khi không có LLM.
+- Bật lại: `aigt provider activate llm llm-openai-compatible-3ba62fbf` (profile và key vẫn giữ).
+
 ## 2026-10-16 — Đo hiệu chỉnh của Jev và cỡ mẫu tín hiệu lịch sử
 
 - Chỉ đọc database VPS và kết quả G4. Replay G4 có 340 lệnh đóng trên 10 route trong khoảng 30 tháng (2–3 lệnh/tuần).
