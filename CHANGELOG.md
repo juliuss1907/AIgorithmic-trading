@@ -4,7 +4,7 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
-## 2026-10-16 — State và câu hỏi Jev cho review Setup-2 offline
+## 2026-10-16 — Jev Setup-2 review offline và kiểm chứng dry-run
 
 - Thêm encoder 14 token cố định, không tên coin/ngày/giá/chữ số; chỉ dùng H4 đã đóng,
   đặc trưng Setup-2, profile và funding đã công bố. Ngưỡng kỹ thuật có phiên bản,
@@ -32,6 +32,14 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   ràng buộc cả tập khóa thiếu/dự toán đã được duyệt; `--approved-plan` giữ receipt
   gốc để chạy tiếp chỉ phần con còn thiếu. Cache mất khóa ngoài phạm vi đã duyệt
   bị từ chối. Control giả kiểm toàn bộ dataset/cấu hình/tín hiệu trước khi ghi artifact.
+- Đợt 1: **796 tín hiệu → 379 state**, khoảng 313.532 input token / 0,0132 USD;
+  dự toán có hai retry khoảng 0,207 USD. Chưa gọi Jev thật, chưa tạo cache thật.
+- **1.857 test qua, 1 lỗi migration có sẵn được cho phép**, 49 test mới qua;
+  10/10 ID/summary tham chiếu và toàn bộ output 10 route G4 giữ nguyên khi tắt lớp phủ.
+  96 hash nguồn còn lại nguyên; manifest trước/sau ba file, control giả và giới hạn ở
+  [báo cáo đợt 1](docs/jev-setup2-review-replay-2026-10-16.md).
+- Chỉ commit local trên worktree riêng; dừng trước `--execute`, không merge/deploy
+  hoặc thay runtime/active set/soak.
 
 ## 2026-10-16 — Đo hiệu chỉnh của Jev và cỡ mẫu tín hiệu lịch sử
 

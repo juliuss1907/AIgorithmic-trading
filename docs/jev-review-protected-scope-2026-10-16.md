@@ -52,7 +52,10 @@ SHA-256 manifest: `95a91cf9f9a8afdaa6566ac5bc5b2b994dfea0508bfea4a6bf5701487f071
 Receipt kiểm hiện tại:
 `state/verification/jev-review-protected-20261016/boundary-check.json`.
 
-## Trạng thái thực hiện
+## Trạng thái tại lần kiểm đầu, trước khi được duyệt
+
+Phần này giữ mốc lịch sử trước triển khai. Kết quả sau phê duyệt nằm trong
+[báo cáo đợt 1](jev-setup2-review-replay-2026-10-16.md).
 
 - Đã đọc hướng dẫn workspace, các báo cáo Jev, ADR-007 và các điểm nối replay liên quan.
 - Đã tạo worktree, kiểm hash; chưa sửa mã, chưa chạy pytest hoặc replay tham chiếu.
