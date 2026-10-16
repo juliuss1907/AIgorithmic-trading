@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 import re
 from types import MappingProxyType
 
-from intraday.jev_review_cache import digest
 from intraday.setup2_review import (MODEL, MULTIPLIERS, QUESTION_SET_VERSION, STATE_VERSION,
                                     LabelConfig, label_a)
 
@@ -71,5 +70,8 @@ def compare_routes(rule_only, reviewed, overlay):
     return [dict(rule_id=rule_id, bar_close=at, label_a=overlay.label_for(rule_id, at),
                  multiplier=str(overlay.size_for(rule_id, at)), reference_trade_available=at in base,
                  rule_only_pnl=base[at]['net_known_pnl'] if at in base else None,
-                 overlay_pnl=other[at]['net_known_pnl'] if at in other else None)
+                 overlay_pnl=other[at]['net_known_pnl'] if at in other else None,
+                 counterfactual_pnl=base[at]['net_known_pnl'] if at in base else None,
+                 counterfactual_method='paired_rule_only' if at in base else None,
+                 counterfactual_id=rule_only['result_id'] if at in base else None)
             for at in sorted(set(base) | set(other) | vetoes)]

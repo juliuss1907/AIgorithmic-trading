@@ -1,6 +1,7 @@
 """Explicit research collection over the existing Jev transport/credentials, no journal writes."""
 
 from dataclasses import dataclass
+from http.client import HTTPException
 import json
 import math
 import socket
@@ -48,7 +49,7 @@ class ReviewProvider:
                 body=body, timeout=self.timeout)
         except (TimeoutError, socket.timeout):
             return ReviewCall('timeout')
-        except (urllib.error.URLError, OSError):
+        except (urllib.error.URLError, OSError, HTTPException):
             return ReviewCall('network_error')
         if self.clock()-started > self.timeout:
             return ReviewCall('timeout')

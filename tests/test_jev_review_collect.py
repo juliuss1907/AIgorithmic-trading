@@ -30,6 +30,7 @@ def test_plan_deduplicates_states_and_reports_only_missing_calls_without_writes(
     assert plan['estimated_input_tokens'] > 0
     assert plan['estimated_cost_usd'] == plan['estimated_input_tokens']*.042/1_000_000
     assert plan['network_calls'] == 0
+    assert len(plan['request_template_sha256']) == 64
     with AnswerCache(tmp_path/'cache.sqlite3', writable=True) as cache:
         cache.put(tokens, payload())
     with AnswerCache(tmp_path/'cache.sqlite3') as cache:

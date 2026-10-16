@@ -1,5 +1,6 @@
 import json
 import sys
+from pathlib import Path
 from datetime import timedelta
 
 import pytest
@@ -9,6 +10,7 @@ from intraday.jev_review import ReviewSignal
 from intraday.jev_review_cache import AnswerCache
 from intraday.setup2_review import encode_state
 from test_setup2_review import observation, history, NOW, payload
+from test_jev_review_overlay import route
 
 
 def install_scan(monkeypatch):
@@ -68,3 +70,28 @@ def test_fake_execute_populates_only_dedicated_cache_and_resumes(tmp_path, monke
     main()
     assert json.loads(capsys.readouterr().out)['missing_states'] == 0
     assert not (tmp_path/'source.sqlite3').exists()
+
+
+def test_cli_replay_publishes_both_control_and_veto_reports(route, tmp_path, monkeypatch, capsys):
+    import intraday.jev_review_cli as cli
+    from intraday.jev_review import scan_route
+    config, data, baseline = route
+    signals = scan_route(config, data)
+    p = payload()
+    p['answers']['action'] = dict(choice='skip', probabilities=dict(enter_full=.05, reduce=.05, skip=.9))
+    cache_path = tmp_path/'cache.sqlite3'
+    with AnswerCache(cache_path, writable=True) as cache:
+        for state in {s.tokens for s in signals}: cache.put(state, p)
+    monkeypatch.setattr(cli, 'database_routes', lambda *a, **kw: [(config, data)])
+    monkeypatch.setattr(cli.ProviderSecretStore, 'get', lambda *a: pytest.fail('replay must not read credentials'))
+    monkeypatch.setattr(sys, 'argv', ['aigt', 'jev-review', 'replay', '--database', str(tmp_path/'unused'),
+        '--funding-dir', str(tmp_path), '--end', config.end.isoformat(), '--cache', str(cache_path),
+        '--report-dir', str(tmp_path/'reports')])
+    main()
+    result = json.loads(capsys.readouterr().out)['results'][0]
+    assert result['result_ids']['rule_only'] == baseline['result_id']
+    assert result['summaries']['reviewed']['closed_trades'] == 0
+    assert result['summaries']['reviewed']['blocked_entries']['jev_review_veto'] > 0
+    assert result['counterfactual']
+    for report in result['reports'].values():
+        assert (Path(report['report_directory'])/'manifest.json').is_file()

@@ -134,12 +134,12 @@ def setup2_splits(rule):
     return setup2.SPLITS[getattr(rule.parameters, "entry_profile", "setup2_v1")]
 
 
-def _setup2(config, data, book, limitations, side=1):
+def _setup2(config, data, book, limitations, side=1, *, prepared=None, first_trade_only=False):
     """Setup-2 on closed H4 bars: signal at close, fill at the next open, capped ATR trail."""
     from intraday import setup2
     from intraday.replay_v2.donchian_filter_book import ATRTrail
     profile = getattr(data.rule.parameters, "entry_profile", "setup2_v1")
-    series, observations = setup2.series_observations(
+    series, observations = prepared if prepared is not None else setup2.series_observations(
         list(data.candles), list(data.profile_candles), side=side, anchor=data.indicator_anchor, profile=profile,
         warmup_bars=data.warmup_bars or setup2.WARMUP_BARS, own_from=data.price_proxy_until)
     if series is None:
@@ -150,6 +150,9 @@ def _setup2(config, data, book, limitations, side=1):
     settlements = funding.settlements if side < 0 and funding else ()
     trail, last = None, None
     for i, candle in enumerate(series):
+        # Supplemental isolated-entry counterfactuals reuse the exact loop and causal features.
+        if first_trade_only and book.trades:
+            break
         if not config.start <= candle.opened_at < config.end or candle.available_at > config.end:
             continue
         last = candle

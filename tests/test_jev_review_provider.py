@@ -1,4 +1,5 @@
 import json
+from http.client import IncompleteRead
 from dataclasses import replace
 
 import pytest
@@ -54,6 +55,15 @@ def test_timeout_and_elapsed_deadline_return_no_opinion():
     p = provider(lambda **kw: HttpResponse(200, {}, json.dumps(payload()).encode()),
                  clock=lambda: next(times), timeout_seconds=5)
     assert p.request(TOKENS).status == 'timeout'
+
+
+def test_truncated_http_response_is_redacted_and_counts_toward_circuit(tmp_path):
+    def truncated(**kw): raise IncompleteRead(b'private partial response', 100)
+    with AnswerCache(tmp_path/'cache.sqlite3', writable=True) as cache:
+        out = collect_missing([TOKENS], cache, provider(truncated), sleep=lambda _: None)
+        assert out['network_calls'] == 3 and out['circuit_open'] and out['remaining'] == 1
+        assert out['errors'] == {'network_error': 3}
+        assert cache.get(TOKENS) is None
 
 
 def test_collector_retries_with_limits_resumes_and_circuit_breaks(tmp_path):

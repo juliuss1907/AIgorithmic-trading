@@ -84,3 +84,28 @@ def test_overlay_rejects_duplicate_or_unbounded_labels():
         ReviewOverlay((('r', FIRST.isoformat(), 'VETO'),)*2, 'a'*64)
     with pytest.raises(ValueError):
         ReviewOverlay((), 'no-checksum')
+
+
+def test_every_exposed_veto_gets_a_real_counterfactual_trade(route, tmp_path):
+    from datetime import datetime
+    from intraday.jev_review import paired_replay, scan_route
+    from intraday.jev_review_cache import AnswerCache
+    from test_setup2_review import payload
+    config, data, baseline = route
+    signals = scan_route(config, data)
+    p = payload()
+    p['answers']['action'] = dict(choice='skip', probabilities=dict(enter_full=.05, reduce=.05, skip=.9))
+    with AnswerCache(tmp_path/'cache.sqlite3', writable=True) as cache:
+        for tokens in {s.tokens for s in signals}: cache.put(tokens, p)
+    with AnswerCache(tmp_path/'cache.sqlite3') as cache:
+        pair = paired_replay(config, data, signals, cache)
+    vetoes = [e for e in pair['reviewed']['events'] if e.get('reason') == 'jev_review_veto']
+    rows = pair['counterfactual']
+    assert len(vetoes) == len(rows) and len(vetoes) > len(baseline['trades'])
+    assert all(r['counterfactual_pnl'] is not None for r in rows)
+    uncovered = [r for r in rows if not r['reference_trade_available']]
+    assert uncovered and all(r['counterfactual_method'] == 'isolated_flat_start' for r in uncovered)
+    first = uncovered[0]
+    standalone = simulate(config.model_copy(update={'start': datetime.fromisoformat(first['bar_close'])}), data)
+    assert first['counterfactual_pnl'] == standalone['trades'][0]['net_known_pnl']
+    assert len(first['counterfactual_id']) == 64

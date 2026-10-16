@@ -17,7 +17,7 @@ from intraday.replay_v2.engine import simulate
 from intraday.replay_v2.funding import FundingSnapshot
 from intraday.replay_v2.lifecycle import _setup2_inputs
 from intraday.replay_v2.metrics import dataset_fingerprint
-from intraday.setup2_review import (CUT_POINTS, MODEL, QUESTION_SET_VERSION, STATE_VERSION, LabelConfig, encode_state)
+from intraday.setup2_review import (CUT_POINTS, MODEL, QUESTION_SET_VERSION, STATE_VERSION, LabelConfig, encode_state, questions)
 from intraday.store import IntradayStore
 
 INPUT_USD_PER_MILLION = Decimal('.042')
@@ -67,6 +67,7 @@ def build_plan(signals, cache, *, route_inputs=()):
     budget_tokens = sum(n+1024 for n in sizes)
     payload = dict(research_only=True, workflow='setup2_review', model=MODEL, state_version=STATE_VERSION,
         question_set_version=QUESTION_SET_VERSION, cut_points=CUT_POINTS,
+        request_template_sha256=digest(questions()),
         entry_bars=len(signals), unique_states=len(unique), missing_states=len(missing),
         cached_states=len(unique)-len(missing), planned_network_calls=len(missing), network_calls=0,
         estimated_input_tokens=tokens, budget_input_tokens=budget_tokens,
@@ -119,8 +120,11 @@ def route_identity(config, data, signals):
 
 
 def paired_replay(config, data, signals, cache, *, label_config=LabelConfig()):
+    from intraday.jev_review_counterfactual import supplement_counterfactuals
+    data = replace(data, jev_review=None)
     overlay = ReviewOverlay.from_cache(((s.rule_id, s.bar_close, s.tokens) for s in signals), cache, config=label_config)
     baseline = simulate(config, data)
     reviewed = simulate(config, replace(data, jev_review=overlay))
-    return dict(rule_only=baseline, reviewed=reviewed,
-                counterfactual=compare_routes(baseline, reviewed, overlay), overlay=overlay.payload())
+    compared = compare_routes(baseline, reviewed, overlay)
+    compared = supplement_counterfactuals(config, data, compared, baseline['inputs']['dataset_checksum'])
+    return dict(rule_only=baseline, reviewed=reviewed, counterfactual=compared, overlay=overlay.payload())
