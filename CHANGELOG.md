@@ -4,6 +4,14 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-17 — Chốt hướng nhánh B (LLM): hai bước, hội đồng tranh luận vẫn xây
+
+- Julius đồng ý làm nhánh B sau G6, theo hai bước:
+  - **Bước 1, lọc sự kiện.** Mỗi tín hiệu Setup-2 gọi model một lần, đọc tin 48 giờ và funding, OI của đúng coin đó, rồi trả lời: có sự kiện không (unlock, hack, delist, tin pháp lý, sự cố sàn), thuộc loại gì, nặng tới đâu. Kết quả là nhãn kèm lý do, chạy shadow trên Telegram. Cách chấm được chốt trước khi nhìn dữ liệu.
+  - **Bước 2, hội đồng tranh luận** (3 analyst, Bull/Bear, Risk/PM). **Vẫn sẽ xây**, sau khi bước 1 có số liệu; khi đó so hai bước trên cùng các tín hiệu.
+- Lý do làm bước 1 trước: luật đã đọc phần kỹ thuật, và Jev đọc cùng các con số đó mà không thêm được gì. Phần luật không thấy là sự kiện chưa vào giá. Không backtest được vì LLM đã biết giá quá khứ, nên chỉ chấm được trên tín hiệu mới.
+- Sơ đồ Đề xuất đã cập nhật: https://claude.ai/artifact/T1iqibi77GXfDccfjLPci8
+
 ## 2026-10-17 — Deploy `ffd67c7` lên VPS
 
 Julius duyệt push và deploy. Làm theo [runbook](docs/runbooks/deploy-a88825b.md), từ `236e767` lên `ffd67c7`: chế độ Jev tư vấn, heartbeat soak không phụ thuộc Jev, chạy lại nến bị lỗi database khoá.
