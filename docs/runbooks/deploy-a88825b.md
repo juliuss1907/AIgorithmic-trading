@@ -1,7 +1,7 @@
 # Deploy `a88825b` lên VPS (Jev tư vấn + heartbeat soak)
 
-Trạng thái: **soạn sẵn, chưa chạy.** Cần Julius duyệt trước khi làm. Phải xong trước lần đánh giá soak **28/10 04:10Z**, nên làm sớm
-để còn thời gian xử lý nếu có trục trặc. Cần ở cùng mạng LAN với VPS (`192.168.21.57`).
+Trạng thái: **đã chạy 2026-10-17 08:12–08:16Z** (Julius duyệt). Kết quả ghi ở CHANGELOG. Bản dưới giữ làm mẫu cho lần deploy sau.
+Cần ở cùng mạng LAN với VPS (`192.168.21.57`).
 
 ## Thay đổi so với bản đang chạy (`236e767`)
 

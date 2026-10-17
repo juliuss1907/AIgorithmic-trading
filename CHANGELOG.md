@@ -4,6 +4,17 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-17 — Deploy `ffd67c7` lên VPS
+
+Julius duyệt push và deploy. Làm theo [runbook](docs/runbooks/deploy-a88825b.md), từ `236e767` lên `ffd67c7`: chế độ Jev tư vấn, heartbeat soak không phụ thuộc Jev, chạy lại nến bị lỗi database khoá.
+
+- **Trước deploy:** `doctor` ok, paper, `execution_enabled: false`, schema 23, Jev `jev-openrouter-65b8e694`, LLM tắt; active set `c3d57eda…` seq 1. Image cũ được gắn tag `rollback-236e767-20261017` (worker `baef4e8883b2`, web `2b1d5db7b4a9`, admin `13704e151e50`).
+- **Sao lưu:** `~/.local/state/aigorithmic-trading/backups/intraday-20261017T081243388313Z.sqlite3` (2,66 GB, SHA-256 `52765914…314daa08`, `backup verify` ok).
+- **Deploy:** checkout `ffd67c7` (detached), build worker/web/admin (worker `85a96fc0de01`, web `50db31d83ae2`, admin `d7c2d1d27b4d`), web lên lúc 08:15Z (healthz 200), sau đó worker lúc 08:16Z.
+- **Sau deploy:** `doctor` ok, schema 23, provider và active set không đổi; log worker không có lỗi hay `database is locked`. Heartbeat lúc 08:16Z: cả 9 route đã ghi nến 08:00Z. ETH Perp và NEAR Spot đạt 94,7% (mất 1 nến như đã ghi), 7 route 100%. Jev chưa lỗi lần nào.
+- **Lùi lại nếu cần:** `docker tag intraday-<svc>:rollback-236e767-20261017 intraday-<svc>:latest` cho worker, web, admin, `git checkout --detach 236e767`, rồi khởi động lại web trước, worker sau. Database không đổi.
+- Còn kiểm: nến 12:00Z (19:00 giờ VN) có đủ 9 route.
+
 ## 2026-10-17 — Thử lại nến Setup-2 khi database bị khoá; kiểm heartbeat trước deploy
 
 - Kiểm heartbeat soak lúc 07:58Z bằng `scripts/soak_heartbeat.py` (chỉ đọc). Sau 18 nến H4: 7 route 100%, ETH Perp và NEAR Spot 94,4% (mỗi route thiếu 1 nến). Jev được gọi 3 lần, **chưa lỗi lần nào**. HYPE Spot 0% (đã biết, soak lại sau 29/10). Campaign BTC Spot từ 02/10 là của dòng cũ, không thuộc 9 route.
