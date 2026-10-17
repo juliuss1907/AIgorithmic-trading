@@ -4,6 +4,12 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-17 — Soạn sẵn kịch bản deploy `a88825b`
+
+- [Runbook deploy](docs/runbooks/deploy-a88825b.md): thay đổi so với `236e767`, giờ an toàn, các bước ghi trạng thái, backup, build, restart (web trước, worker sau), kiểm tra và lùi lại. Không đổi compose, dependency hay schema, nên lùi lại không cần khôi phục database.
+- `scripts/soak_heartbeat.py`: chỉ đọc. In độ phủ heartbeat của mọi campaign soak đang chạy theo cách tính cũ và mới, kèm số nến Jev lỗi. Đã thử trên database giả.
+- Chưa chạy trên VPS: Julius đang ở ngoài, không vào được mạng LAN của VPS. Deploy cần Julius duyệt.
+
 ## 2026-10-17 — Lỗi Jev không còn làm mất heartbeat hay cảnh báo của soak
 
 - Julius chọn giữ Jev ở chế độ tư vấn (chỉ ghi ý kiến), với điều kiện lỗi Jev không bao giờ làm hỏng soak. Lý do: hai lần đo cho thấy Jev không phân biệt được lệnh tốt và xấu ([hiệu chỉnh](docs/jev-calibration-2026-10-16.md), nhánh A trên `feature/jev-setup2-review`), nhưng ý kiến vẫn được ghi để so với lệnh Demo sau này.
