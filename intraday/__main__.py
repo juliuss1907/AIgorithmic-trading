@@ -1695,6 +1695,11 @@ def _new_asset_market_caches(config: IntradayConfig, *, store=None) -> tuple[dic
     return perp, spot
 
 
+# A locked database (sqlite3.OperationalError) at a busy bar close must not cost the soak its H4 heartbeat:
+# the bar is evaluated again on the next loop. Writes of an observation are idempotent per bar.
+SETUP2_RETRY_ERRORS = ("OperationalError",)
+
+
 def _run_registered_asset_cycles(
     store: IntradayStore,
     provider,
@@ -1726,7 +1731,8 @@ def _run_registered_asset_cycles(
             if symbol not in markets:
                 continue
             job = f"asset_{scope.value}_{symbol.lower()}"
-            slot = claim_cadence(store, job, now, interval)
+            slot = claim_cadence(store, job, now, interval,
+                                 retry_error_codes=SETUP2_RETRY_ERRORS if scope is DecisionScope.SPOT_4H else ())
             if slot is None:
                 continue
             try:
@@ -1789,7 +1795,7 @@ def _run_perp_setup2_cycles(store, provider, *, perp_markets, now):
         if rule is None or not is_setup2_profile(getattr(rule.parameters, "entry_profile", None)):
             continue
         job = f"asset_perp_setup2_{symbol.lower()}"
-        slot = claim_cadence(store, job, now, 14_400)
+        slot = claim_cadence(store, job, now, 14_400, retry_error_codes=SETUP2_RETRY_ERRORS)
         if slot is None:
             continue
         try:

@@ -11,6 +11,9 @@ Trạng thái: **soạn sẵn, chưa chạy.** Cần Julius duyệt trước khi
 | `intraday/trade_alerts.py`, `scoped_gate.py` | Chữ Telegram: Jev chỉ là ý kiến; vẫn báo tín hiệu khi Jev lỗi | Có, chỉ ở nội dung tin `[SOAK]` |
 | `intraday/execution/*` | Chế độ `--jev-mode advisory` cho Demo | Không, `demo-execution` chưa bật (G5/G6 riêng) |
 | `active_set_cli.py` | Sửa chuỗi help | Không |
+| `scheduler.py`, `store.py`, `__main__.py` (thêm 17/10) | Job Setup-2 lỗi `OperationalError` (database khoá) được chạy lại ở vòng kế tiếp, trong 30 phút | **Có.** Không còn mất nến như 16/10 và 17/10 lúc 00:00Z |
+
+Commit đích là đầu nhánh `feature/slot-runtime` sau bản sửa ngày 17/10 (`a88825b` cộng commit thử lại). Ghi hash cụ thể khi deploy.
 
 Không đổi: `deploy/` (compose, Dockerfile), dependency (`pyproject.toml`, `uv.lock`), schema database (v23), active set, rule và
 candidate, campaign soak, `.env.intraday`, key. Vì không đổi schema, lùi về bản cũ không cần khôi phục database.

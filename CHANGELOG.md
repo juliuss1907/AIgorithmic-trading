@@ -4,6 +4,14 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-17 — Thử lại nến Setup-2 khi database bị khoá; kiểm heartbeat trước deploy
+
+- Kiểm heartbeat soak lúc 07:58Z bằng `scripts/soak_heartbeat.py` (chỉ đọc). Sau 18 nến H4: 7 route 100%, ETH Perp và NEAR Spot 94,4% (mỗi route thiếu 1 nến). Jev được gọi 3 lần, **chưa lỗi lần nào**. HYPE Spot 0% (đã biết, soak lại sau 29/10). Campaign BTC Spot từ 02/10 là của dòng cũ, không thuộc 9 route.
+- Hai nến thiếu không do Jev: NEAR Spot nến 2026-10-16 00:00Z và ETH Perp nến 2026-10-17 00:00Z đều báo `error:OperationalError`. Đây là lỗi SQLite, nhiều khả năng là database bị khoá, vì 00:00Z là lúc các job hằng ngày cùng ghi database. Bộ lập lịch đánh dấu khung giờ là lỗi và không chạy lại, nên mất nến. Từ 14/10 chỉ có 2 lần như vậy.
+- Mức chịu đựng: 14 ngày có 84 nến, đạt 95% thì mỗi route mất tối đa 4 nến. Với nhịp lỗi hiện tại, khả năng một route trượt là thấp nhưng không bằng 0.
+- Sửa: `claim_cadence`/`claim_scheduler_run` nhận `retry_error_codes`. Job Setup-2 (Spot 4h và Perp) được chạy lại khung giờ đã lỗi `OperationalError` ở vòng lặp kế tiếp, trong 30 phút đầu của khung. Các lỗi khác như `StaleMarketData` của HYPE Spot không được thử lại. Ghi observation theo nến vốn idempotent. Không đổi schema.
+- Test: thêm 1 test cho việc thử lại (chỉ `OperationalError`, chỉ trong 30 phút, không đụng khung đã thành công). Toàn bộ: **1812 qua, 1 lỗi migration có sẵn**.
+
 ## 2026-10-17 — Soạn sẵn kịch bản deploy `a88825b`
 
 - [Runbook deploy](docs/runbooks/deploy-a88825b.md): thay đổi so với `236e767`, giờ an toàn, các bước ghi trạng thái, backup, build, restart (web trước, worker sau), kiểm tra và lùi lại. Không đổi compose, dependency hay schema, nên lùi lại không cần khôi phục database.

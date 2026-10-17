@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 def cadence_slot(now: datetime, interval_seconds: float) -> datetime:
@@ -16,6 +16,17 @@ def cadence_slot(now: datetime, interval_seconds: float) -> datetime:
     return datetime.fromtimestamp(epoch - epoch % seconds, tz=timezone.utc)
 
 
-def claim_cadence(store, job_name: str, now: datetime, interval_seconds: float) -> datetime | None:
+def claim_cadence(
+    store,
+    job_name: str,
+    now: datetime,
+    interval_seconds: float,
+    *,
+    retry_error_codes: tuple[str, ...] = (),
+    retry_window: timedelta = timedelta(minutes=30),
+) -> datetime | None:
+    """Claim the current slot. A slot that failed with a transient error (``retry_error_codes``) is retried
+    on the next loop while it is younger than ``retry_window``; any other failure waits for the next slot."""
     slot = cadence_slot(now, interval_seconds)
-    return slot if store.claim_scheduler_run(job_name, slot, started_at=now) else None
+    retry = retry_error_codes if now - slot <= retry_window else ()
+    return slot if store.claim_scheduler_run(job_name, slot, started_at=now, retry_error_codes=retry) else None

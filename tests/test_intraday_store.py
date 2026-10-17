@@ -294,3 +294,23 @@ def test_latest_scheduler_runs_has_bounded_work_for_long_running_jobs(
     assert [row["job_name"] for row in latest] == ["perp_numeric", "spot_quote"]
     assert latest[0]["scheduled_for"] == slots[2_999][1]
     assert latest[1]["scheduled_for"] == NOW.isoformat()
+
+
+def test_only_a_transient_scheduler_failure_is_claimed_again(tmp_path):
+    from datetime import timedelta
+    from intraday.scheduler import cadence_slot, claim_cadence
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    retry = ("OperationalError",)
+    slot = cadence_slot(NOW, 14_400)
+    assert claim_cadence(store, "setup2", NOW, 14_400, retry_error_codes=retry) == slot
+    assert claim_cadence(store, "setup2", NOW, 14_400, retry_error_codes=retry) is None  # still running
+    store.finish_scheduler_run("setup2", slot, status="error", error_code="OperationalError")
+    assert claim_cadence(store, "setup2", NOW, 14_400) is None                       # no retry asked
+    assert claim_cadence(store, "setup2", slot + timedelta(minutes=31), 14_400, retry_error_codes=retry) is None
+    assert claim_cadence(store, "setup2", NOW, 14_400, retry_error_codes=retry) == slot
+    assert store.scheduler_run("setup2", slot)["status"] == "running"
+    store.finish_scheduler_run("setup2", slot, status="error", error_code="StaleMarketData")
+    assert claim_cadence(store, "setup2", NOW, 14_400, retry_error_codes=retry) is None
+    store.claim_scheduler_run("other", slot)
+    store.finish_scheduler_run("other", slot, status="success")
+    assert store.claim_scheduler_run("other", slot, retry_error_codes=retry) is False

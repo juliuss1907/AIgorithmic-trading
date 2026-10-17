@@ -1578,8 +1578,10 @@ class IntradayStore:
         ]
 
     def claim_scheduler_run(
-        self, job_name: str, scheduled_for: datetime, *, started_at: datetime | None = None
+        self, job_name: str, scheduled_for: datetime, *, started_at: datetime | None = None,
+        retry_error_codes: tuple[str, ...] = (),
     ) -> bool:
+        """Claim a slot once; a slot that failed with one of ``retry_error_codes`` may be claimed again."""
         if not job_name:
             raise ValueError("scheduler job name is required")
         if scheduled_for.tzinfo is None or scheduled_for.utcoffset() is None:
@@ -1595,6 +1597,18 @@ class IntradayStore:
                     started_at.astimezone(timezone.utc).isoformat(),
                 ),
             )
+            if cursor.rowcount == 0 and retry_error_codes:
+                cursor = connection.execute(
+                    "UPDATE scheduler_runs SET status='running', started_at=?, finished_at=NULL, error_code=NULL "
+                    f"WHERE job_name=? AND scheduled_for=? AND status='error' "
+                    f"AND error_code IN ({','.join('?' * len(retry_error_codes))})",
+                    (
+                        started_at.astimezone(timezone.utc).isoformat(),
+                        job_name,
+                        scheduled_for.astimezone(timezone.utc).isoformat(),
+                        *retry_error_codes,
+                    ),
+                )
             return cursor.rowcount == 1
 
     def finish_scheduler_run(
