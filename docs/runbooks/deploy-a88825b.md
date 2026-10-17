@@ -13,7 +13,7 @@ Trạng thái: **soạn sẵn, chưa chạy.** Cần Julius duyệt trước khi
 | `active_set_cli.py` | Sửa chuỗi help | Không |
 | `scheduler.py`, `store.py`, `__main__.py` (thêm 17/10) | Job Setup-2 lỗi `OperationalError` (database khoá) được chạy lại ở vòng kế tiếp, trong 30 phút | **Có.** Không còn mất nến như 16/10 và 17/10 lúc 00:00Z |
 
-Commit đích là đầu nhánh `feature/slot-runtime` sau bản sửa ngày 17/10 (`a88825b` cộng commit thử lại). Ghi hash cụ thể khi deploy.
+Commit đích: `ffd67c7` (`a88825b` cộng bản sửa thử lại ngày 17/10).
 
 Không đổi: `deploy/` (compose, Dockerfile), dependency (`pyproject.toml`, `uv.lock`), schema database (v23), active set, rule và
 candidate, campaign soak, `.env.intraday`, key. Vì không đổi schema, lùi về bản cũ không cần khôi phục database.
@@ -28,7 +28,7 @@ Build image không ảnh hưởng worker; chỉ bước restart cần nằm tron
 
 ```bash
 cd ~/julius-workspace/ai-labs/projects/system-trading
-git fetch origin && git log -1 --oneline origin/feature/slot-runtime   # mong đợi a88825b
+git fetch origin && git merge-base --is-ancestor ffd67c7 origin/feature/slot-runtime && echo "đã có ffd67c7 trên remote"
 ```
 
 Trên VPS, các lệnh dưới dùng hàm `C`:
@@ -74,7 +74,7 @@ Không bắt buộc chép ra máy local, vì deploy không đổi schema hay d�
 
 ```bash
 git fetch origin feature/slot-runtime
-git checkout --detach a88825b && git log -1 --oneline
+git checkout --detach ffd67c7 && git log -1 --oneline
 C build worker web admin
 ```
 
