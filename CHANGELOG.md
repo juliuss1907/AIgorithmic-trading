@@ -4,6 +4,16 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-17 — Lỗi Jev không còn làm mất heartbeat hay cảnh báo của soak
+
+- Julius chọn giữ Jev ở chế độ tư vấn (chỉ ghi ý kiến), với điều kiện lỗi Jev không bao giờ làm hỏng soak. Lý do: hai lần đo cho thấy Jev không phân biệt được lệnh tốt và xấu ([hiệu chỉnh](docs/jev-calibration-2026-10-16.md), nhánh A trên `feature/jev-setup2-review`), nhưng ý kiến vẫn được ghi để so với lệnh Demo sau này.
+- `setup2_store.heartbeat` đếm mọi nến H4 luật đã đánh giá, kể cả nến có `jev_status` là `provider_error`/`gate_error` (trước đây hai trạng thái này bị loại). Vì dòng observation đã được ghi từ trước, khi code này được deploy trước lần đánh giá soak, các nến lỗi Jev cũ cũng được tính lại.
+- `run_setup2_observation` bắt mọi lỗi khi gọi Jev, không riêng `RuntimeError`. Ví dụ `PermissionError` của file secret trước đây không được bắt, nên nến đó mất observation. Lỗi được in một dòng JSON `setup2_jev`.
+- Khi Jev lỗi, cảnh báo Telegram của tín hiệu luật vẫn được gửi, với dòng "Jev: không trả lời (lỗi khi gọi), tín hiệu luật không đổi". Trước đây không có cảnh báo nào.
+- Demo không đổi: chế độ tư vấn đã bỏ qua lỗi Jev và chỉ chờ tối đa 120 giây cho mỗi nến.
+- Test: thêm 3 ca (Jev lỗi `insufficient_credits`, `PermissionError`, `ValueError`), cả ba đỏ trên code cũ. Toàn bộ: **1811 qua, 1 lỗi migration có sẵn** (`test_cli_inheritance_and_readiness_…`, đã ghi ngày 15/10).
+- Chưa deploy. Cần Julius duyệt cùng đợt deploy `199f800` trước khi đánh giá soak.
+
 ## 2026-10-16 — Tắt analyst LLM chạy mỗi giờ trên VPS
 
 - Analyst chỉ phân tích BTC (`store.latest_snapshot()` mặc định `BTCUSDT`), thesis không đi vào soak, Demo hay Jev, tốn khoảng 0,75 USD/ngày. Julius duyệt tắt; vai trò này sẽ do nhánh B (hội đồng LLM theo tín hiệu) đảm nhận sau.

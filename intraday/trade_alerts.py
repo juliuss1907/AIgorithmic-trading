@@ -45,8 +45,9 @@ def _exit_line(side: int, level) -> str:
 
 
 def soak_signal_message(*, symbol, market, observation, profile, exit_level, direction, confidence, allowed) -> str:
-    """A rule entry on a closed bar and Jev's answer. Soak places no order and does not track exits;
-    the 3-position limit, the PnL gate and rotation apply only in the Demo runtime."""
+    """A rule entry on a closed bar and Jev's answer (``direction`` None when Jev failed). Soak places no
+    order and does not track exits; the 3-position limit, the PnL gate and rotation apply only in the Demo
+    runtime."""
     side = observation.side
     entry = Decimal(str(observation.close))
     share = Decimal(str(observation.size_multiplier)) / setup2.SLOT_DIVISOR
@@ -60,7 +61,8 @@ def soak_signal_message(*, symbol, market, observation, profile, exit_level, dir
         f"(1/{setup2.SLOT_DIVISOR} túi × {float(observation.size_multiplier):.2f}, ATR {float(observation.atr / entry) * 100:.2f}%)",
         f"Stop ban đầu: {_num(stop)} ({_pct(stop / entry - 1)})",
         _exit_line(side, exit_level),
-        f"Jev: {direction} {confidence:.2f} ({'đồng ý' if allowed else 'phản đối'})",
+        (f"Jev: {direction} {confidence:.2f} ({'đồng ý' if allowed else 'phản đối'})" if direction
+         else "Jev: không trả lời (lỗi khi gọi), tín hiệu luật không đổi"),
     ])
 
 
@@ -70,7 +72,7 @@ def enqueue_soak_signal(store, *, symbol, market, rule, observation, answers, al
     message = soak_signal_message(
         symbol=symbol, market=market, observation=observation,
         profile=getattr(rule.parameters, "entry_profile", "setup2_v1"), exit_level=exit_level,
-        direction=advice["direction"].upper().replace("_", " "), confidence=advice["confidence"],
+        direction=advice["direction"] and advice["direction"].upper().replace("_", " "), confidence=advice["confidence"],
         allowed=allowed)
     key = f"setup2_signal:{rule.rule_id}:{observation.bar_close.isoformat()}"
     store.enqueue_notification(key, "setup2_signal", message, created_at=now)

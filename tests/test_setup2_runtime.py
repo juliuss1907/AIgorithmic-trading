@@ -6,6 +6,7 @@ import pytest
 
 from intraday import active_set, setup2, setup2_store
 from intraday.contracts import DecisionScope, SpotRuleParameters, SpotRuleProposal
+from intraday.providers import ProviderDecisionError
 from intraday.replay_v2.artifacts import read_report, read_series
 from intraday.replay_v2.lifecycle import replay_gate
 from intraday.setup2_cli import candidate_rule
@@ -137,3 +138,30 @@ def test_soak_signal_queues_one_telegram_alert_per_bar(store, series, monkeypatc
     assert f'Stop ban đầu: {float(stop):.6g}' in text
     assert f'Thoát khi nến 4h đóng dưới: {float(level):.6g} (kênh 10 nến)' in text
     assert f'{forced.size_multiplier/3*100:.1f}% túi Spot' in text
+
+
+@pytest.mark.parametrize('error', [ProviderDecisionError('insufficient_credits'), PermissionError('secret file'),
+                                   ValueError('bad answer')])
+def test_a_failed_jev_call_keeps_the_rule_heartbeat_and_alert(store, series, monkeypatch, error):
+    large, _ = series
+    now = large[-1].available_at+timedelta(minutes=1)
+    rule = candidate_rule(store, 'ETHUSDT', 'spot', actor='julius', reason='Setup-2 candidate for ETH', now=now)
+    observed = setup2_store.evaluate(store, 'ETHUSDT', 'spot', anchor=FIRST, now=now)
+    forced = observed.__class__(**{**observed.__dict__, 'entry': True})
+    monkeypatch.setattr(setup2_store, 'evaluate', lambda *a, **k: forced)
+
+    class Failing:
+        def decide_scoped(self, *args, **kwargs):
+            raise error
+
+    status = setup2_store.run_setup2_observation(store, Failing(), snapshot('ETHUSDT', DecisionScope.SPOT_4H),
+                                                 rule=rule, market='spot', now=now)
+    expected = 'gate_error' if isinstance(error, ValueError) else 'provider_error'
+    assert status == expected
+    [row] = setup2_store.observations(store, 'ETHUSDT', 'spot', rule_id=rule.rule_id)
+    assert row['jev_status'] == expected
+    assert setup2_store.heartbeat(store, 'ETHUSDT', 'spot', rule.rule_id,
+                                  start=forced.bar_close, end=forced.bar_close+setup2.H4) == 1.0
+    [alert] = store.list_pending_notifications()
+    assert alert['message'].startswith('[SOAK] ETHUSDT Spot LONG: tín hiệu luật (soak, không đặt lệnh)')
+    assert alert['message'].endswith('Jev: không trả lời (lỗi khi gọi), tín hiệu luật không đổi')

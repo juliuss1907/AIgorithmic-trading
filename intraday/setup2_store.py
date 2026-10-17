@@ -205,9 +205,10 @@ def observations(store, symbol, market, *, rule_id=None, since=None, until=None)
 
 
 def heartbeat(store, symbol, market, rule_id, *, start, end):
-    """Distinct evaluated H4 bars over expected bars; the Setup-2 soak heartbeat."""
-    seen = {r['bar_close'] for r in observations(store, symbol, market, rule_id=rule_id, since=start, until=end)
-            if r['jev_status'] not in ('provider_error', 'gate_error')}
+    """Distinct evaluated H4 bars over expected bars; the Setup-2 soak heartbeat.
+
+    Jev only advises: a bar the rule evaluated counts even when the Jev call on it failed."""
+    seen = {r['bar_close'] for r in observations(store, symbol, market, rule_id=rule_id, since=start, until=end)}
     expected = max(1, int((setup2.floor_h4(end)-setup2.floor_h4(start))/setup2.H4))
     return min(1.0, len(seen)/expected)
 
@@ -240,6 +241,8 @@ def run_setup2_observation(store, provider, snapshot, *, rule, market, now):
         store.record_portfolio_soak_tick(symbol=symbol, scope=scope, status='skipped_no_setup', created_at=now)
         return status
     tick_id = f"{symbol}:{scope.value}:setup2:{int(observation.bar_close.timestamp()*1000)}"
+    answers, allowed = None, False
+    # Jev only advises: no failure of the call may cost the rule its observation, heartbeat or alert.
     try:
         scoped = provider.decide_scoped(snapshot, tick_id, scope, now)
         signal_id = record_scoped_signal(store, snapshot, scoped, gate_passed=False,
@@ -252,20 +255,28 @@ def run_setup2_observation(store, provider, snapshot, *, rule, market, now):
                 candidate_id=rule.rule_id, signal_id=signal_id, champion_allowed=False,
                 challenger_allowed=allowed, champion_score=0, challenger_score=0,
                 created_at=now)
-        _alert(store, symbol, market, rule, observation, answers, allowed, now)
-    except RuntimeError:
-        status, jev = 'provider_error', 'provider_error'
-    except (ValueError, sqlite3.Error):
-        status, jev = 'gate_error', 'gate_error'
+    except (ValueError, sqlite3.Error) as error:
+        status, jev, answers = 'gate_error', 'gate_error', None
+        _log_jev_failure(symbol, market, jev, error)
+    except Exception as error:
+        status, jev, answers = 'provider_error', 'provider_error', None
+        _log_jev_failure(symbol, market, jev, error)
     else:
         status, jev = 'success', 'called'
     record_observation(store, symbol, market, rule.rule_id, observation, active=True, jev_status=jev, now=now)
     store.record_portfolio_soak_tick(symbol=symbol, scope=scope, status=status, created_at=now)
+    _alert(store, symbol, market, rule, observation, answers, allowed, now)
     return status
 
 
+def _log_jev_failure(symbol, market, status, error):
+    print(json.dumps({'setup2_jev': {'symbol': symbol, 'market': market, 'status': status,
+                                     'code': getattr(error, 'code', None) or type(error).__name__}}), flush=True)
+
+
 def _alert(store, symbol, market, rule, observation, answers, allowed, now):
-    """Queue the Telegram alert of a soak signal; an alert never changes the observation or its heartbeat."""
+    """Queue the Telegram alert of a soak signal, with or without Jev's answer; an alert never changes the
+    observation or its heartbeat."""
     from intraday.trade_alerts import enqueue_soak_signal
     try:
         enqueue_soak_signal(store, symbol=symbol, market=market, rule=rule, observation=observation,
