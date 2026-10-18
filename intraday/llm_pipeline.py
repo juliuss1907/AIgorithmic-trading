@@ -84,6 +84,15 @@ def active_llm_client(
     return factory(credential)
 
 
+def _strip_code_fence(text: str) -> str:
+    """Some OpenAI-compatible gateways drop response_format and wrap the JSON in a markdown fence; the schema
+    check that follows still applies."""
+    stripped = text.strip()
+    if stripped.startswith("```") and stripped.endswith("```") and "\n" in stripped:
+        return stripped[stripped.index("\n") + 1:-3]
+    return text
+
+
 class StructuredLLMError(RuntimeError):
     def __init__(
         self,
@@ -368,7 +377,7 @@ class StructuredLLMClient:
                 raise StructuredLLMError("missing_content")
             if isinstance(content, str):
                 try:
-                    decoded = json.loads(content)
+                    decoded = json.loads(_strip_code_fence(content))
                 except json.JSONDecodeError as error:
                     raise StructuredLLMError("invalid_json") from error
             elif isinstance(content, (dict, list)):

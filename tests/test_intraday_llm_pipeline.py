@@ -228,6 +228,35 @@ def test_structured_llm_client_requires_openrouter_structured_output_support(
     assert "temperature" not in body
 
 
+def test_structured_llm_client_reads_json_wrapped_in_a_markdown_fence(tmp_path):
+    content = "```json\n" + assessment().model_dump_json() + "\n```"
+    response = {
+        "id": "generation-fenced",
+        "model": "example/structured-model-202609",
+        "choices": [{"finish_reason": "stop", "message": {"content": content}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 40},
+    }
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    current = llm_profile()
+    store.sync_provider_profile(current)
+    client = StructuredLLMClient(
+        ProviderCredential(current, "private-llm-key"),
+        store=store,
+        transport=lambda **request: HttpResponse(200, {}, json.dumps(response).encode()),
+    )
+
+    result = client.complete(
+        workflow="market_analyst",
+        response_model=AnalysisAssessment,
+        system_prompt="Analyze only the supplied market facts.",
+        input_payload={"price": 100_000},
+        now=NOW,
+    )
+
+    assert result == assessment()
+    assert store.list_model_calls()[0].status == "success"
+
+
 def test_structured_llm_client_classifies_invalid_json_and_keeps_safe_metadata(
     tmp_path,
 ):

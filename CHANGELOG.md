@@ -4,6 +4,21 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-18 — Chạy thử vòng học có LLM; đọc được JSON bọc trong khối code
+
+- **Model free của OpenCode Zen không dùng được:** `glm-5.3-flash-free` trả `403 FreeTierError`, vì gói free chỉ cho gọi từ trong ứng dụng OpenCode. Profile `llm-opencode-glm53flash` vẫn còn trên VPS nhưng không dùng.
+- **Profile `llm-proxy-opus46`:**
+  - model `ag/claude-opus-4-6-thinking`, gọi qua proxy trên VPS tại `http://host.docker.internal:20128/v1`;
+  - chỉ lưu profile, không gán role LLM.
+- **Lỗi `invalid_json`:** proxy bỏ qua `response_format` và bọc JSON trong ```` ```json ```` ````. `StructuredLLMClient` giờ bỏ khối bọc đó trước khi đọc JSON. Bước kiểm theo schema Pydantic và bước kiểm của vòng học vẫn giữ nguyên. Có test mới trong `tests/test_intraday_llm_pipeline.py`.
+- **Kết quả chạy thử** (tuần 11–18/10, chưa deploy, nạp code tạm vào container admin):
+  - câu trả lời hợp lệ, có 7 đề xuất;
+  - 88 giây, khoảng 51 nghìn token vào và 5,4 nghìn token ra;
+  - báo cáo nằm ở `replay-reports/learning-trial/lr-20261018-083332.json`, tách khỏi sổ đề xuất thật.
+- **Nhận xét về chất lượng:**
+  - Đề xuất theo phiên yếu. Trong 30 khung giờ 90 ngày, chỉ 2 khung có trung bình lớn hơn 2 lần sai số chuẩn (ZEC 04h, HYPE 04h), trong khi ngẫu nhiên đã kỳ vọng khoảng 1,5 khung. Đề xuất short HYPE 12h dựa trên trung bình 90 ngày chỉ bằng khoảng 0,55 lần sai số chuẩn.
+  - Phần E vẫn đưa 2 đề xuất dù tuần này không có lần Jev nào sai mà tự tin. Một đề xuất giữ nguyên giá trị; đề xuất kia hạ ngưỡng ZEC từ 0,85 xuống 0,75 mà không tránh được lần sai nào.
+
 ## 2026-10-18 — Vòng học hằng tuần do LLM xử lý; bỏ tiêu chí 30 lệnh
 
 Julius chốt: LLM xử lý vòng học mỗi tuần; đề xuất theo phiên được thử thẳng trên Demo sau khi Julius duyệt, không qua replay; **bỏ tiêu chí 30 lệnh** để tắt Jev (mục ngay dưới đây không còn hiệu lực).
