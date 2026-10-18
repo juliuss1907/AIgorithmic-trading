@@ -4,6 +4,25 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-18 — Vòng học: phần A phân tích theo nến H1, thêm số đo đảo chiều
+
+Julius chốt: phần A dùng nến H1, kèm hai số đo đảo chiều. Bộ câu hỏi đổi thành `learning-questions-v2`.
+
+- **Nến H1** được ghép từ nến M15 Perp; giờ nào thiếu quý thì bỏ. Mỗi coin có 24 khung giờ, tính trên 7 ngày và 90 ngày:
+  - trung bình, sai số chuẩn, `t_stat`, tỉ lệ nến tăng, biên độ;
+  - `reversal_share` và `reversal_z`: nến đi ngược chiều với 4 giờ trước nó bao nhiêu % số lần, so với mức 50%;
+  - `after_up` và `after_down`: trung bình của nến sau 4 giờ tăng và sau 4 giờ giảm;
+  - riêng cửa sổ 90 ngày có `halves_agree`: hai nửa 45 ngày có cùng chiều với cả cửa sổ không.
+- **Đề xuất theo phiên (A3)** là lệnh giữ đúng 1 giờ, kèm điều kiện `always`, `after_up` hoặc `after_down`.
+  - Code loại riêng đề xuất nếu: `|t_stat|` dưới 3; hai nửa 45 ngày không cùng chiều; đề xuất đi ngược chiều trung bình; hoặc trung bình không vượt phí khứ hồi (Perp 0,20%, Spot 0,30%, như trong replay).
+  - Đề xuất bị loại được ghi lý do vào `screened` và không làm hỏng các phần còn lại của review.
+  - Ngưỡng là 3 chứ không phải 2 vì mỗi tuần quét khoảng 360 số đo (24 giờ × 5 coin × 3 điều kiện), nên ngẫu nhiên cũng cho vài số vượt 2.
+- **Chạy thử trên dữ liệu VPS** (proxy Opus 4.6, 76 giây):
+  - không số đo nào trong 360 số đo 90 ngày có `|t|` ≥ 3;
+  - 12 số đo có `|t|` ≥ 2, ít hơn khoảng 16 mà ngẫu nhiên đã kỳ vọng;
+  - LLM đưa 3 đề xuất phiên, code loại cả 3, review vẫn hợp lệ;
+  - dữ liệu gửi cho LLM tăng từ khoảng 104 KB lên 210 KB.
+
 ## 2026-10-18 — Chạy thử vòng học có LLM; đọc được JSON bọc trong khối code
 
 - **Model free của OpenCode Zen không dùng được:** `glm-5.3-flash-free` trả `403 FreeTierError`, vì gói free chỉ cho gọi từ trong ứng dụng OpenCode. Profile `llm-opencode-glm53flash` vẫn còn trên VPS nhưng không dùng.

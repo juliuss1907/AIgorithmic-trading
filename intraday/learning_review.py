@@ -23,11 +23,17 @@ from pydantic import BaseModel
 from intraday import setup2, setup2_store
 from intraday.decision_evaluation import _brier, _bucket, _probabilities, _truth
 
-QUESTIONS_VERSION = "learning-questions-v1"
+QUESTIONS_VERSION = "learning-questions-v2"
 H4 = setup2.H4
-HOURS = (0, 4, 8, 12, 16, 20)
-SESSIONS = {0: "asia", 4: "asia", 8: "europe", 12: "europe_us", 16: "us", 20: "us_late"}
+H1 = timedelta(hours=1)
+HOURS = tuple(range(24))       # session statistics run on H1 bars built from M15 Perp candles
+SESSIONS = {h: "asia" if h < 8 else "europe" if h < 13 else "europe_us" if h < 17 else "us" if h < 22 else "us_late"
+            for h in HOURS}
 SESSION_WINDOWS = (7, 90)
+LOOKBACK_HOURS = 4             # "the move before an hour" = the four H1 bars before it
+MIN_T = 3                      # |mean| / standard error an A3 proposal needs: 24 hours x 5 coins x 3 measures are
+                               # tested every week, so |t| >= 2 would pass several times by chance alone
+ROUND_TRIP_COST_PCT = {"spot": 0.30, "perp": 0.20}   # fee + slippage both ways, as in the replay cost profile
 MARKETS = ("spot", "perp")
 SCOPE_MARKETS = {"spot_4h": "spot", "perp_intraday": "perp"}
 JEV_CONFIDENT = 0.8            # "confident" Jev answer for the review; not a gate threshold
@@ -94,25 +100,66 @@ def _chart(store, routes, start, end):
     return chart
 
 
+def _hourly(store, symbol, since, until):
+    """H1 bars (opened_at, open, high, low, close) from complete hours of M15 Perp candles."""
+    quarters = {}
+    for b in setup2_store.list_bars(store, symbol, "perp", "15m", since=since, until=until):
+        quarters.setdefault(b.opened_at.replace(minute=0), []).append(b)
+    return {hour: (hour, float(q[0].open), max(float(b.high) for b in q), min(float(b.low) for b in q),
+                   float(q[-1].close))
+            for hour, q in quarters.items() if len(q) == 4}
+
+
+def _moments(returns):
+    n = len(returns)
+    if n < 2:
+        return dict(n=n, mean_return_pct=_round(fmean(returns)) if n else None, standard_error_pct=None, t_stat=None)
+    mean, error = fmean(returns), pstdev(returns)/math.sqrt(n)
+    return dict(n=n, mean_return_pct=_round(mean), standard_error_pct=_round(error),
+                t_stat=_round(mean/error) if error else None)
+
+
+def _round(value):
+    return None if value is None else round(value, 4)
+
+
 def _session_stats(store, symbols, end):
-    """Return, direction and range of each H4 slot per coin over 7 and 90 days (Perp prices, longest history)."""
+    """Per coin and UTC hour, over 7 and 90 days of H1 Perp bars: the hour's own drift, how often it reverses the
+    previous four hours, and its mean after a rise and after a fall. On 90 days `halves_agree` says whether both
+    45-day halves point the same way as the whole window, per condition."""
     stats = {}
     for symbol in symbols:
-        bars = setup2_store.list_bars(store, symbol, "perp", "4h", since=end-timedelta(days=max(SESSION_WINDOWS)),
-                                      until=end)
+        start = end-timedelta(days=max(SESSION_WINDOWS))
+        bars = _hourly(store, symbol, start-LOOKBACK_HOURS*H1, end)
+        rows = []
+        for hour, (at, o, h, l, c) in sorted(bars.items()):
+            before = [bars.get(at-k*H1) for k in range(LOOKBACK_HOURS, 0, -1)]
+            prior = (before[-1][4]/before[0][1]-1)*100 if all(before) else None
+            rows.append((at, (c/o-1)*100, (h/l-1)*100, prior))
         for days in SESSION_WINDOWS:
-            since = end-timedelta(days=days)
+            since, middle = end-timedelta(days=days), end-timedelta(days=days/2)
             for hour in HOURS:
-                sample = [b for b in bars if b.opened_at >= since and b.opened_at.hour == hour]
-                returns = [(float(b.close)/float(b.open)-1)*100 for b in sample]
-                n = len(returns)
-                deviation = pstdev(returns) if n > 1 else None
-                stats[f"session:{symbol}:{hour:02d}:{days}d"] = dict(
-                    symbol=symbol, hour_utc=hour, session=SESSIONS[hour], window_days=days, n=n,
-                    mean_return_pct=fmean(returns) if n else None, stdev_pct=deviation,
-                    standard_error_pct=deviation/math.sqrt(n) if deviation is not None else None,
-                    up_share=sum(r > 0 for r in returns)/n if n else None,
-                    mean_range_pct=fmean((float(b.high)/float(b.low)-1)*100 for b in sample) if n else None)
+                sample = [r for r in rows if r[0] >= since and r[0].hour == hour]
+                groups = {"always": sample, "after_up": [r for r in sample if r[3] is not None and r[3] > 0],
+                          "after_down": [r for r in sample if r[3] is not None and r[3] < 0]}
+                turns = [r for r in sample if r[3] and r[1]]
+                reversal = sum((r[1] > 0) != (r[3] > 0) for r in turns)/len(turns) if turns else None
+                item = dict(symbol=symbol, hour_utc=hour, session=SESSIONS[hour], window_days=days,
+                            **_moments([r[1] for r in sample]),
+                            up_share=_round(sum(r[1] > 0 for r in sample)/len(sample)) if sample else None,
+                            mean_range_pct=_round(fmean(r[2] for r in sample)) if sample else None,
+                            reversal_share=_round(reversal),
+                            reversal_z=_round((reversal-0.5)/math.sqrt(0.25/len(turns))) if turns else None,
+                            after_up=_moments([r[1] for r in groups["after_up"]]),
+                            after_down=_moments([r[1] for r in groups["after_down"]]))
+                if days == max(SESSION_WINDOWS):
+                    item["halves_agree"] = {}
+                    for name, group in groups.items():
+                        whole = fmean(r[1] for r in group) if group else 0
+                        halves = [[r[1] for r in group if (r[0] < middle) == first] for first in (True, False)]
+                        item["halves_agree"][name] = bool(whole) and all(
+                            half and fmean(half)*whole > 0 for half in halves)
+                stats[f"session:{symbol}:{hour:02d}:{days}d"] = item
     return stats
 
 
@@ -537,6 +584,7 @@ class SessionPattern(BaseModel):
     symbol: str
     hour_utc: int
     direction: Literal["pump", "dump"]
+    condition: Literal["always", "after_up", "after_down"]
     consistent_90d: bool
     confidence: float
     evidence: list[str]
@@ -546,6 +594,7 @@ class SessionProposal(BaseModel):
     symbol: str
     market: Literal["spot", "perp"]
     side: Literal["long", "short"]
+    condition: Literal["always", "after_up", "after_down"]
     entry_hour_utc: int
     exit_hour_utc: int
     rationale: str
@@ -637,10 +686,16 @@ route keys like "ETHUSDT:perp", session keys like "session:ETHUSDT:08:90d", trad
 "missed:..." ids, "filter:..." keys, "funding:..." and "corr:..." keys, "replay:..." keys or proposal ids.
 Answer these questions:
 A1 chart: how each route moved this week (trend, range, turns), from `chart`.
-A2 session_patterns: which H4 slots tend to pump or dump. Seven days is a small sample: say whether the 90-day
-   key points the same way and use n and standard_error_pct. Cite the 7d and the 90d key.
-A3 session_proposals: at most 3 trades by session to try on Demo. Spot can only be long. entry_hour_utc and
-   exit_hour_utc are H4 slot hours (0,4,8,12,16,20). Give a concrete invalidation and cite a 90d session key.
+A2 session_patterns: which UTC hours (H1 bars) tend to pump or dump, either always (the hour's own mean) or as a
+   reversal of the previous four hours (`after_up` / `after_down`, with `reversal_share` and `reversal_z`).
+   Seven days is a small sample: say whether the 90-day key points the same way, and judge with n, t_stat and
+   `halves_agree`. About 360 hour-measures are scanned every week, so |t_stat| near 2 is expected by chance.
+   Cite the 7d and the 90d key.
+A3 session_proposals: at most 3 one-hour trades to try on Demo: enter at the open of entry_hour_utc, exit one
+   hour later (exit_hour_utc = entry_hour_utc + 1, modulo 24), only under `condition`. Spot can only be long.
+   Code rejects a proposal unless the cited 90d key, for that condition, has |t_stat| >= 3, halves that agree,
+   the side of its mean, and a mean larger than the round-trip cost (Perp 0.20%, Spot 0.30%). An empty list is
+   the right answer when nothing qualifies. Give an invalidation built only from quantities in the input.
 B1 trades: one entry per trade in `trades`. You already know the outcome; use cause "prior_event" only when a news
    item in that trade's `news_before` (received before the entry) supports it, and cite that news id.
 B2 trade_proposals, C2 exit_proposals, D2 filter_proposals: at most 3 each.
@@ -671,6 +726,22 @@ def _references(facts):
     return refs
 
 
+def _weak_session(item, proposal):
+    """Why the 90-day statistics of an hour do not carry a session proposal; empty when they do."""
+    stat = item if proposal.condition == "always" else item.get(proposal.condition) or {}
+    mean, t = stat.get("mean_return_pct"), stat.get("t_stat")
+    if mean is None or t is None or abs(t) < MIN_T:
+        return [f"|t_stat| below {MIN_T}"]
+    reasons = []
+    if not (item.get("halves_agree") or {}).get(proposal.condition):
+        reasons.append("45-day halves disagree")
+    if (mean > 0) != (proposal.side == "long"):
+        reasons.append("side against the mean")
+    if abs(mean) <= ROUND_TRIP_COST_PCT[proposal.market]:
+        reasons.append("mean within round-trip cost")
+    return reasons
+
+
 def validate_review(review: LearningReview, facts: dict) -> list[str]:
     """Reasons to reject an answer; empty when every citation exists and every bound holds."""
     errors, refs = [], _references(facts)
@@ -686,11 +757,12 @@ def validate_review(review: LearningReview, facts: dict) -> list[str]:
     for p in review.session_proposals:
         if p.market == "spot" and p.side == "short":
             errors.append(f"session_proposals: Spot cannot be short ({p.symbol})")
-        if p.entry_hour_utc not in HOURS or p.exit_hour_utc not in HOURS:
-            errors.append(f"session_proposals: hours must be H4 slots ({p.symbol})")
+        if p.entry_hour_utc not in HOURS or p.exit_hour_utc != (p.entry_hour_utc+1) % 24:
+            errors.append(f"session_proposals: a one-hour trade from a UTC hour ({p.symbol})")
         if not p.invalidation.strip():
             errors.append(f"session_proposals: missing invalidation ({p.symbol})")
-        if not any(ref.startswith(f"session:{p.symbol}:") and ref.endswith(":90d") for ref in p.evidence):
+        key = f"session:{p.symbol}:{p.entry_hour_utc:02d}:90d"
+        if key not in p.evidence or key not in facts["sessions"]:
             errors.append(f"session_proposals: no 90-day session evidence ({p.symbol})")
     trades = {t["trade_id"]: t for t in facts["trades"]}
     reviewed = [t.trade_id for t in review.trades]
@@ -736,8 +808,22 @@ def review_week(client, facts, *, now, max_tokens=12_000):
     answer = client.complete(workflow="learning_review", response_model=LearningReview, system_prompt=SYSTEM_PROMPT,
                              input_payload=llm_facts(facts), now=now, max_tokens=max_tokens)
     errors = validate_review(answer, facts)
+    answer, screened = screen_session_proposals(answer, facts) if not errors else (answer, [])
     return dict(status="review_invalid" if errors else "valid", errors=errors, answer=answer.model_dump(),
-                model=getattr(client, "model_ref", None))
+                screened=screened, model=getattr(client, "model_ref", None))
+
+
+def screen_session_proposals(answer, facts):
+    """Drop the session proposals whose statistics are too weak, keeping the rest of a valid review."""
+    kept, screened = [], []
+    for p in answer.session_proposals:
+        key = f"session:{p.symbol}:{p.entry_hour_utc:02d}:90d"
+        reasons = _weak_session(facts["sessions"][key], p)
+        if reasons:
+            screened.append(dict(proposal=p.model_dump(), key=key, reasons=reasons))
+        else:
+            kept.append(p)
+    return answer.model_copy(update={"session_proposals": kept}), screened
 
 
 def review_client(store, secret_store, profile_id, *, timeout_seconds=180):
@@ -822,6 +908,8 @@ def telegram_summary(review_id, facts, review, added) -> str:
         lines.append(f"LLM trả lời không hợp lệ ({len(review['errors'])} lỗi), không ghi đề xuất.")
     else:
         lines.append(f"Cảnh báo tuần tới: {len(review['answer']['next_week'])}")
+        if review.get("screened"):
+            lines.append(f"Code loại {len(review['screened'])} đề xuất phiên vì số liệu yếu.")
         if not added:
             lines.append("Không có đề xuất mới.")
         for p in added:
