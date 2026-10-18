@@ -241,6 +241,7 @@ class StructuredLLMClient:
         input_payload: dict,
         now: datetime,
         attempt: int = 1,
+        max_tokens: int = 4096,
     ) -> T:
         if attempt < 1:
             raise ValueError("LLM attempt must be positive")
@@ -262,7 +263,7 @@ class StructuredLLMClient:
                 "model": self.credential.profile.model,
                 "system": system_prompt,
                 "messages": [{"role": "user", "content": input_text}],
-                "max_tokens": 4096,
+                "max_tokens": max_tokens,
                 "temperature": 0,
                 "output_config": {
                     "format": {"type": "json_schema", "schema": schema}
@@ -282,7 +283,7 @@ class StructuredLLMClient:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": input_text},
                 ],
-                "max_tokens": 4096,
+                "max_tokens": max_tokens,
                 "temperature": 0,
                 "tools": [],
                 "response_format": {

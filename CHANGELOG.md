@@ -4,6 +4,40 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-18 — Vòng học hằng tuần do LLM xử lý; bỏ tiêu chí 30 lệnh
+
+Julius chốt: LLM xử lý vòng học mỗi tuần; đề xuất theo phiên được thử thẳng trên Demo sau khi Julius duyệt, không qua replay; **bỏ tiêu chí 30 lệnh** để tắt Jev (mục ngay dưới đây không còn hiệu lực).
+
+- **Nguyên tắc:** code tính mọi con số, LLM đọc và đề xuất, Julius duyệt. Không có gì tự áp dụng.
+- **`intraday/learning_review.py`, hàm `collect_week`** (tất định, chỉ đọc) thu các nhóm dữ liệu sau:
+  - **Chart H4 7 ngày** của các route: lãi lỗ tuần, biên độ, ADX, vị trí so với EMA; kèm lãi tuần của BTC để so.
+  - **Thống kê theo khung giờ H4** cho từng coin, trên 7 ngày và 90 ngày: lợi nhuận trung bình, tỉ lệ nến tăng, biên độ, số mẫu và sai số chuẩn.
+  - **Lệnh Demo**, dựng lại từ journal theo cách cảnh báo Telegram đang ghép lệnh: lãi ròng sau phí, trượt giá, MFE/MAE, phần lãi trả lại, khoảng cách stop, funding ước tính, ý kiến Jev, tin 48 giờ **trước** lúc vào lệnh.
+  - **Lệnh bị bộ lọc chặn hoặc không thành lệnh:** mô phỏng kết quả "nếu đã vào" bằng trailing ATR và luật thoát Donchian của chính rule, tổng hợp theo từng bộ lọc.
+  - **Jev:** chọn các lần độ tin ≥ 0,8 mà sai so với nến H4 kế tiếp, tính Brier, gắn nhãn nguồn `setup2` hay `legacy`; kèm các thông số Jev của từng rule và khoảng cho phép lấy từ hợp đồng.
+  - **Rủi ro tuần tới:** tương quan 30 ngày, funding và OI, tin đã xác minh. Hệ thống chưa có lịch unlock token; báo cáo ghi rõ giới hạn này.
+  - **Đề xuất cũ** đã được duyệt.
+  - **Vận hành:** heartbeat, lỗi Jev, tin Telegram chưa gửi, sự kiện an toàn của Demo, chi phí model. Phần này chỉ để code tính, không gửi cho LLM.
+- **Bộ câu hỏi `learning-questions-v1`:**
+  - Gồm A (chart, khung giờ, đề xuất theo phiên), B (lệnh), C (thoát lệnh), D (bị lọc), E (Jev và đề xuất sửa câu hỏi hoặc thông số), F (tuần tới), G (đề xuất cũ).
+  - Mỗi tuần một lần gọi, JSON schema chặt, `max_tokens` 12.000.
+  - Code từ chối câu trả lời nếu: trích id hay khoá không có trong dữ liệu; đề xuất short Spot hoặc giờ không phải nến H4; thiếu bằng chứng 90 ngày; thông số Jev ngoài khoảng cho phép; dùng loại "sự kiện trước lệnh" mà không có tin trước giờ vào.
+  - Vòng học dùng profile LLM riêng (`--profile`), không gán role LLM, để analyst hằng giờ không chạy lại.
+- **CLI:**
+  - `aigt learning review [--no-llm] [--profile ID] [--execution-database PATH] [--notify]` ghi báo cáo JSON vào `<report dir>/learning/`.
+  - `aigt learning proposals list|approve|reject` quản lý sổ đề xuất.
+- `StructuredLLMClient.complete` nhận thêm `max_tokens` (mặc định vẫn 4096).
+- **Chạy thử `collect_week` trên database VPS** (chỉ đọc, chưa deploy), ra 104 KB dữ liệu cho LLM sau 1,6 giây:
+  - Cả 3 tín hiệu short Perp ngày 15/10 nếu vào lệnh đều đã chạm stop −5% (mô phỏng).
+  - 3 lần NEAR Perp bị bộ lọc chặn, nếu vào cũng chạm stop.
+  - 23 lần gọi Jev trong tuần, trong đó 17 lần là của engine BTC cũ; không có lần nào tự tin ≥ 0,8.
+  - LLM analyst còn chạy tới 08:02Z ngày 16/10 (413 lần gọi, 2,84 USD), sau đó tắt.
+- **Chưa làm:**
+  - chạy thử với LLM (cần Julius chọn profile);
+  - lên lịch job hằng tuần và mount chỉ đọc journal Demo vào container admin hoặc worker, sau G6, Julius duyệt riêng;
+  - giai đoạn 2: Demo chạy các đề xuất theo phiên.
+- Sơ đồ version 8: https://claude.ai/artifact/T1iqibi77GXfDccfjLPci8
+
 ## 2026-10-18 — Chốt tiêu chí tắt Jev; giữ các phần không dùng tới sau G6
 
 Julius chốt hai việc. Tiêu chí được chốt trước khi có dữ liệu Demo, như cách đã làm với nhánh B.
