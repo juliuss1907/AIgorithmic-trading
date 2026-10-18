@@ -4,6 +4,17 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-18 — Deploy `d517251` lên VPS
+
+Julius duyệt push và deploy. Làm theo [runbook](docs/runbooks/deploy-a88825b.md), từ `ffd67c7` lên `d517251`. Schema, active set và `.env.intraday` không đổi.
+
+- **Trước deploy:** paper, `execution_enabled: false`, schema 23. Image cũ được gắn tag `rollback-ffd67c7-20261018` (worker `85a96fc0de01`, web `50db31d83ae2`, admin `d7c2d1d27b4d`).
+- **Sao lưu:** `intraday-20261018T030625936718Z.sqlite3` (2,73 GB, SHA-256 `9027432b…20b9de1`, integrity ok).
+- **Deploy:** build worker `7cc1093919cc`, web `3cbae178177b`, admin `00a19cffbb4b`; image worker đã có `busy_timeout = 30000`. Web lên lúc 03:08Z (healthz 200), sau đó worker lúc 03:08:50Z.
+- **Sau deploy:** `doctor` ok. Chỉ có một job báo lỗi, là `asset_spot_4h_hypeusdt` với `StaleMarketData`, lỗi đã biết. Active set `c3d57eda…` seq 1. Log worker không có lỗi khoá.
+- **Lùi lại nếu cần:** `docker tag intraday-<svc>:rollback-ffd67c7-20261018 intraday-<svc>:latest`, `git checkout --detach ffd67c7`, khởi động lại web trước, worker sau.
+- **Còn kiểm:** lúc đổi ngày 00:00Z ngày 19/10, worker không được khởi động lại (`RestartCount` 0) và đủ 9 route; job dọn dữ liệu chạy lúc 02:00Z.
+
 ## 2026-10-18 — Worker sập lúc 00:00Z vì database khoá; nới thời gian chờ khoá, sửa job dọn dữ liệu
 
 - **Kiểm sau deploy `ffd67c7`:** nến 00:00Z ngày 18/10 ghi đủ 9 route, lúc 00:00:10–00:00:46Z. Hai ngày trước, nến này bị mất. Heartbeat: 7 route 100%, ETH Perp và NEAR Spot 95,7% (mất 1 nến từ trước deploy). Jev gọi 3 lần, không lỗi.
