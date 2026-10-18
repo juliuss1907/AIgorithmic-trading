@@ -4,6 +4,34 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-18 — Phần A chuyển sang theo dõi điểm khung giờ; bỏ đề xuất phiên và giai đoạn 2
+
+Julius chốt ba bước: tính điểm khung giờ cho mọi tín hiệu Setup-2 nhưng không cho ảnh hưởng tới việc vào lệnh; phần A chuyển sang theo dõi; chỉ đưa điểm vào runtime khi dữ liệu đã chứng minh. Bộ câu hỏi đổi thành `learning-questions-v3`.
+
+- **Ba phép kiểm chỉ đọc dữ liệu, chạy trên VPS, dẫn tới quyết định này:**
+  - **Lệnh 1 giờ theo khung giờ** (từ 3/2024 và riêng năm 2026): không cửa sổ nào (30, 60, 90 ngày) cho lãi sau phí 0,20%. Cấu hình tốt nhất là 60 ngày với t ≥ 3: tuần sau +0,09% đến +0,10% mỗi lệnh, thắng 55%. Cửa sổ 30 ngày không giữ được quy luật sang tuần sau.
+  - **Hoãn vào lệnh Setup-2** (340 lệnh replay luật thuần): hoãn 1 giờ trung bình −0,13%, hoãn 8 giờ −0,44%. Tín hiệu ra lúc 16h và 20h UTC thiệt nhiều nhất (−0,3% đến −0,4%). Không giờ nào có quy tắc hoãn đạt t ≥ 2 trên dữ liệu trước 2026. Runtime vào lệnh ngay sau khi nến H4 đóng là đúng.
+  - **Điểm khung giờ của lệnh Setup-2**, cửa sổ 60 ngày, tính trên 4 giờ sau lúc vào:
+    - lệnh cùng chiều khung giờ có lãi hơn ở cả hai giai đoạn: trước 2026 +1,75% so với −0,76%; năm 2026 +2,32% so với +0,55%;
+    - nhưng năm 2026 chưa phân biệt được với may rủi, tương quan chỉ khoảng +0,05, và cửa sổ 90 ngày cho kết quả ngược lại trong năm 2026;
+    - 11% số tín hiệu ra khi slot đã đầy, 26% ra cùng nến với một tín hiệu khác.
+- **`_hour_scores`:** mọi tín hiệu Setup-2 (`entry=true`) từ đầu soak đều có điểm. Điểm = trung bình lợi nhuận H1 của 4 giờ sau tín hiệu, tính trên 60 ngày **trước** tín hiệu, nhân với chiều của lệnh.
+  - Kết quả mỗi tín hiệu là mô phỏng bằng luật thoát của chính rule. Nếu tín hiệu đã thành lệnh Demo thì kèm thêm lãi ròng thật.
+  - `hourscore:summary` cộng dồn từ đầu, so nhóm cùng chiều với nhóm ngược chiều.
+  - Điểm do vòng học tự tính lại từ nến, nên runtime và worker không phải sửa gì.
+- **Thay đổi trong bộ câu hỏi:**
+  - bỏ A3 (đề xuất phiên), bỏ các điều kiện lọc đề xuất và mục `screened`;
+  - A3 mới là nhận xét về điểm khung giờ, không có đề xuất;
+  - thống kê khung giờ chuyển sang cửa sổ 7 và 60 ngày;
+  - tin Telegram có thêm một dòng điểm khung giờ.
+- **Phần E: khoá đề xuất đổi thông số Jev** (Julius chốt):
+  - Lý do: chưa bộ câu hỏi Jev nào đoán tốt hơn tỉ lệ nền. Với câu hỏi cũ, Brier là 0,28–0,30, trong khi đoán theo tỉ lệ nền là 0,24–0,25. Với bộ v2 trên lịch sử Setup-2, Brier là 0,32–0,46, trong khi đoán theo tỉ lệ nền là 0,23. Vì vậy chỉnh ngưỡng nào cũng không làm câu trả lời có ích hơn.
+  - Cơ chế: `JEV_PARAMETER_PROPOSALS = False`. Code bỏ các đề xuất `parameter` trước khi kiểm, ghi chúng vào `screened`, và giữ phần còn lại của review. Tin Telegram báo số đề xuất bị bỏ.
+  - E2 chỉ còn đề xuất sửa câu hỏi khi có kiểu sai lặp lại.
+  - Phần kiểm khoảng giá trị thông số vẫn giữ trong code, để mở lại khi có bộ câu hỏi đạt.
+- **Giai đoạn 2 cũ** (Demo chạy lệnh theo phiên với túi vốn riêng) được bỏ. Khi đủ khoảng 100 tín hiệu mới mà lệnh cùng chiều vẫn tốt hơn rõ rệt, sẽ viết kế hoạch riêng để dùng điểm khi hai tín hiệu tranh một slot hoặc để giảm khối lượng lệnh ngược chiều.
+- **Chạy thử trên VPS** (proxy Opus 4.6, 85 giây): review hợp lệ. Cả 3 tín hiệu short ngày 15/10 đều ngược chiều khung giờ và đều chạm stop trong mô phỏng (−4,9%). Mẫu này còn quá nhỏ để kết luận.
+
 ## 2026-10-18 — Vòng học: phần A phân tích theo nến H1, thêm số đo đảo chiều
 
 Julius chốt: phần A dùng nến H1, kèm hai số đo đảo chiều. Bộ câu hỏi đổi thành `learning-questions-v2`.

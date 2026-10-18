@@ -90,8 +90,8 @@ def test_session_statistics_run_on_hourly_bars_over_seven_and_ninety_days(store)
     seasonal_m15(store)
     stats = lr._session_stats(store, ["ETHUSDT"], END)
     assert len(stats) == 24*2
-    pump, dump, flat = (stats[f"session:ETHUSDT:{h}:90d"] for h in ("08", "20", "00"))
-    assert pump["n"] == 90 and pump["mean_return_pct"] == pytest.approx(1.0) and pump["up_share"] == 1
+    pump, dump, flat = (stats[f"session:ETHUSDT:{h}:60d"] for h in ("08", "20", "00"))
+    assert pump["n"] == 60 and pump["mean_return_pct"] == pytest.approx(1.0) and pump["up_share"] == 1
     assert dump["mean_return_pct"] == pytest.approx(-1.0) and dump["up_share"] == 0
     assert flat["mean_return_pct"] == pytest.approx(0.0) and flat["session"] == "asia" and flat["t_stat"] is None
     assert pump["halves_agree"]["always"] is True and flat["halves_agree"]["always"] is False
@@ -101,12 +101,12 @@ def test_session_statistics_run_on_hourly_bars_over_seven_and_ninety_days(store)
 def test_session_statistics_measure_reversal_of_the_previous_four_hours(store):
     seasonal_m15(store)
     stats = lr._session_stats(store, ["ETHUSDT"], END)
-    turn = stats["session:ETHUSDT:09:90d"]             # always falls after the 08h rise
-    assert turn["reversal_share"] == 1 and turn["reversal_z"] > 9
-    assert turn["after_up"]["n"] == 90 and turn["after_up"]["mean_return_pct"] == pytest.approx(-0.5)
+    turn = stats["session:ETHUSDT:09:60d"]             # always falls after the 08h rise
+    assert turn["reversal_share"] == 1 and turn["reversal_z"] == pytest.approx(0.5/(0.25/60)**0.5, abs=1e-3)
+    assert turn["after_up"]["n"] == 60 and turn["after_up"]["mean_return_pct"] == pytest.approx(-0.5)
     assert turn["after_down"]["n"] == 0 and turn["halves_agree"]["after_up"] is True
-    calm = stats["session:ETHUSDT:21:90d"]             # flat after the 20h fall: no reversal to count
-    assert calm["after_down"]["n"] == 90 and calm["reversal_share"] is None
+    calm = stats["session:ETHUSDT:21:60d"]             # flat after the 20h fall: no reversal to count
+    assert calm["after_down"]["n"] == 60 and calm["reversal_share"] is None
 
 
 def test_a_demo_trade_carries_excursion_slippage_jev_and_only_earlier_news(store, tmp_path):
@@ -190,9 +190,10 @@ def test_confident_wrong_jev_answers_are_picked_against_the_next_bar(store):
 def facts_for_review():
     return dict(
         routes=["ETHUSDT:perp"], chart={"ETHUSDT:perp": {}}, replay={},
-        sessions={"session:ETHUSDT:08:7d": {},
-                  "session:ETHUSDT:08:90d": dict(mean_return_pct=0.25, t_stat=4.0, after_up=dict(mean_return_pct=0.3,
-                                                 t_stat=2.0), halves_agree=dict(always=True, after_up=True))},
+        sessions={"session:ETHUSDT:08:7d": {}, "session:ETHUSDT:08:60d": {}},
+        hour_scores=dict(since="2026-10-12", summary={"hourscore:summary": {
+            name: dict(signals=0, wins=0, n=0, mean_return_pct=None) for name in ("with_hours", "against_hours")}},
+                         items=[{"id": "hourscore:ETHUSDT:perp:x"}]),
         trades=[dict(trade_id="t1", news_before=[{"id": "n1"}])],
         missed=dict(items=[{"id": "missed:x"}], by_filter={"filter:ema200": {}}),
         jev=dict(decisions=[{"id": "jev:a"}],
@@ -201,19 +202,13 @@ def facts_for_review():
         prior_proposals=[{"id": "lr-old-A3-1"}], operations={"heartbeat": {}})
 
 
-def session_proposal(**changes):
-    return dict(symbol="ETHUSDT", market="perp", side="long", condition="always", entry_hour_utc=8, exit_hour_utc=9,
-                rationale="phiên Âu", invalidation="2 tuần lỗ", confidence=0.5,
-                evidence=["session:ETHUSDT:08:90d"]) | changes
-
-
 def answer(**changes):
     base = dict(
         chart=[dict(route="ETHUSDT:perp", summary="giảm", evidence=["ETHUSDT:perp"])],
         session_patterns=[dict(symbol="ETHUSDT", hour_utc=8, direction="pump", condition="always",
-                               consistent_90d=True, confidence=0.6,
-                               evidence=["session:ETHUSDT:08:7d", "session:ETHUSDT:08:90d"])],
-        session_proposals=[session_proposal()],
+                               consistent_60d=True, confidence=0.6,
+                               evidence=["session:ETHUSDT:08:7d", "session:ETHUSDT:08:60d"])],
+        hour_score=dict(summary="chưa đủ mẫu", evidence=["hourscore:summary", "hourscore:ETHUSDT:perp:x"]),
         trades=[dict(trade_id="t1", cause="prior_event", explanation="tin xấu", evidence=["n1"])],
         trade_proposals=[], exits=[], exit_proposals=[],
         filters=[dict(filter="filter:ema200", verdict="too_few", explanation="ít mẫu", evidence=["filter:ema200"])],
@@ -234,10 +229,7 @@ def test_a_review_citing_only_known_facts_passes():
 
 @pytest.mark.parametrize("changes, error", [
     (dict(chart=[dict(route="ETHUSDT:perp", summary="x", evidence=["made-up"])]), "unknown evidence made-up"),
-    (dict(session_proposals=[session_proposal(market="spot", side="short")]), "Spot cannot be short"),
-    (dict(session_proposals=[session_proposal(entry_hour_utc=9, exit_hour_utc=10, invalidation="",
-                                              evidence=["session:ETHUSDT:08:7d"])]), "no 90-day session evidence"),
-    (dict(session_proposals=[session_proposal(exit_hour_utc=12)]), "one-hour trade"),
+    (dict(hour_score=dict(summary="x", evidence=["hourscore:made-up"])), "unknown evidence hourscore:made-up"),
     (dict(trades=[]), "every trade must be reviewed"),
     (dict(trades=[dict(trade_id="t1", cause="prior_event", explanation="x", evidence=["jev:a"])]),
      "prior_event without prior news"),
@@ -252,21 +244,27 @@ def test_a_review_is_rejected_when_it_breaks_a_bound(changes, error):
     assert any(error in e for e in errors), errors
 
 
-@pytest.mark.parametrize("changes, reason", [
-    (dict(condition="after_up"), "|t_stat| below 3"),
-    (dict(condition="after_down"), "|t_stat| below 3"),
-    (dict(side="short"), "side against the mean"),
-    (dict(market="spot"), "within round-trip cost"),
-])
-def test_weak_session_proposals_are_screened_out_without_voiding_the_review(changes, reason):
-    review = lr.review_week(FakeClient(answer(session_proposals=[session_proposal(), session_proposal(**changes)])),
-                            facts_for_review(), now=END)
-    assert review["status"] == "valid" and len(review["answer"]["session_proposals"]) == 1
-    assert [s["key"] for s in review["screened"]] == ["session:ETHUSDT:08:90d"]
-    assert any(reason in r for r in review["screened"][0]["reasons"])
-    assert "Code loại 1 đề xuất phiên" in lr.telegram_summary("lr-1", dict(
-        window=dict(start="2026-10-12", end="2026-10-19"), results=dict(closed=0, wins=0, net_pnl_usdt=0),
-        jev=dict(confident_wrong=[], agreed_losing_trades=[])), review, [])
+def test_hour_score_signs_the_hours_after_a_signal_and_compares_groups(store):
+    seasonal(store)                                    # H1: 08h +1%, 09h -0.5%, 20h -1%
+    day = END-timedelta(days=2)
+    observe(store, "ETHUSDT", "perp", day+timedelta(hours=8), side=1, close=100, entry=True, donchian=True)
+    observe(store, "ETHUSDT", "perp", day+timedelta(hours=20), side=-1, close=100, entry=True, donchian=True)
+    observe(store, "ETHUSDT", "perp", day-timedelta(hours=4), side=1, close=100, entry=True, donchian=True)
+    observe(store, "ETHUSDT", "perp", day+timedelta(hours=12), side=1, close=100, donchian=True)   # filtered
+    scores = lr._hour_scores(store, [("ETHUSDT", "perp")], [], START, END)
+    by_hour = {i["hour_utc"]: i for i in scores["items"]}
+    assert by_hour[8]["score_pct"] == pytest.approx(0.5) and by_hour[8]["with_hours"] is True
+    assert by_hour[20]["score_pct"] == pytest.approx(1.0) and by_hour[20]["with_hours"] is True
+    assert by_hour[20]["simulated"]["status"] in {"stop", "donchian_exit", "open"}
+    summary = scores["summary"]["hourscore:summary"]
+    assert summary["with_hours"]["signals"] == 2 and summary["against_hours"]["signals"] == 1
+    assert len(scores["items"]) == 3 and 12 not in by_hour
+
+
+def test_an_hour_score_needs_history_before_the_signal():
+    hourly = {datetime(2026, 9, 1, 8, tzinfo=timezone.utc)+timedelta(days=d): (None, 100, 0, 0, 101)
+              for d in range(10)}
+    assert lr._hour_score(hourly, datetime(2026, 9, 11, 8, tzinfo=timezone.utc), 1) is None
 
 
 class FakeClient:
@@ -290,16 +288,29 @@ def test_review_week_sends_no_operations_and_reports_validity():
     assert bad["status"] == "review_invalid" and bad["errors"]
 
 
+def test_jev_parameter_proposals_are_dropped_while_switched_off():
+    question = dict(target="question", rule_id="", name="direction", current="x", proposed="y",
+                    expected_effect="z", avoided=["jev:a"], evidence=["jev:a"])
+    bad_parameter = dict(target="parameter", rule_id="r1", name="confidence_threshold", current="0.85",
+                         proposed="0.10", expected_effect="x", avoided=[], evidence=[])
+    review = lr.review_week(FakeClient(answer(jev_proposals=[question, bad_parameter])), facts_for_review(), now=END)
+    assert review["status"] == "valid" and [p["target"] for p in review["answer"]["jev_proposals"]] == ["question"]
+    assert review["screened"][0]["proposal"]["proposed"] == "0.10"
+    assert "Code bỏ 1 đề xuất đổi thông số Jev" in lr.telegram_summary("lr-1", dict(
+        window=dict(start="2026-10-12", end="2026-10-19"), results=dict(closed=0, wins=0, net_pnl_usdt=0),
+        jev=dict(confident_wrong=[], agreed_losing_trades=[]), hour_scores=facts_for_review()["hour_scores"]),
+        review, [])
+
+
 def test_proposals_are_queued_pending_and_decided_once(tmp_path):
     added = lr.record_proposals(tmp_path, "lr-1", answer().model_dump(), now=END)
-    assert [p["id"] for p in added] == ["lr-1-A3-1", "lr-1-E2-1"]
+    assert [p["id"] for p in added] == ["lr-1-E2-1"]
     assert {p["status"] for p in lr.load_proposals(tmp_path)} == {"pending"}
-    decided = lr.decide_proposal(tmp_path, "lr-1-A3-1", status="approved", actor="julius", note="thử", now=END)
+    decided = lr.decide_proposal(tmp_path, "lr-1-E2-1", status="approved", actor="julius", note="thử", now=END)
     assert decided["status"] == "approved" and decided["actor"] == "julius"
     with pytest.raises(ValueError, match="already approved"):
-        lr.decide_proposal(tmp_path, "lr-1-A3-1", status="rejected", actor="julius", note=None, now=END)
-    prior = lr._prior(lr.load_proposals(tmp_path), [dict(trade_id="s1", source_id="session:lr-1-A3-1:x")])
-    assert [(p["id"], p["session_trades"]) for p in prior] == [("lr-1-A3-1", ["s1"])]
+        lr.decide_proposal(tmp_path, "lr-1-E2-1", status="rejected", actor="julius", note=None, now=END)
+    assert [p["id"] for p in lr._prior(lr.load_proposals(tmp_path))] == ["lr-1-E2-1"]
 
 
 def test_cli_writes_a_facts_only_report_from_a_bare_database(store, tmp_path, capsys):
@@ -312,4 +323,4 @@ def test_cli_writes_a_facts_only_report_from_a_bare_database(store, tmp_path, ca
     assert result["status"] == "facts_only" and "Chưa chạy LLM" in result["summary"]
     report = json.loads(open(result["report"]).read())
     assert report["facts"]["routes"] == ["ETHUSDT:perp"] and report["review"] is None
-    assert report["facts"]["sessions"]["session:ETHUSDT:08:90d"]["n"] == 90
+    assert report["facts"]["sessions"]["session:ETHUSDT:08:60d"]["n"] == 60
