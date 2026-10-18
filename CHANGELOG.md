@@ -4,6 +4,27 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-18 — Deploy `7b815f4` lên VPS (vòng học hằng tuần)
+
+Julius duyệt deploy. Làm theo [runbook](docs/runbooks/deploy-a88825b.md), từ `d517251` lên `7b815f4`. Schema, active set và `.env.intraday` không đổi. Job học hằng tuần **chưa** được lên lịch, và journal Demo **chưa** được mount: cả hai chờ sau G6, mỗi việc Julius duyệt riêng.
+
+- **Trước deploy (11:45Z):**
+  - `doctor` ok; chế độ paper, `execution_enabled: false`, schema 23.
+  - Worker chạy từ 03:08Z, `RestartCount` 0.
+  - Image cũ được gắn tag `rollback-d517251-20261018`: worker `7cc1093919cc`, web `3cbae178177b`, admin `00a19cffbb4b`.
+- **Sao lưu:** `intraday-20261018T122020484871Z.sqlite3`, 2,76 GB, SHA-256 `043e0cb7…dc54512c`. Lệnh verify trả `status` ok và `integrity` ok.
+- **Deploy:**
+  - Build: worker `62bcab6bfd1d`, web `7be8e6f913d2`, admin `40534650d642`.
+  - Restart sau khi đã ghi nến 12Z: web lên lúc 12:24Z (healthz 200), sau đó worker lúc 12:24:39Z.
+- **Sau deploy:**
+  - `doctor` ok, không có job lỗi.
+  - Vẫn chế độ paper, `execution_enabled: false`; active set `c3d57eda…` seq 1.
+  - Trong image admin đã có lệnh `aigt learning review|proposals`.
+  - Log worker không có lỗi.
+  - Heartbeat: 9 route có nến tới 12Z, các tỉ lệ giữ như trước deploy. BTC Spot và HYPE Spot vẫn 0%, đây là lỗi đã biết.
+- **Lùi lại nếu cần:** `docker tag intraday-<svc>:rollback-d517251-20261018 intraday-<svc>:latest`, rồi `git checkout --detach d517251`. Khởi động lại web trước, worker sau.
+- **Còn kiểm:** lúc đổi ngày 00:00Z ngày 19/10, worker phải có `RestartCount` 0 (tính từ lần khởi động 12:24Z) và đủ 9 route; job dọn dữ liệu phải chạy lúc 02:00Z.
+
 ## 2026-10-18 — Phần A chuyển sang theo dõi điểm khung giờ; bỏ đề xuất phiên và giai đoạn 2
 
 Julius chốt ba bước: tính điểm khung giờ cho mọi tín hiệu Setup-2 nhưng không cho ảnh hưởng tới việc vào lệnh; phần A chuyển sang theo dõi; chỉ đưa điểm vào runtime khi dữ liệu đã chứng minh. Bộ câu hỏi đổi thành `learning-questions-v3`.
