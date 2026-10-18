@@ -4,6 +4,19 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-18 — Chốt tiêu chí tắt Jev; giữ các phần không dùng tới sau G6
+
+Julius chốt hai việc. Tiêu chí được chốt trước khi có dữ liệu Demo, như cách đã làm với nhánh B.
+
+- **Tiêu chí tắt Jev:**
+  - **Mẫu:** 30 lệnh Demo đầu tiên đã đóng mà có ý kiến Jev, tức trường `entry_jev` mà `multi_runtime.py` ghi khi vào lệnh ở chế độ tư vấn. Bỏ các lệnh có `jev_unavailable`.
+  - **Đo:** lãi ròng trung bình mỗi lệnh, tính bằng % sau phí. So nhóm Jev phản đối (`would_allow = false`) với nhóm Jev đồng ý.
+  - **Tắt Jev** nếu nhóm phản đối có lãi trung bình bằng hoặc cao hơn nhóm đồng ý, hoặc nếu một nhóm có dưới 5 lệnh (Jev gần như luôn trả lời một kiểu nên không mang thông tin).
+  - **Giữ Jev ở chế độ tư vấn** nếu nhóm phản đối có lãi trung bình thấp hơn, và xét lại ở mốc 60 lệnh. Chỉ bàn tới giai đoạn 2 (phủ quyết) nếu ở mốc 60 lệnh nhóm phản đối vẫn thấp hơn.
+  - Không đổi câu hỏi Jev trong lúc đang gom mẫu. Nếu đổi câu hỏi, mẫu đếm lại từ 0.
+- **Các phần không dùng** (rule generator, 3 analyst và thesis, engine BTC paper cũ, cờ `news_pause`): giữ nguyên tới sau G6, để không đụng code lúc soak và G5/G6. Sau 28/10 lập delete request để Julius duyệt từng phần. News loop vẫn giữ, vì bước 1 nhánh B cần tin.
+- Sơ đồ đã cập nhật lên version 7: thêm tiêu chí trên, ghi rằng LLM đang tắt (`no_active_llm`) và Jev tư vấn đã deploy. https://claude.ai/artifact/T1iqibi77GXfDccfjLPci8
+
 ## 2026-10-18 — Deploy `d517251` lên VPS
 
 Julius duyệt push và deploy. Làm theo [runbook](docs/runbooks/deploy-a88825b.md), từ `ffd67c7` lên `d517251`. Schema, active set và `.env.intraday` không đổi.
