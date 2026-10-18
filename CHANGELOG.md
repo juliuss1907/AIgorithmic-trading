@@ -4,6 +4,17 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-18 — Worker sập lúc 00:00Z vì database khoá; nới thời gian chờ khoá, sửa job dọn dữ liệu
+
+- **Kiểm sau deploy `ffd67c7`:** nến 00:00Z ngày 18/10 ghi đủ 9 route, lúc 00:00:10–00:00:46Z. Hai ngày trước, nến này bị mất. Heartbeat: 7 route 100%, ETH Perp và NEAR Spot 95,7% (mất 1 nến từ trước deploy). Jev gọi 3 lần, không lỗi.
+- **Tín hiệu từ 10/10:** chỉ có 3 tín hiệu, đều ở nến 2026-10-15 04:00Z (short Perp ETH, HYPE, ZEC). Cả 3 tin `[SOAK]` gửi Telegram ngay lần đầu. Sau đó luật không ra tín hiệu: Perp vướng volume dưới MA20, Spot dưới EMA200/EMA50.
+- **Sự cố:** lúc 00:00:07Z ngày 18/10, vòng chính của worker gặp `sqlite3.OperationalError: database is locked`, khi ghi lịch job `portfolio_soak_perp`. Chỗ này không bắt lỗi, nên tiến trình chết. Docker tự bật lại worker lúc 00:00:07,66Z và không mất nến. Lúc 00:01:07Z, `gate_automation` và luồng `_asset_rule_bootstrap_loop` cũng gặp lỗi khoá. Lỗi có từ trước `ffd67c7`.
+- **Chưa xác định được** luồng nào giữ khoá ghi quá 5 giây lúc 00:00:02–00:00:07Z. Database không có dòng nào được ghi trong khoảng đó, nên thủ phạm là một giao dịch không để lại dấu vết.
+- **Sửa:**
+  - `busy_timeout` của `IntradayStore` tăng từ 5 lên 30 giây. Khi có tranh khoá, các lần ghi chờ thay vì lỗi, nên vòng chính không còn chết, và job Setup-2 không còn rơi vào lỗi `OperationalError`.
+  - Hàm `prune_external_observations` từng chạy một lệnh `DELETE` quét toàn bảng (348 nghìn dòng). Lệnh này giữ khoá ghi suốt lúc quét, kể cả khi không xoá dòng nào, và chạy đúng lúc đổi ngày 00:00Z. Giờ hàm xoá theo từng nguồn, dùng index `(source, received_at)`, mỗi lô 2.000 dòng trong giao dịch riêng, và chỉ chạy từ 02:00Z. Bảng này có dữ liệu từ 27/09, nên lệnh xoá thật sẽ bắt đầu từ 27/10, ngay trước G5, với khoảng 19 nghìn dòng mỗi ngày.
+- Test: `tests/test_external_context.py` thêm test xoá theo lô và dùng index.
+
 ## 2026-10-17 — Chốt hướng nhánh B (LLM): hai bước, hội đồng tranh luận vẫn xây
 
 - Julius đồng ý làm nhánh B sau G6, theo hai bước:

@@ -183,7 +183,8 @@ class IntradayStore:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA busy_timeout = 5000")
+        # The worker's threads and the web share one file; at 00:00Z a writer waited past 5 s and the worker died.
+        connection.execute("PRAGMA busy_timeout = 30000")
         return connection
 
     @contextmanager
@@ -3538,15 +3539,29 @@ class IntradayStore:
             "latest": latest.model_dump(mode="json") if latest else None,
         }
 
-    def prune_external_observations(self, *, before: datetime) -> int:
+    def prune_external_observations(self, *, before: datetime, batch_size: int = 2000) -> int:
+        """Delete expired rows per source through the (source, received_at) index, in short batches.
+
+        One unindexed DELETE held the write lock long enough to fail the worker's H4 writes at 00:00Z."""
         if before.tzinfo is None or before.utcoffset() is None:
             raise ValueError("retention cutoff must be timezone-aware")
         with self._connect() as connection:
-            cursor = connection.execute(
-                "DELETE FROM external_observations WHERE received_at < ?",
-                (before.isoformat(),),
-            )
-        return cursor.rowcount
+            sources = [row[0] for row in connection.execute(
+                "SELECT DISTINCT source FROM external_observations"
+            )]
+        removed = 0
+        for source in sources:
+            while True:
+                with self._connect() as connection:
+                    count = connection.execute(
+                        "DELETE FROM external_observations WHERE rowid IN ("
+                        "SELECT rowid FROM external_observations WHERE source = ? AND received_at < ? LIMIT ?)",
+                        (source, before.isoformat(), batch_size),
+                    ).rowcount
+                removed += count
+                if count < batch_size:
+                    break
+        return removed
 
     def venue_frame_count(self, venue: str) -> int:
         with self._connect() as connection:

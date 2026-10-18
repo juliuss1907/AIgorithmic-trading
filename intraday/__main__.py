@@ -1583,7 +1583,8 @@ def _external_context_loop(config: IntradayConfig) -> None:
     last_retention_date = None
     while True:
         now = datetime.now(timezone.utc)
-        if last_retention_date != now.date():
+        # Prune at 02:00Z, clear of the 00:00Z H4 close the Setup-2 jobs write.
+        if last_retention_date != now.date() and now.hour >= 2:
             store.prune_external_observations(before=now - timedelta(days=30))
             last_retention_date = now.date()
         results = {}

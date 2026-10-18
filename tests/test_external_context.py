@@ -93,6 +93,27 @@ def test_external_observation_retention_removes_only_expired_rows(tmp_path):
     assert store.list_external_observations(source="aster") == [current]
 
 
+def test_external_observation_retention_runs_in_indexed_batches_per_source(tmp_path):
+    store = IntradayStore(tmp_path / "intraday.sqlite")
+    for source in ("aster", "lighter"):
+        for minutes in range(5):
+            for days in (31, 0):
+                at = NOW - timedelta(days=days, minutes=minutes)
+                store.record_external_observation(ExternalObservation.create(
+                    source=source, dataset="perp_market", symbol="BTCUSDT",
+                    source_timestamp=at, received_at=at, metrics={"mark_price": float(minutes)}, labels={},
+                ))
+
+    assert store.prune_external_observations(before=NOW - timedelta(days=30), batch_size=2) == 10
+    assert all(len(store.list_external_observations(source=s)) == 5 for s in ("aster", "lighter"))
+    with store._connect() as connection:
+        plan = connection.execute(
+            "EXPLAIN QUERY PLAN SELECT rowid FROM external_observations WHERE source = ? AND received_at < ? LIMIT ?",
+            ("aster", NOW.isoformat(), 2),
+        ).fetchall()
+    assert any("idx_external_observations_source_time" in row[3] for row in plan)
+
+
 def test_cryptorank_parser_combines_slow_context():
     result = parse_cryptorank_context(
         fear_greed={"data": {"currentValue": 42, "classification": "Fear"}, "status": {"timestamp": 1790488500000}},
