@@ -49,11 +49,11 @@ def seasonal_m15(store, symbol="ETHUSDT", days=95):
 
 
 def observe(store, symbol, market, bar_close, *, side, close, atr="2", entry=False, donchian=False, exit=False,
-            failed=(), blockers=(), status="skipped_no_setup"):
+            failed=(), blockers=(), status="skipped_no_setup", adx="25"):
     observation = setup2.Setup2Observation(
         side=side, bar_open=bar_close-H4, bar_close=bar_close, entry=entry, exit=exit, donchian_entry=donchian,
         failed_filters=tuple(failed), blockers=tuple(blockers), close=D(str(close)), atr=D(atr),
-        features={"atr": D(atr), "adx": D(25), "close": D(str(close))}, evaluator_version="setup2-slots-live-v1")
+        features={"atr": D(atr), "adx": D(adx), "close": D(str(close))}, evaluator_version="setup2-slots-live-v1")
     setup2_store.record_observation(store, symbol, market, "rule-1", observation, active=True, jev_status=status,
                                     now=bar_close)
 
@@ -197,6 +197,10 @@ def facts_for_review():
         limit_entries=dict(limit_atr="0.25", summary={"limitentry:summary": dict(
             signals=0, filled=0, unfilled=0, pending=0, n=0, mean_return_pct=None)},
                            items=[{"id": "limitentry:ETHUSDT:perp:x"}]),
+        adx_rise=dict(bars=3, summary={"adxrise:summary": dict(
+            added=dict(signals=0, wins=0, n=0, mean_return_pct=None),
+            dropped=dict(signals=0, wins=0, n=0, mean_return_pct=None), no_data=0)},
+                      items=[{"id": "adxrise:ETHUSDT:perp:x"}]),
         trades=[dict(trade_id="t1", news_before=[{"id": "n1"}])],
         missed=dict(items=[{"id": "missed:x"}], by_filter={"filter:ema200": {}}),
         jev=dict(decisions=[{"id": "jev:a"}],
@@ -299,6 +303,38 @@ def test_a_shadow_limit_fills_on_m15_and_is_compared_with_entering_at_once(store
     assert "khớp 1, không khớp 1" in lr._limit_entry_line(entries)
 
 
+def test_shadow_v4_adds_adx_only_breakouts_whose_adx_rose_over_three_bars_and_drops_entries_whose_did_not(store):
+    trigger = START+timedelta(days=1)
+    for symbol in ("ETHUSDT", "NEARUSDT", "SOLUSDT"):
+        setup2_store.record_candles(store, symbol, "perp", "4h", [
+            kline(trigger, 100, 100.8, 98, 98.5), kline(trigger+H4, 98.5, 99, 97, 97.5)])
+        observe(store, symbol, "perp", trigger-3*H4, side=-1, close=101, adx="15")
+        observe(store, symbol, "perp", trigger+H4, side=-1, close=98.5)
+        observe(store, symbol, "perp", trigger+2*H4, side=-1, close=97.5, exit=True)
+    # ETH: ADX 18 failed the rule (under 20) but rose from 15 -> V4 adds it.
+    observe(store, "ETHUSDT", "perp", trigger, side=-1, close=100, donchian=True, failed=["adx"], adx="18")
+    # NEAR: a rule entry whose ADX 14 sits under the 15 of three bars back -> V4 drops it.
+    observe(store, "NEARUSDT", "perp", trigger, side=-1, close=100, entry=True, donchian=True, adx="14")
+    # SOL: another filter failed too, so V4 would not enter either.
+    observe(store, "SOLUSDT", "perp", trigger, side=-1, close=100, donchian=True, failed=["adx", "ema200"], adx="18")
+
+    rise = lr._adx_rise_entries(store, [("ETHUSDT", "perp"), ("NEARUSDT", "perp"), ("SOLUSDT", "perp")], START, END)
+
+    by_id = {i["id"]: i for i in rise["items"]}
+    assert set(by_id) == {f"adxrise:ETHUSDT:perp:{trigger.isoformat()}", f"adxrise:NEARUSDT:perp:{trigger.isoformat()}"}
+    added = by_id[f"adxrise:ETHUSDT:perp:{trigger.isoformat()}"]
+    assert added["kind"] == "added" and (added["adx"], added["adx_3_bars_back"]) == ("18", "15")
+    assert added["simulated"]["status"] == "donchian_exit" and added["simulated"]["gross_return_pct"] == pytest.approx(2.5)
+    assert by_id[f"adxrise:NEARUSDT:perp:{trigger.isoformat()}"]["kind"] == "dropped"
+    summary = rise["summary"]["adxrise:summary"]
+    assert (summary["added"]["signals"], summary["added"]["n"], summary["dropped"]["signals"]) == (1, 1, 1)
+    assert "thêm 1 (1 đã đóng, TB +2.50%)" in lr._adx_rise_line(rise)
+
+    observe(store, "ETHUSDT", "perp", END-timedelta(hours=2), side=-1, close=100, entry=True, donchian=True)
+    late = lr._adx_rise_entries(store, [("ETHUSDT", "perp")], START, END)
+    assert late["summary"]["adxrise:summary"]["no_data"] == 1                 # no observation three bars back
+
+
 def test_an_hour_score_needs_history_before_the_signal():
     hourly = {datetime(2026, 9, 1, 8, tzinfo=timezone.utc)+timedelta(days=d): (None, 100, 0, 0, 101)
               for d in range(10)}
@@ -337,7 +373,7 @@ def test_jev_parameter_proposals_are_dropped_while_switched_off():
     assert "Code bỏ 1 đề xuất đổi thông số Jev" in lr.telegram_summary("lr-1", dict(
         window=dict(start="2026-10-12", end="2026-10-19"), results=dict(closed=0, wins=0, net_pnl_usdt=0),
         jev=dict(confident_wrong=[], agreed_losing_trades=[]), hour_scores=facts_for_review()["hour_scores"],
-        limit_entries=facts_for_review()["limit_entries"]),
+        limit_entries=facts_for_review()["limit_entries"], adx_rise=facts_for_review()["adx_rise"]),
         review, [])
 
 

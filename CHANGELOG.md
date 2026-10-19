@@ -4,6 +4,20 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Theo dõi shadow biến thể V4 (ADX dốc 3 nến)
+
+Julius quyết định theo dõi V4. Đây là biến thể trượt sát nhất trong [nghiên cứu bộ lọc nhanh](docs/setup2-fast-filter-research.md). Luật đang chạy giữ nguyên, V4 chỉ được ghi lại để so sánh.
+
+- **Quy tắc V4:** thay điều kiện ADX của Setup-2 (ADX > 20 và cao hơn nến trước) bằng điều kiện ADX cao hơn ADX của 3 nến H4 trước, không có ngưỡng.
+- **Vòng học hằng tuần** (`intraday/learning_review.py`, câu hỏi lên `learning-questions-v5`): thêm mục `adx_rise`, tính trên mọi tín hiệu từ đầu soak, gồm hai nhóm:
+  - **thêm:** breakout không có blocker, chỉ trượt bộ lọc ADX nhưng đạt điều kiện V4, tức V4 vào còn luật thì không;
+  - **bỏ:** lệnh của luật mà ADX không cao hơn 3 nến trước, tức V4 sẽ bỏ qua.
+- **Cách tính kết quả:** mỗi tín hiệu được mô phỏng bằng chính stop và luật thoát của Setup-2, chưa trừ phí, và không tính cạnh tranh slot. Khi thiếu quan sát của 3 nến trước, tín hiệu được ghi là `no_data`.
+- **Báo cáo:** LLM nhận xét V4 ở câu A3. Tin Telegram có thêm một dòng "ADX dốc 3 nến (V4, theo dõi)".
+- **Trang `/setup2`:** thêm mục "Biến thể V4", gồm tóm tắt hai nhóm và bảng tín hiệu.
+- **Kiểm tra trên database VPS (chỉ đọc):** chưa có tín hiệu nào mà V4 khác luật. Bốn lệnh của luật từ đầu soak (ETH, HYPE, ZEC ngày 15/10 và ZEC ngày 18/10) đều có ADX tăng qua 3 nến. Bốn breakout bị lọc đều trượt cả bộ lọc khác ngoài ADX.
+- Phải deploy thì trang web và vòng học mới có phần này. Worker không đọc code này, nên không cần restart worker.
+
 ## 2026-10-19 — Chạy nghiên cứu bộ lọc nhanh cho Setup-2: không biến thể nào đạt
 
 Chạy đúng một lần theo thiết kế đã commit ở `517f42b`. Kết quả ở [docs/setup2-fast-filter-research.md](docs/setup2-fast-filter-research.md); code ở `intraday/replay_v2/fast_filter_study.py` và `scripts/fast_filter_export.py`, có 9 test.

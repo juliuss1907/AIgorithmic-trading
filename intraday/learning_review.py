@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from intraday import setup2, setup2_store
 from intraday.decision_evaluation import _brier, _bucket, _probabilities, _truth
 
-QUESTIONS_VERSION = "learning-questions-v4"
+QUESTIONS_VERSION = "learning-questions-v5"
 H4 = setup2.H4
 H1 = timedelta(hours=1)
 HOURS = tuple(range(24))       # session statistics run on H1 bars built from M15 Perp candles
@@ -34,6 +34,7 @@ LOOKBACK_HOURS = 4             # "the move before an hour" = the four H1 bars be
 HOUR_SCORE_DAYS = 60           # history behind the hour score of a Setup-2 signal
 HOUR_SCORE_HOURS = 4           # the hours after the signal that the score covers
 LIMIT_ATR = Decimal("0.25")    # shadow Perp-short limit above the signal close (entry research, 2026-10-19)
+ADX_RISE_BARS = 3              # shadow V4: ADX above its value 3 H4 bars back (fast filter research, 2026-10-19)
 M15 = timedelta(minutes=15)
 MARKETS = ("spot", "perp")
 SCOPE_MARKETS = {"spot_4h": "spot", "perp_intraday": "perp"}
@@ -475,6 +476,61 @@ def _limit_entries(store, routes, start, end):
                      "an unfilled limit counts as 0%. n counts signals whose both outcomes are closed.")
 
 
+def _adx_rise(o, by_close):
+    """V4's ADX rule on one observation: ADX above the ADX of the observation ADX_RISE_BARS H4 bars earlier;
+    None when either value is missing."""
+    earlier = by_close.get((datetime.fromisoformat(o["bar_close"])-ADX_RISE_BARS*H4).isoformat()) or {}
+    adx, before = (o.get("features") or {}).get("adx"), (earlier.get("features") or {}).get("adx")
+    if adx is None or before is None:
+        return None, adx, before
+    return Decimal(adx) > Decimal(before), adx, before
+
+
+def _adx_rise_entries(store, routes, start, end):
+    """Shadow V4 of docs/setup2-fast-filter-research.md: the ADX rule (above 20 and above the prior bar) replaced
+    by ADX above its value three bars back. Monitoring only: V4 narrowly missed two registered criteria.
+    'added' are unblocked breakouts that failed only the ADX rule and pass V4's (V4 enters, the rule did not);
+    'dropped' are rule entries whose ADX has not risen over three bars (V4 skips them). Each is simulated with the
+    rule's own exit; slot competition is not modelled."""
+    everything, items = [], []
+    for symbol, market in routes:
+        observed = _observations(store, symbol, market, until=end)
+        by_close = {o["bar_close"]: o for o in observed}
+        for o in observed:
+            if not o.get("donchian_entry") or o.get("blockers"):
+                continue
+            candidate = o.get("entry") or set(o.get("failed_filters") or ()) == {"adx"}
+            if not candidate:
+                continue
+            rise, adx, before = _adx_rise(o, by_close)
+            if rise is None:
+                kind = "no_data"
+            elif o.get("entry"):
+                kind = None if rise else "dropped"
+            else:
+                kind = "added" if rise else None
+            if kind is None:
+                continue
+            item = dict(id=f"adxrise:{symbol}:{market}:{o['bar_close']}", symbol=symbol, market=market,
+                        bar_close=o["bar_close"], side=o["side"], kind=kind, adx=adx, adx_3_bars_back=before,
+                        simulated=_simulate(store, symbol, market, o, end))
+            everything.append(item)
+            if start <= datetime.fromisoformat(o["bar_close"]) < end:
+                items.append(item)
+    summary = {}
+    for kind in ("added", "dropped"):
+        group = [i for i in everything if i["kind"] == kind]
+        closed = [float(i["simulated"]["gross_return_pct"]) for i in group
+                  if i["simulated"].get("status") in {"stop", "donchian_exit"}]
+        summary[kind] = dict(signals=len(group), wins=sum(r > 0 for r in closed), **_moments(closed))
+    summary["no_data"] = sum(i["kind"] == "no_data" for i in everything)
+    return dict(since=min((i["bar_close"] for i in everything), default=None), bars=ADX_RISE_BARS,
+                summary={"adxrise:summary": summary}, items=items,
+                note="Shadow V4: ADX above its value 3 H4 bars back replaces the ADX rule. added = V4 would enter, "
+                     "the rule did not; dropped = the rule entered, V4 would not. Simulated with the rule's own exit "
+                     "from the signal close, gross of fees, without slot competition; n counts closed signals.")
+
+
 def _jev_parameters(store, rule_id):
     """Value and contract bounds of each numeric Jev setting of one rule; empty for legacy decisions."""
     parameters = getattr(store.load_scoped_rule(rule_id) if rule_id else None, "parameters", None)
@@ -671,6 +727,7 @@ def collect_week(store, execution_db, *, start, end, proposals=()):
         sessions=_session_stats(store, symbols, end),
         hour_scores=_hour_scores(store, routes, trades, start, end),
         limit_entries=_limit_entries(store, routes, start, end),
+        adx_rise=_adx_rise_entries(store, routes, start, end),
         trades=trades, results=_results(trades, expectations), replay=expectations,
         missed=_missed(store, routes, trades, start, end), jev=_jev(store, trades, start, end),
         next_week=_next_week(store, symbols, trades, end), prior_proposals=_prior(list(proposals)),
@@ -794,7 +851,9 @@ A3 hour_score: every Setup-2 signal carries an hour score (see `hour_scores.note
    done better than signals against them so far, with the number of closed signals and the standard error, and
    whether that is distinguishable from chance yet. Mention this window's signals by id. In the same summary,
    from "limitentry:summary" (see `limit_entries.note`), say how the shadow limit entry on Perp shorts compares
-   with entering at once so far: fills, closed pairs n, mean diff and standard error. Monitoring only.
+   with entering at once so far: fills, closed pairs n, mean diff and standard error. Likewise from
+   "adxrise:summary" (see `adx_rise.note`), say how the signals the shadow V4 ADX rule would add, and the rule
+   entries it would drop, have done so far, with n and the standard error. Monitoring only.
 B1 trades: one entry per trade in `trades`. You already know the outcome; use cause "prior_event" only when a news
    item in that trade's `news_before` (received before the entry) supports it, and cite that news id.
 B2 trade_proposals, C2 exit_proposals, D2 filter_proposals: at most 3 each.
@@ -825,6 +884,7 @@ def _references(facts):
     refs |= {p["id"] for p in facts["prior_proposals"]}
     refs |= set(facts["hour_scores"]["summary"]) | {i["id"] for i in facts["hour_scores"]["items"]}
     refs |= set(facts["limit_entries"]["summary"]) | {i["id"] for i in facts["limit_entries"]["items"]}
+    refs |= set(facts["adx_rise"]["summary"]) | {i["id"] for i in facts["adx_rise"]["items"]}
     return refs
 
 
@@ -985,12 +1045,23 @@ def _limit_entry_line(entries):
             f"không khớp {s['unfilled']}; chênh so với vào ngay TB {diff}")
 
 
+def _adx_rise_line(entries):
+    s = entries["summary"]["adxrise:summary"]
+
+    def group(name):
+        g = s[name]
+        mean = "—" if g["mean_return_pct"] is None else f"{g['mean_return_pct']:+.2f}%"
+        return f"{g['signals']} ({g['n']} đã đóng, TB {mean})"
+    return f"ADX dốc 3 nến (V4, theo dõi): thêm {group('added')}; bỏ {group('dropped')}"
+
+
 def telegram_summary(review_id, facts, review, added) -> str:
     window, results, jev = facts["window"], facts["results"], facts["jev"]
     lines = [f"[VÒNG HỌC] {window['start'][:10]} → {window['end'][:10]} ({review_id})",
              f"Lệnh đóng: {results['closed']}, thắng {results['wins']}, lãi ròng {results['net_pnl_usdt']:+.2f} USDT",
              f"Jev sai mà tự tin: {len(jev['confident_wrong'])}; Jev đồng ý mà lỗ: {len(jev['agreed_losing_trades'])}",
-             _hour_score_line(facts["hour_scores"]), _limit_entry_line(facts["limit_entries"])]
+             _hour_score_line(facts["hour_scores"]), _limit_entry_line(facts["limit_entries"]),
+             _adx_rise_line(facts["adx_rise"])]
     if review is None:
         lines.append("Chưa chạy LLM (--no-llm).")
     elif review["status"] != "valid":

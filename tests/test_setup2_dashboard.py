@@ -65,6 +65,7 @@ def test_setup2_page_and_api_render(store):
     page = client.get("/setup2")
     assert page.status_code == 200
     assert "Setup-2 soak" in page.text and "phản đối" in page.text and "Breakout bị lọc" in page.text
+    assert "Biến thể V4" in page.text and "Thiếu ADX" in page.text      # the entry has no ADX three bars back
     api = client.get("/api/setup2").json()
     assert api["signals"][0]["route"] == "ETHUSDT:perp"
 

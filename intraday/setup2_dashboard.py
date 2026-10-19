@@ -147,6 +147,7 @@ def build_setup2_dashboard(store, *, now: datetime) -> dict:
     limit_entries = lr._limit_entries(store, routes, since, now) if routes else None
     signals, hour_summary = _signals(store, routes, since, now, limit_entries) if routes else ([], None)
     limits = limit_entries["summary"]["limitentry:summary"] if routes else None
+    adx_rise = lr._adx_rise_entries(store, routes, since, now) if routes else None
     notifications = _notifications(store)
     attention = []
     if health["stale"]:
@@ -157,6 +158,8 @@ def build_setup2_dashboard(store, *, now: datetime) -> dict:
     return dict(
         generated_at=now.isoformat(), since=since.isoformat(), health=health, campaigns=campaigns,
         latest_bars=_latest_bars(store, routes), signals=signals, hour_score=hour_summary, limit_entry=limits,
+        adx_rise=None if adx_rise is None else dict(summary=adx_rise["summary"]["adxrise:summary"], items=sorted(
+            adx_rise["items"], key=lambda i: i["bar_close"], reverse=True)),
         notifications=notifications, jev_statuses=_jev_statuses(store, since),
         model_cost_24h_usd=store.model_cost_since(now-timedelta(hours=24)),
         next_bar_close=(setup2.floor_h4(now)+setup2.H4).isoformat(),

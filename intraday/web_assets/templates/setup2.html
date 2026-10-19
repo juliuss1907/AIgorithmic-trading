@@ -170,6 +170,38 @@
         {% endif %}
       </section>
 
+      <section class="ledger" aria-labelledby="adx-rise-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Theo dõi, không đặt lệnh · ADX cao hơn 3 nến trước thay cho ADX &gt; 20 và tăng so với nến trước</p>
+            <h2 id="adx-rise-heading">Biến thể V4</h2>
+          </div>
+          {% set a = d.adx_rise.summary if d.adx_rise else none %}
+          <small>{% if a %}Thêm {{ a.added.signals }} ({{ a.added.n }} đã đóng, TB {{ pct(a.added.mean_return_pct) }}) · bỏ {{ a.dropped.signals }} ({{ a.dropped.n }} đã đóng, TB {{ pct(a.dropped.mean_return_pct) }}){% else %}Chưa có dữ liệu{% endif %}</small>
+        </div>
+        {% if d.adx_rise and d.adx_rise["items"] %}
+        <div class="table-wrap" tabindex="0" aria-label="Tín hiệu V4">
+          <table>
+            <thead><tr><th>Nến đóng</th><th>Route</th><th>V4 so với luật</th><th>ADX</th><th>ADX 3 nến trước</th><th>Mô phỏng</th></tr></thead>
+            <tbody>
+              {% for i in d.adx_rise["items"] %}
+              <tr>
+                <td><time datetime="{{ i.bar_close }}" title="{{ i.bar_close|vn_time }}">{{ i.bar_close|vn_short }}</time></td>
+                <td><strong>{{ route_name(i.symbol ~ ":" ~ i.market) }}</strong></td>
+                <td>{{ {"added": "V4 vào, luật không", "dropped": "Luật vào, V4 bỏ", "no_data": "Thiếu ADX"}.get(i.kind, i.kind) }}</td>
+                <td>{{ "%.1f"|format(i.adx|float) if i.adx is not none else "—" }}</td>
+                <td>{{ "%.1f"|format(i.adx_3_bars_back|float) if i.adx_3_bars_back is not none else "—" }}</td>
+                <td>{{ {"stop": "Chạm stop", "donchian_exit": "Thoát kênh", "open": "Đang mở"}.get(i.simulated.status, i.simulated.status) }} {{ pct(i.simulated.gross_return_pct) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty" role="status"><strong>Chưa có tín hiệu nào mà V4 khác luật.</strong></div>
+        {% endif %}
+      </section>
+
       <section class="ledger" aria-labelledby="soak-heading">
         <div class="section-head">
           <div><p class="eyebrow">Mỗi route cần heartbeat ≥ 95% trong 14 ngày</p><h2 id="soak-heading">Soak từng route</h2></div>
