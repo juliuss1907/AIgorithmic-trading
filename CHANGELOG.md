@@ -4,6 +4,15 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Deploy `bbd320f` lên VPS (chỉ restart web)
+
+Julius duyệt push và deploy. Từ `fba4e55` lên `bbd320f`; so với bản trước chỉ `intraday/web.py` thay đổi.
+
+- Image cũ được gắn tag `rollback-fba4e55-20261019`. Image mới: worker `6afa1a6e02be`, web `8a62174622b5`, admin `563fa85e5a0f`.
+- Chỉ restart web, healthz 200. Worker không bị restart (vẫn chạy từ 08:32:57Z, `RestartCount` 0); khi worker restart lần sau nó sẽ chạy image mới, image này chỉ khác ở phần web.
+- **Thời gian tải:** lần đầu sau restart, `/` mất 10,3 giây vì phải tính bản số liệu đầu tiên. Từ đó `/` và `/setup2` đều trả trong khoảng 0,006 giây.
+- **Ghi nhận ở máy local:** máy của Julius đang chạy một container `intraday-web-1` bản cũ chiếm cổng `127.0.0.1:8081`, còn SSH tunnel cũ chỉ nhận được `[::1]:8081`. Vì vậy mở `localhost:8081` có thể vào nhầm bản local. Tôi mở thêm tunnel ở cổng `127.0.0.1:18081` để xem đúng web trên VPS.
+
 ## 2026-10-19 — Trang web trả số liệu đã tính sẵn để không bị chậm
 
 Julius thấy trang bị lag. Đo trên VPS: trang Operations (`/`) mất khoảng 10,8 giây mỗi lần tải, và gần như toàn bộ là truy vấn SQL đếm lại toàn bộ lịch sử (`venue_health` 3,8 giây, nguồn dữ liệu ngoài 2,9 giây, `scheduler_runs` 1,8 giây). Trang `/setup2` mất khoảng 0,8 giây.
