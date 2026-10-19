@@ -14,6 +14,11 @@ Nguyên nhân: tín hiệu soak ZEC Perp short lúc 20Z ngày 18/10 vào ở đ�
   - chờ một nến xác nhận, cả 4 kiểu đã thử: tổng còn +16% đến +35%. Cách này loại được 60% lệnh thua, nhưng cũng loại 45% lệnh thắng, và những lệnh còn lại thì vào muộn.
 - **Có dấu hiệu nhưng chưa chắc:** short Perp vào bằng lệnh limit cao hơn giá đóng 0,25 ATR, chờ 1 nến. Tổng lên +43,5%, sụt giảm tối đa 5,8%; kết quả không đổi khi kiểm thứ tự khớp lệnh trên M15. Tuy vậy t chỉ khoảng 1,8. Với long Spot, cách này không có lợi. Chưa đổi gì; quyết định sau G6.
 - **Thiết kế nghiên cứu Setup-3** (bán khi giá hồi lên EMA200 hoặc kênh trên trong xu hướng giảm, kèm luật giao cắt EMA50/200 rồi chờ giá hồi về EMA200 theo bài Binance Square Julius gửi): luật, chia giai đoạn dò và kiểm, tiêu chí đạt và dự đoán đều được ghi trước khi chạy. Xem [setup3-ema200-retest-research.md](docs/setup3-ema200-retest-research.md).
+- **Kết quả Setup-3: không chiều nào đạt.** Code ở `intraday/replay_v2/setup3_study.py`, dữ liệu xuất bằng `scripts/setup3_export.py`; giai đoạn kiểm chạy đúng một lần với hash dữ liệu và cấu hình khớp lúc dò.
+  - **Short Perp ở vùng EMA200:** giai đoạn dò +0,85% mỗi lệnh (t 1,76), nhưng năm 2026 −0,10%. Khi bỏ ZEC từ tháng 10 thì còn −0,47%. Quy luật Julius thấy chỉ đúng trong tháng 10, không đúng cho cả năm.
+  - **Chạm kênh trên** cho kết quả âm. **Long Spot** âm ở cả 6 biến thể.
+  - **Luật trong bài Binance Square:** quá ít lệnh, chỉ 9–10 lệnh mỗi chiều trong năm 2026, và không dương ở cả hai giai đoạn.
+  - Không đề xuất soak.
 
 ## 2026-10-18 — Deploy `7b815f4` lên VPS (vòng học hằng tuần)
 

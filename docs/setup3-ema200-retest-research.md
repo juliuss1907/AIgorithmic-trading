@@ -1,6 +1,6 @@
 # Setup-3: bán khi giá hồi lên vùng cản trong xu hướng giảm (thiết kế nghiên cứu)
 
-Trạng thái: **thiết kế, đăng ký trước khi chạy** (2026-10-19). Chưa có dòng code nào chạy cho Setup-3.
+Trạng thái: **đã chạy ngày 2026-10-19, không có chiều nào đạt.** Phần thiết kế dưới đây được viết và commit (`0bafd61`) trước khi chạy; kết quả ở mục cuối.
 
 Đây là nghiên cứu cục bộ trên dữ liệu đã thấy. Dữ liệu nến được đọc từ database VPS ở chế độ `mode=ro`. Nghiên cứu không đụng tới runtime, active set, ADR-007, soak hay Jev, và không gọi model.
 
@@ -156,6 +156,65 @@ Mỗi chiều được xét riêng. Một chiều **đạt** nếu đủ cả 6 
 3. Chạy phần dò, ghi lại biến thể được chọn kèm hash của cấu hình, sau đó mới chạy phần kiểm.
 4. Ghi kết quả vào mục "Kết quả" dưới đây và vào CHANGELOG.
 
-## Kết quả
+## Kết quả (2026-10-19)
 
-Chưa chạy.
+**Code và dữ liệu:**
+- Code: `intraday/replay_v2/setup3_study.py`, test ở `tests/test_setup3_study.py` (22 test).
+- Dữ liệu: xuất bằng `scripts/setup3_export.py` lúc 07:22Z, gồm các nến tới nến H4 mở lúc 04:00Z ngày 19/10.
+- Hash dữ liệu: `471e56db…2b8bd776`. Hash cấu hình: `7d5c2820…07fd03a5`.
+- Giai đoạn kiểm chỉ chạy được khi cả hai hash khớp với lúc dò, và đã chạy đúng một lần.
+
+**Những chỗ thiết kế chưa nói rõ, được quyết khi viết code (trước khi chạy):**
+- Nếu mức chốt lời đã nằm ở phía sau giá vào lệnh (ví dụ đáy kênh cao hơn giá khớp lệnh short), lệnh bị bỏ vì không còn khoảng để chốt lời.
+- Nếu giá mở cửa nhảy qua mức chốt lời, lệnh thoát ở giá mở.
+- HYPE Spot: chỉ báo được tính trên chuỗi giá có dùng giá Perp thay cho đoạn chưa có dữ liệu Spot. Setup-3 không dùng khối lượng nên việc này không ảnh hưởng. Tín hiệu chỉ được tính từ 2026-09-24, khi có dữ liệu Spot thật.
+- H-B: sau khi EMA50 cắt EMA200, chỉ lấy lần chạm EMA200 đầu tiên trong 30 nến, kể cả khi EMA50 cắt ngược lại trước đó. Đây đúng là luật như bài viết mô tả.
+- Mốc so sánh Setup-2 là bản mô phỏng danh mục slot ngày 19/10 (320 lệnh, tổng +39,3%). Bản này nằm ngoài repo; danh sách lệnh của nó được đưa vào làm input.
+
+**Giai đoạn dò** (lệnh vào trước 2026). Cách chọn đã đăng ký chọn được:
+- short Perp: `A:ema200-0.5atr:channel`;
+- long Spot: `A:channel:channel`, dù cả 6 biến thể Spot đều âm.
+
+| Short Perp, giai đoạn dò | Số lệnh | Tỉ lệ thắng | TB mỗi lệnh | t |
+|---|---|---|---|---|
+| Vùng EMA200 − 0,5 ATR, chốt ở đáy kênh | 108 | 39% | +0,85% | 1,76 |
+| Vùng EMA200 − 0,5 ATR, chốt 2R | 118 | 45% | +0,76% | 1,90 |
+| Vùng EMA200 − 1 ATR, chốt ở đáy kênh | 163 | 40% | +0,72% | 1,90 |
+| Vùng EMA200 − 1 ATR, chốt 2R | 178 | 41% | +0,54% | 1,67 |
+| Chạm kênh trên, chốt ở đáy kênh | 79 | 22% | −0,42% | −0,77 |
+| Chạm kênh trên, chốt 2R | 79 | 34% | −0,13% | −0,27 |
+| H-B (theo bài viết) | 14 | 36% | +1,05% | 1,06 |
+
+**Giai đoạn kiểm (2026) và tiêu chí:**
+
+| | H-A short Perp | H-A long Spot | H-B short Perp | H-B long Spot |
+|---|---|---|---|---|
+| Dò: số lệnh / TB mỗi lệnh / t | 108 / +0,85% / 1,76 | 47 / −0,24% / −0,33 | 14 / +1,05% / 1,06 | 11 / −0,69% / −1,18 |
+| Kiểm: số lệnh / TB mỗi lệnh | 62 / **−0,10%** | 29 / −1,03% | 9 / −0,29% | 10 / +4,20% |
+| Kiểm khi bỏ ZEC từ 1/10 | −0,47% | −1,03% | −0,63% | +4,20% |
+| Phí gấp đôi: dò / kiểm | +0,65% / −0,31% | −0,54% / −1,33% | +0,85% / −0,49% | −0,99% / +3,90% |
+| Số coin có lãi | 3 / 5 | 2 / 5 | 3 / 5 | 2 / 5 |
+| Tương quan theo tháng với Setup-2 | 0,07 | 0,47 | −0,21 | −0,17 |
+| Tiêu chí 1–6 | ✗ ✗ ✗ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ ✗ ✓ | ✗ thiếu mẫu ✗ ✓ ✗ ✓ | ✗ thiếu mẫu ✗ ✗ ✓ ✓ |
+| **Kết luận** | **Không đạt** | **Không đạt** | **Không đạt** | **Không đạt** |
+
+**Chi tiết của H-A short Perp, chiều có tín hiệu nhất:**
+- Theo năm: 2024 +0,37% (43 lệnh), 2025 +1,17% (65 lệnh), 2026 −0,10% (62 lệnh).
+- Lợi thế ở giai đoạn dò không còn ở năm 2026. Hai lệnh ZEC tháng 10/2026 có lãi; bỏ chúng đi thì phần kiểm còn −0,47%. Như vậy quy luật Julius thấy trên chart là có thật trong tháng 10, nhưng không đúng cho cả năm.
+- Theo cách thoát: chạm stop 107 lệnh (TB −2,74%), chạm chốt lời 49 lệnh (+6,16%), hết thời gian 14 lệnh (+5,45%).
+- Danh mục mô tả (rủi ro 1% mỗi lệnh): +21,8%, nhưng sụt giảm tối đa 20,6%.
+- Funding ±0,01% mỗi 8 giờ chỉ làm thay đổi khoảng ±0,05% mỗi lệnh.
+
+**H-B có tương quan âm với Setup-2:** danh mục H-B lãi +18,2% trong 14 tháng Setup-2 lỗ. Nhưng hai năm rưỡi chỉ có 44 lệnh, và mỗi chiều không chiều nào dương ở cả hai giai đoạn. Long Spot +4,20% ở giai đoạn kiểm chủ yếu đến từ ZEC: cộng dồn cả hai giai đoạn ZEC được +45,5%, còn NEAR và SOL đều lỗ.
+
+**Chấm các dự đoán:**
+
+| Dự đoán | Kết quả |
+|---|---|
+| H-B không đạt vì quá ít lệnh | Đúng. Mỗi chiều có 9–10 lệnh ở giai đoạn kiểm, dưới mức 20 |
+| H-A short có lãi nhỏ ở giai đoạn dò, khoảng +0,3% đến +0,8%, tỉ lệ thắng trên 45%, có thể chưa đạt t ≥ 2 | Gần đúng về mức lãi (+0,85%) và t (1,76). Sai về tỉ lệ thắng (39%) |
+| Chạm kênh trên (Z2) ít lệnh hơn nhưng tốt hơn mỗi lệnh | Sai: ít lệnh hơn nhưng âm (−0,42% và −0,13%) |
+| H-A long yếu hơn short | Đúng: cả 6 biến thể long đều âm |
+| Tương quan với Setup-2 thấp | Đúng: từ −0,21 tới 0,47 |
+
+**Kết luận:** không chiều nào đạt nên nghiên cứu dừng tại đây, đúng như đã đăng ký: không dò thêm biến thể trên giai đoạn kiểm. Setup-3 không được đề xuất soak.
