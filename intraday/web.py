@@ -26,6 +26,7 @@ from intraday.dashboard_read_model import (
 from intraday.operator_service import build_operator_snapshot
 from intraday.portfolio_coordinator import ParentPortfolioPolicy
 from intraday.portfolio_view import latest_parent_market_view
+from intraday.setup2_dashboard import build_setup2_dashboard
 from intraday.store import IntradayStore
 from intraday.asset_onboarding import AssetOnboarding
 from intraday.assets import spec_payload, ticker_symbol
@@ -48,6 +49,13 @@ def _vn_time(value) -> str:
         return "—"
     parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
     return parsed.astimezone(VIETNAM_TZ).strftime("%d/%m/%Y %H:%M:%S ICT")
+
+
+def _vn_short(value) -> str:
+    if value is None:
+        return "—"
+    parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+    return parsed.astimezone(VIETNAM_TZ).strftime("%d/%m %H:%M")
 
 
 def _duration(value) -> str:
@@ -121,6 +129,7 @@ def create_app(
     templates = Jinja2Templates(directory=ASSETS / "templates")
     templates.env.filters["vn_time"] = _vn_time
     templates.env.filters["duration"] = _duration
+    templates.env.filters["vn_short"] = _vn_short
     app.include_router(replay_router(resolve_report_dir(replay_report_dir), templates))
     app.include_router(confidence_router(store.database, resolve_report_dir(replay_report_dir)))
     app.mount("/static", StaticFiles(directory=ASSETS / "static"), name="static")
@@ -334,6 +343,18 @@ def create_app(
                 "operations": operations,
             },
         )
+
+    @app.get("/setup2", response_class=HTMLResponse)
+    def setup2_page(request: Request):
+        return templates.TemplateResponse(
+            request=request,
+            name="setup2.html",
+            context={"dashboard": build_setup2_dashboard(store, now=datetime.now(timezone.utc))},
+        )
+
+    @app.get("/api/setup2")
+    def setup2_snapshot():
+        return build_setup2_dashboard(store, now=datetime.now(timezone.utc))
 
     @app.get("/system-plan", response_class=HTMLResponse)
     def system_plan(request: Request):

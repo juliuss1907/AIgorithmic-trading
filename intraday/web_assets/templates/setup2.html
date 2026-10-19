@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta http-equiv="refresh" content="60">
+    <title>Setup-2 soak</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+  </head>
+  <body>
+    {% set d = dashboard %}
+    {% macro pct(value, digits=2) -%}
+      {%- if value is none -%}—{%- elif (value|float)|abs < 0.005 -%}0.00%{%- else -%}{{ ("%+." ~ digits ~ "f")|format(value|float) }}%{%- endif -%}
+    {%- endmacro %}
+    {% macro num(value) -%}{%- if value is none -%}—{%- else -%}{{ "%.6g"|format(value|float) }}{%- endif -%}{%- endmacro %}
+    {% macro route_name(route) -%}{{ route.split(':')[0]|replace('USDT', '') }} {{ route.split(':')[1]|capitalize }}{%- endmacro %}
+    <a class="skip-link" href="#main">Đi tới nội dung chính</a>
+    <header class="masthead operations-head">
+      <div>
+        <p class="eyebrow">ADR-007 · 5 coin · Spot long + Perp short · soak, không đặt lệnh</p>
+        <h1>Setup-2 soak</h1>
+      </div>
+      <div class="head-actions">
+        <nav aria-label="Điều hướng chính">
+          <a class="nav-link" href="/">Operations</a>
+          <a class="nav-link" href="/portfolio">Portfolio</a>
+          <a class="nav-link" href="/assets">Coin &amp; venues</a>
+        </nav>
+        <span class="system-state state-{{ 'soak_active' if d.status == 'ok' else 'degraded' }}">
+          <span aria-hidden="true"></span>{{ "Ổn định" if d.status == "ok" else "Cần chú ý" }}
+        </span>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="strip operations-strip" aria-label="Tóm tắt">
+        <article>
+          <h2>Worker</h2>
+          <strong>{% if d.health.age_seconds is none %}Chưa chạy{% elif d.health.age_seconds < 60 %}Vừa chạy{% else %}{{ d.health.age_seconds|duration }} trước{% endif %}</strong>
+          <small>Job gần nhất · {{ d.health.errors|sum(attribute='n') }} lỗi job trong 24 giờ</small>
+        </article>
+        <article>
+          <h2>Soak</h2>
+          {% set healthy = d.campaigns|selectattr('healthy')|list %}
+          <strong>{{ healthy|length }} / {{ d.campaigns|length }} route đạt</strong>
+          <small>Heartbeat ≥ 95% · đánh giá sớm nhất {% if d.campaigns %}{{ (d.campaigns|map(attribute='review_at')|max)|vn_time }}{% else %}—{% endif %}</small>
+        </article>
+        <article>
+          <h2>Tín hiệu</h2>
+          <strong>{{ d.signals|length }}</strong>
+          <small>{% if d.hour_score %}Cùng chiều giờ {{ d.hour_score.with_hours.signals }} · ngược chiều {{ d.hour_score.against_hours.signals }}{% else %}Chưa có{% endif %}</small>
+        </article>
+        <article>
+          <h2>Limit 0,25 ATR</h2>
+          {% set l = d.limit_entry %}
+          <strong>{% if l and l.mean_return_pct is not none %}{{ pct(l.mean_return_pct) }}{% else %}—{% endif %}</strong>
+          <small>{% if l %}Short Perp · khớp {{ l.filled }}/{{ l.signals }} · {{ l.n }} cặp đã đóng{% if l.standard_error_pct is not none %} · sai số {{ "%.2f"|format(l.standard_error_pct) }}{% endif %}{% else %}Chưa có tín hiệu{% endif %}</small>
+        </article>
+        <article>
+          <h2>Telegram</h2>
+          <strong>{{ d.notifications.pending }} chờ gửi</strong>
+          <small>{{ d.notifications.failing }} đang lỗi · nến kế tiếp đóng {{ d.next_bar_close|vn_time }}</small>
+        </article>
+      </section>
+
+      {% if d.attention %}
+      <p class="status-detail"><strong>Cần chú ý:</strong> {{ d.attention|join(" · ") }}</p>
+      {% endif %}
+
+      <section class="ledger" aria-labelledby="signals-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Từ {{ d.since|vn_time }} · kết quả là mô phỏng chưa trừ phí</p>
+            <h2 id="signals-heading">Tín hiệu</h2>
+          </div>
+          <small>Điểm giờ dương: các giờ sau tín hiệu thường đi cùng chiều lệnh</small>
+        </div>
+        {% if d.signals %}
+        <div class="table-wrap" tabindex="0" aria-label="Các tín hiệu Setup-2">
+          <table>
+            <thead><tr><th>Nến đóng</th><th>Route</th><th>Chiều</th><th>Giá</th><th>Jev</th><th>Điểm giờ</th><th>Vào ngay</th><th>Limit 0,25 ATR</th></tr></thead>
+            <tbody>
+              {% for s in d.signals %}
+              <tr>
+                <td><time datetime="{{ s.bar_close }}" title="{{ s.bar_close|vn_time }}">{{ s.bar_close|vn_short }}</time></td>
+                <td><strong>{{ route_name(s.route) }}</strong></td>
+                <td>{{ "Long" if s.side > 0 else "Short" }}</td>
+                <td>{{ num(s.close) }}</td>
+                <td>{% if s.jev %}{{ s.jev.choice }} {{ "%.2f"|format(s.jev.confidence) if s.jev.confidence is not none }} · {{ {"agree": "đồng ý", "oppose": "phản đối", "neutral": "trung lập"}[s.jev.stance] }}{% else %}{{ s.jev_status or "—" }}{% endif %}</td>
+                <td>{{ pct(s.hour_score_pct) }}</td>
+                <td>{{ {"stop": "Chạm stop", "donchian_exit": "Thoát kênh", "open": "Đang mở"}.get(s.simulated.status, s.simulated.status) }} {{ pct(s.simulated.gross_return_pct) }}</td>
+                <td>
+                  {% if s.limit is none %}—
+                  {% elif s.limit.status == "filled" %}Khớp {{ num(s.limit.fill) }} · {{ pct(s.limit.outcome.gross_return_pct) if s.limit.outcome else "—" }}{% if s.limit.diff_pct is not none %} ({{ pct(s.limit.diff_pct) }}){% endif %}
+                  {% else %}{{ {"unfilled": "Không khớp", "pending": "Đang chờ", "no_data": "Thiếu M15"}.get(s.limit.status, s.limit.status) }}{% if s.limit.diff_pct is not none %} ({{ pct(s.limit.diff_pct) }}){% endif %}
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty" role="status"><strong>Chưa có tín hiệu.</strong><p>Tín hiệu xuất hiện khi một nến 4h phá kênh 25 nến và đạt mọi bộ lọc.</p></div>
+        {% endif %}
+      </section>
+
+      <section class="ledger" aria-labelledby="soak-heading">
+        <div class="section-head">
+          <div><p class="eyebrow">Mỗi route cần heartbeat ≥ 95% trong 14 ngày</p><h2 id="soak-heading">Soak từng route</h2></div>
+          <small>Cập nhật {{ d.generated_at|vn_time }} · tự làm mới mỗi phút</small>
+        </div>
+        <div class="table-wrap" tabindex="0" aria-label="Soak từng route">
+          <table>
+            <thead><tr><th>Route</th><th>Bắt đầu</th><th>Heartbeat</th><th>Nến</th><th>Jev lỗi</th><th>Nến cuối</th><th>Đánh giá sớm nhất</th><th>Tiến độ</th></tr></thead>
+            <tbody>
+              {% for c in d.campaigns %}
+              <tr>
+                <td><strong>{{ route_name(c.route) }}</strong></td>
+                <td>{{ c.started_at|vn_short }}</td>
+                <td><span class="outcome {{ 'outcome-observed' if c.healthy }}">{{ "%.1f"|format(c.coverage_pct) }}%</span></td>
+                <td>{{ c.bars }}</td>
+                <td>{{ c.jev_errors }}</td>
+                <td>{{ c.last_bar|vn_short }}</td>
+                <td>{{ c.review_at|vn_short }}</td>
+                <td>{{ "%.0f"|format(c.progress_pct) }}%</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="ledger" aria-labelledby="bars-heading">
+        <div class="section-head">
+          <div><p class="eyebrow">Nến 4h đã đóng gần nhất của mỗi route</p><h2 id="bars-heading">Trạng thái luật</h2></div>
+          <small>Breakout bị lọc: đã phá kênh nhưng chưa đạt mọi bộ lọc</small>
+        </div>
+        <div class="table-wrap" tabindex="0" aria-label="Trạng thái luật">
+          <table>
+            <thead><tr><th>Route</th><th>Nến đóng</th><th>Giá</th><th>Trạng thái</th><th>Bộ lọc chưa đạt</th></tr></thead>
+            <tbody>
+              {% for b in d.latest_bars %}
+              <tr>
+                <td><strong>{{ route_name(b.route) }}</strong></td>
+                <td>{{ b.bar_close|vn_short }}</td>
+                <td>{{ num(b.close) }}</td>
+                <td>{% if b.entry %}<span class="outcome outcome-observed">Tín hiệu</span>{% elif b.breakout %}Breakout bị lọc{% elif b.exit %}Thoát kênh{% else %}—{% endif %}</td>
+                <td>{{ (b.failed_filters + b.blockers)|join(", ") or "—" }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="ledger" aria-labelledby="ops-heading">
+        <div class="section-head">
+          <div><p class="eyebrow">24 giờ gần nhất</p><h2 id="ops-heading">Vận hành</h2></div>
+          <small>Chi phí model 24 giờ: {{ "%.3f"|format(d.model_cost_24h_usd) }} USD · Jev từ đầu soak: {% for k, v in d.jev_statuses.items() %}{{ k }} {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</small>
+        </div>
+        {% if d.health.errors %}
+        <div class="table-wrap" tabindex="0" aria-label="Job lỗi trong 24 giờ">
+          <table>
+            <thead><tr><th>Job</th><th>Lỗi</th><th>Số lần</th><th>Lần cuối</th></tr></thead>
+            <tbody>
+              {% for e in d.health.errors %}
+              <tr><td><code>{{ e.job_name }}</code></td><td>{{ e.error_code }}</td><td>{{ e.n }}</td><td>{{ e.last|vn_short }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty compact-empty" role="status"><strong>Không có job lỗi trong 24 giờ.</strong></div>
+        {% endif %}
+        <h3 class="status-line">Tin Telegram gần nhất</h3>
+        <div class="table-wrap" tabindex="0" aria-label="Tin Telegram gần nhất">
+          <table>
+            <thead><tr><th>Tạo lúc</th><th>Loại</th><th>Trạng thái</th><th>Nội dung</th></tr></thead>
+            <tbody>
+              {% for n in d.notifications.recent %}
+              <tr><td>{{ n.created_at|vn_short }}</td><td>{{ n.kind }}</td><td>{{ n.status }}</td><td>{{ n.title }}</td></tr>
+              {% else %}
+              <tr><td colspan="4" class="muted">Chưa có tin.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

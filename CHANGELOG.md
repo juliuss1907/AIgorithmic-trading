@@ -4,6 +4,25 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Trang theo dõi `/setup2` trên web VPS
+
+Julius chọn đặt dashboard trên web app sẵn có thay vì artifact. Trang chỉ đọc dữ liệu, tự làm mới mỗi phút, và có link từ trang Operations. Đọc dữ liệu nằm ở `intraday/setup2_dashboard.py`; route `/setup2` và `/api/setup2` nằm trong `intraday/web.py`.
+
+- **Tóm tắt đầu trang:**
+  - **Worker:** job gần nhất chạy cách đây bao lâu, số job lỗi trong 24 giờ.
+  - **Soak:** số route có heartbeat ≥ 95%, ngày được đánh giá sớm nhất.
+  - **Tín hiệu:** số tín hiệu, chia theo cùng chiều hay ngược chiều khung giờ.
+  - **Limit 0,25 ATR:** chênh lệch trung bình so với vào ngay.
+  - **Telegram:** số tin chờ gửi và số tin đang lỗi.
+- **Bảng:**
+  - **Tín hiệu:** Jev đồng ý hay phản đối, điểm khung giờ, kết quả mô phỏng nếu vào ngay, và kết quả lệnh limit.
+  - **Soak từng route.**
+  - **Trạng thái luật** ở nến 4h vừa đóng: tín hiệu, breakout bị lọc, thoát kênh, kèm các bộ lọc chưa đạt.
+  - **Job lỗi trong 24 giờ.**
+  - **Tin Telegram gần nhất.**
+- **Phạm vi:** chỉ hiện các coin trong active set, nên campaign BTC Spot cũ không hiện. Kết quả của tín hiệu dùng chung phần mô phỏng với vòng học hằng tuần, nên hai nơi luôn khớp số.
+- **Thử trên database VPS** (chỉ đọc, nạp code tạm thời): dựng trang mất 0,8 giây. Bản đầu mất 3,3 giây vì đọc toàn bộ khoảng 90 nghìn câu trả lời Jev; bản này chỉ truy vấn đúng câu trả lời đi kèm từng tín hiệu.
+
 ## 2026-10-19 — Vòng học theo dõi lệnh limit 0,25 ATR cho short Perp
 
 Julius chốt: chỉ giữ cách vào lệnh bằng limit 0,25 ATR để theo dõi, các phép kiểm còn lại coi như đã xong. Runtime vẫn vào lệnh ngay như cũ. Bộ câu hỏi đổi thành `learning-questions-v4`.
