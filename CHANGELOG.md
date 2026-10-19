@@ -4,6 +4,23 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Deploy `9462520` lên VPS (theo dõi V4, chỉ restart web)
+
+Julius duyệt push và deploy. Push `5054708..9462520`, deploy lúc 12:58–13:05Z.
+
+- **Trước khi đổi code:**
+  - image cũ được gắn tag `rollback-5054708-20261019`;
+  - backup `intraday-20261019T125806871329Z.sqlite3`, kiểm tra `ok`.
+- **Sự cố khi deploy:** lần `git fetch` đầu tiên chưa lấy được commit mới, nên lệnh `checkout` lỗi. Script vẫn chạy tiếp, build lại code cũ `5054708` và restart web, tức web chạy lại đúng bản cũ.
+  - Sau đó fetch lại theo tên nhánh, checkout `9462520`, build lại và restart web lần nữa.
+  - Lần sau script deploy phải dừng ngay khi checkout lỗi.
+- **Image mới:** worker `db564bb489a7`, web `3188c9025ce4`, admin `60a8812ae7e7`.
+- **Kết quả:**
+  - chỉ restart web, healthz 200;
+  - worker không bị restart (vẫn chạy từ 08:32:57Z, `RestartCount` 0);
+  - trang `/setup2` có mục "Biến thể V4", hiện "thêm 0, bỏ 0".
+- **Thời gian tải:** lần đầu sau restart, `/setup2` mất 3,1 giây (bản trước 0,3 giây), vì mục V4 đọc lại quan sát của mọi route. Các lần sau 0,01 giây, nhờ bản số liệu được giữ sẵn trong bộ nhớ.
+
 ## 2026-10-19 — Theo dõi shadow biến thể V4 (ADX dốc 3 nến)
 
 Julius quyết định theo dõi V4. Đây là biến thể trượt sát nhất trong [nghiên cứu bộ lọc nhanh](docs/setup2-fast-filter-research.md). Luật đang chạy giữ nguyên, V4 chỉ được ghi lại để so sánh.
