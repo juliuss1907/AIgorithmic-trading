@@ -166,7 +166,7 @@ def build_setup2_dashboard(store, *, now: datetime) -> dict:
 # --- Price chart ---------------------------------------------------------------------------------------------
 
 CHART_BARS = 120                             # H4 bars shown: 20 days
-CHART_W, PRICE_H, VOLUME_H, GAP, AXIS_W, AXIS_H = 1000, 340, 60, 12, 74, 22
+CHART_W, PRICE_H, VOLUME_H, GAP, AXIS_W, AXIS_H = 1000, 340, 60, 12, 84, 26
 CHANNEL = setup2.ENTRY_WINDOWS["setup2_slots_v1"]
 STOP_BARS = 6                                # stop line length when the simulated exit is not in view
 

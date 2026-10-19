@@ -95,7 +95,7 @@
             <desc id="chart-desc">Nến 4h của {{ route_name(chart.route) }}, giá đóng mới nhất {{ chart.last.label }}.</desc>
             {% for t in chart.y_ticks %}
             <line class="grid" x1="0" x2="{{ chart.plot_w }}" y1="{{ t.y }}" y2="{{ t.y }}"/>
-            <text class="axis" x="{{ chart.plot_w + 6 }}" y="{{ t.y + 4 }}">{{ t.label }}</text>
+            <text class="axis" x="{{ chart.plot_w + 8 }}" y="{{ t.y + 5 }}">{{ t.label }}</text>
             {% endfor %}
             {% for t in chart.x_ticks %}
             <line class="grid" x1="{{ t.x }}" x2="{{ t.x }}" y1="0" y2="{{ chart.price_h }}"/>
@@ -117,14 +117,14 @@
             <g class="mark mark-{{ 'long' if m.side > 0 else 'short' }}">
               <title>{{ m.title }}</title>
               <line class="stop" x1="{{ m.x }}" x2="{{ m.stop_x2 }}" y1="{{ m.stop_y }}" y2="{{ m.stop_y }}"/>
-              <text class="stop-label" x="{{ m.stop_x2 + 4 }}" y="{{ m.stop_y + 4 }}">{{ m.stop_label }}</text>
+              <text class="stop-label" x="{{ m.stop_x2 + 4 }}" y="{{ m.stop_y + 5 }}">{{ m.stop_label }}</text>
               {% if m.level_y is not none %}<line class="limit" x1="{{ m.x }}" x2="{{ m.level_x2 }}" y1="{{ m.level_y }}" y2="{{ m.level_y }}"/>{% endif %}
               <polygon points="{{ m.x }},{{ m.y }} {{ m.x - 7 }},{{ m.tip_y }} {{ m.x + 7 }},{{ m.tip_y }}"/>
             </g>
             {% endfor %}
             <line class="last-price {{ 'up' if chart.last.up else 'down' }}" x1="0" x2="{{ chart.plot_w }}" y1="{{ chart.last.y }}" y2="{{ chart.last.y }}"/>
-            <rect class="last-tag {{ 'up' if chart.last.up else 'down' }}" x="{{ chart.plot_w + 2 }}" y="{{ chart.last.y - 10 }}" width="{{ chart.width - chart.plot_w - 2 }}" height="20" rx="3"/>
-            <text class="last-label" x="{{ chart.plot_w + 6 }}" y="{{ chart.last.y + 4 }}">{{ chart.last.label }}</text>
+            <rect class="last-tag {{ 'up' if chart.last.up else 'down' }}" x="{{ chart.plot_w + 2 }}" y="{{ chart.last.y - 12 }}" width="{{ chart.width - chart.plot_w - 2 }}" height="24" rx="3"/>
+            <text class="last-label" x="{{ chart.plot_w + 6 }}" y="{{ chart.last.y + 5 }}">{{ chart.last.label }}</text>
           </svg>
         </div>
         {% else %}
