@@ -4,6 +4,12 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Deploy `17e87dc` lên VPS (chart giá, chỉ restart web)
+
+- Image cũ được gắn tag `rollback-bbd320f-20261019`. Image mới: worker `056eda55a1de`, web `49588d2e0aa2`, admin `6a40c6a18101`.
+- Chỉ restart web, healthz 200. Worker không bị restart (vẫn chạy từ 08:32:57Z, `RestartCount` 0).
+- **Thời gian tải:** lần đầu sau restart, `/setup2` mất 1,2 giây; các lần sau 0,01 giây. Chuyển sang một route khác lần đầu mất 0,25 giây. Trang `/` vẫn mất 10,7 giây ở lần đầu sau restart, vì đó là lúc tính bản số liệu đầu tiên.
+
 ## 2026-10-19 — Chart giá trên trang `/setup2`
 
 Julius muốn có chart giá trên web. Chart được vẽ bằng SVG ngay trên server, không thêm thư viện hay script ngoài, giống cách trang Replay vẽ chart equity.
