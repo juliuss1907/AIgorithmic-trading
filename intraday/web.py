@@ -28,7 +28,7 @@ from intraday.dashboard_read_model import (
 from intraday.operator_service import build_operator_snapshot
 from intraday.portfolio_coordinator import ParentPortfolioPolicy
 from intraday.portfolio_view import latest_parent_market_view
-from intraday.setup2_dashboard import build_setup2_dashboard
+from intraday.setup2_dashboard import build_setup2_dashboard, price_chart
 from intraday.store import IntradayStore
 from intraday.asset_onboarding import AssetOnboarding
 from intraday.assets import spec_payload, ticker_symbol
@@ -388,12 +388,25 @@ def create_app(
             },
         )
 
+    charts: dict[str, CachedSnapshot] = {}
+
     @app.get("/setup2", response_class=HTMLResponse)
-    def setup2_page(request: Request):
+    def setup2_page(request: Request, route: str | None = Query(default=None, max_length=32)):
+        dashboard = setup2_view.get()
+        routes = [c["route"] for c in dashboard["campaigns"]]
+        selected = route if route in routes else next(
+            (s["route"] for s in dashboard["signals"]), routes[0] if routes else None)
+        chart = None
+        if selected is not None:
+            if selected not in charts:
+                charts[selected] = CachedSnapshot(
+                    lambda now, chosen=selected: price_chart(store, chosen, setup2_view.get()["signals"], now=now),
+                    ttl_seconds=60)
+            chart = charts[selected].get()
         return templates.TemplateResponse(
             request=request,
             name="setup2.html",
-            context={"dashboard": setup2_view.get()},
+            context={"dashboard": dashboard, "routes": routes, "selected": selected, "chart": chart},
         )
 
     @app.get("/api/setup2")

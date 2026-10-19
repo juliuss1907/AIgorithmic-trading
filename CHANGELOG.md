@@ -4,6 +4,17 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Chart giá trên trang `/setup2`
+
+Julius muốn có chart giá trên web. Chart được vẽ bằng SVG ngay trên server, không thêm thư viện hay script ngoài, giống cách trang Replay vẽ chart equity.
+
+- **Nội dung chart:** nến 4h của 20 ngày gần nhất, mỗi route một tab (mặc định là route có tín hiệu gần nhất). Trên chart có:
+  - EMA50, EMA200 và kênh Donchian 25 nến, tính giống hệt luật Setup-2: `indicator_series` và đỉnh/đáy của 25 nến trước;
+  - khối lượng;
+  - giá đóng mới nhất.
+- **Tín hiệu trên chart:** dấu tam giác (short nằm trên đỉnh nến, long dưới đáy nến), đường stop ban đầu (`setup2.initial_stop`, kéo tới lúc mô phỏng thoát lệnh) và mức limit 0,25 ATR. Rê chuột lên nến hay tín hiệu sẽ thấy OHLC và giờ.
+- **Tốc độ:** mỗi route dựng mất khoảng 0,25 giây trên database VPS (chỉ đọc). Chart được giữ sẵn trong bộ nhớ 60 giây như các phần còn lại của trang.
+
 ## 2026-10-19 — Deploy `bbd320f` lên VPS (chỉ restart web)
 
 Julius duyệt push và deploy. Từ `fba4e55` lên `bbd320f`; so với bản trước chỉ `intraday/web.py` thay đổi.

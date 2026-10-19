@@ -91,3 +91,22 @@ def test_cached_snapshot_serves_a_stale_copy_while_rebuilding_in_the_background(
             break
         time.sleep(0.01)
     assert snapshot.get() == 2 and len(builds) == 2
+
+
+def test_price_chart_draws_candles_rule_lines_and_the_signal_stop(tmp_path):
+    from intraday.setup2_dashboard import CHANNEL, price_chart
+    store = IntradayStore(tmp_path/"chart.sqlite3")
+    setup2_store.install(store)
+    first = END-60*H4
+    rows = [kline(first+k*H4, 100+k*0.1, 101+k*0.1, 99+k*0.1, 100.5+k*0.1) for k in range(60)]
+    setup2_store.record_candles(store, "ETHUSDT", "perp", "4h", rows)
+    signal_close = first+50*H4
+    observe(store, "ETHUSDT", "perp", signal_close, side=-1, close=104, entry=True, donchian=True)
+
+    chart = price_chart(store, "ETHUSDT:perp", now=END, bars=30)
+
+    assert len(chart["candles"]) == 30 and chart["first_at"] == (first+30*H4).isoformat()
+    assert chart["legend"]["upper"] == pytest.approx(max(101+k*0.1 for k in range(60-CHANNEL-1, 59)))
+    [mark] = chart["marks"]
+    assert mark["side"] == -1 and mark["stop_label"] == "109.2"        # the 5% cap (109.2) is tighter than 3 ATR (110)
+    assert price_chart(store, "NEARUSDT:perp", now=END)["candles"] == []

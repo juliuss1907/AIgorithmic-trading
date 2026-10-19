@@ -69,6 +69,69 @@
       <p class="status-detail"><strong>Cần chú ý:</strong> {{ d.attention|join(" · ") }}</p>
       {% endif %}
 
+      <section class="ledger" id="chart" aria-labelledby="chart-heading">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Nến 4h · 20 ngày · đường luật Setup-2</p>
+            <h2 id="chart-heading">Chart giá</h2>
+          </div>
+          {% if chart and chart.candles %}<small>{{ chart.first_at|vn_short }} → {{ chart.last_at|vn_short }} (giờ mở nến)</small>{% endif %}
+        </div>
+        <nav class="route-tabs" aria-label="Chọn route">
+          {% for r in routes %}
+          <a href="?route={{ r }}#chart" {% if r == selected %}aria-current="page"{% endif %}>{{ route_name(r) }}</a>
+          {% endfor %}
+        </nav>
+        {% if chart and chart.candles %}
+        <ul class="chart-legend">
+          <li><span class="key key-ema50"></span>EMA50 {{ num(chart.legend.ema50) }}</li>
+          <li><span class="key key-ema200"></span>EMA200 {{ num(chart.legend.ema200) }}</li>
+          <li><span class="key key-channel"></span>Kênh 25 nến {{ num(chart.legend.lower) }} – {{ num(chart.legend.upper) }}</li>
+          <li><span class="key key-stop"></span>Stop ban đầu</li>
+          <li><span class="key key-limit"></span>Limit 0,25 ATR</li>
+        </ul>
+        <div class="chart-wrap" tabindex="0">
+          <svg class="price-chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}" role="img" aria-labelledby="chart-heading chart-desc">
+            <desc id="chart-desc">Nến 4h của {{ route_name(chart.route) }}, giá đóng mới nhất {{ chart.last.label }}.</desc>
+            {% for t in chart.y_ticks %}
+            <line class="grid" x1="0" x2="{{ chart.plot_w }}" y1="{{ t.y }}" y2="{{ t.y }}"/>
+            <text class="axis" x="{{ chart.plot_w + 6 }}" y="{{ t.y + 4 }}">{{ t.label }}</text>
+            {% endfor %}
+            {% for t in chart.x_ticks %}
+            <line class="grid" x1="{{ t.x }}" x2="{{ t.x }}" y1="0" y2="{{ chart.price_h }}"/>
+            <text class="axis" x="{{ t.x }}" y="{{ chart.height - 6 }}" text-anchor="middle">{{ t.at|vn_short|truncate(5, True, '') }}</text>
+            {% endfor %}
+            <polyline class="channel" points="{{ chart.upper }}"/>
+            <polyline class="channel" points="{{ chart.lower }}"/>
+            <polyline class="ema200" points="{{ chart.ema200 }}"/>
+            <polyline class="ema50" points="{{ chart.ema50 }}"/>
+            {% for c in chart.candles %}
+            <g class="{{ 'up' if c.up else 'down' }}">
+              <title>{{ c.title }}</title>
+              <rect class="volume" x="{{ c.body_x }}" y="{{ c.vol_y }}" width="{{ c.body_w }}" height="{{ c.vol_h }}"/>
+              <line class="wick" x1="{{ c.x }}" x2="{{ c.x }}" y1="{{ c.wick_top }}" y2="{{ c.wick_bottom }}"/>
+              <rect class="body" x="{{ c.body_x }}" y="{{ c.body_y }}" width="{{ c.body_w }}" height="{{ c.body_h }}"/>
+            </g>
+            {% endfor %}
+            {% for m in chart.marks %}
+            <g class="mark mark-{{ 'long' if m.side > 0 else 'short' }}">
+              <title>{{ m.title }}</title>
+              <line class="stop" x1="{{ m.x }}" x2="{{ m.stop_x2 }}" y1="{{ m.stop_y }}" y2="{{ m.stop_y }}"/>
+              <text class="stop-label" x="{{ m.stop_x2 + 4 }}" y="{{ m.stop_y + 4 }}">{{ m.stop_label }}</text>
+              {% if m.level_y is not none %}<line class="limit" x1="{{ m.x }}" x2="{{ m.level_x2 }}" y1="{{ m.level_y }}" y2="{{ m.level_y }}"/>{% endif %}
+              <polygon points="{{ m.x }},{{ m.y }} {{ m.x - 7 }},{{ m.tip_y }} {{ m.x + 7 }},{{ m.tip_y }}"/>
+            </g>
+            {% endfor %}
+            <line class="last-price {{ 'up' if chart.last.up else 'down' }}" x1="0" x2="{{ chart.plot_w }}" y1="{{ chart.last.y }}" y2="{{ chart.last.y }}"/>
+            <rect class="last-tag {{ 'up' if chart.last.up else 'down' }}" x="{{ chart.plot_w + 2 }}" y="{{ chart.last.y - 10 }}" width="{{ chart.width - chart.plot_w - 2 }}" height="20" rx="3"/>
+            <text class="last-label" x="{{ chart.plot_w + 6 }}" y="{{ chart.last.y + 4 }}">{{ chart.last.label }}</text>
+          </svg>
+        </div>
+        {% else %}
+        <div class="empty" role="status"><strong>Chưa có dữ liệu nến cho route này.</strong></div>
+        {% endif %}
+      </section>
+
       <section class="ledger" aria-labelledby="signals-heading">
         <div class="section-head">
           <div>
