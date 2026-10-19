@@ -4,6 +4,17 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Kiểm cách vào lệnh của Setup-2; đăng ký thiết kế nghiên cứu Setup-3
+
+Nguyên nhân: tín hiệu soak ZEC Perp short lúc 20Z ngày 18/10 vào ở đáy kênh rồi chạm stop sau khoảng 2 giờ (−5,2% nếu là lệnh thật). Các phép kiểm dưới đây chỉ đọc dữ liệu VPS, script nằm ngoài repo, và runtime không đổi.
+
+- **Setup-2 short Perp gần như hoà sau phí.** Danh mục slot giống runtime, từ 4/2024 tới nay: tổng +39,3%, trong đó Perp +10,5% và Spot +28,9%; mức sụt giảm tối đa 7,8%.
+- **Không có tác dụng:**
+  - lọc theo khoảng cách tới EMA50 hay EMA200 lúc có tín hiệu;
+  - chờ một nến xác nhận, cả 4 kiểu đã thử: tổng còn +16% đến +35%. Cách này loại được 60% lệnh thua, nhưng cũng loại 45% lệnh thắng, và những lệnh còn lại thì vào muộn.
+- **Có dấu hiệu nhưng chưa chắc:** short Perp vào bằng lệnh limit cao hơn giá đóng 0,25 ATR, chờ 1 nến. Tổng lên +43,5%, sụt giảm tối đa 5,8%; kết quả không đổi khi kiểm thứ tự khớp lệnh trên M15. Tuy vậy t chỉ khoảng 1,8. Với long Spot, cách này không có lợi. Chưa đổi gì; quyết định sau G6.
+- **Thiết kế nghiên cứu Setup-3** (bán khi giá hồi lên EMA200 hoặc kênh trên trong xu hướng giảm, kèm luật giao cắt EMA50/200 rồi chờ giá hồi về EMA200 theo bài Binance Square Julius gửi): luật, chia giai đoạn dò và kiểm, tiêu chí đạt và dự đoán đều được ghi trước khi chạy. Xem [setup3-ema200-retest-research.md](docs/setup3-ema200-retest-research.md).
+
 ## 2026-10-18 — Deploy `7b815f4` lên VPS (vòng học hằng tuần)
 
 Julius duyệt deploy. Làm theo [runbook](docs/runbooks/deploy-a88825b.md), từ `d517251` lên `7b815f4`. Schema, active set và `.env.intraday` không đổi. Job học hằng tuần **chưa** được lên lịch, và journal Demo **chưa** được mount: cả hai chờ sau G6, mỗi việc Julius duyệt riêng.
