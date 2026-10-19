@@ -4,6 +4,12 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Deploy `5054708` lên VPS (chart rõ hơn, chỉ restart web)
+
+- Image cũ được gắn tag `rollback-17e87dc-20261019`. Image mới: worker `3622ab59715b`, web `840f6ec96c79`, admin `22cd9bdf3d64`.
+- Chỉ restart web, healthz 200, `app.css` mới đã có trên VPS. Worker không bị restart (vẫn chạy từ 08:32:57Z, `RestartCount` 0).
+- **Thời gian tải:** lần đầu sau restart, `/setup2` mất 0,30 giây; các lần sau 0,01 giây. Trang `/` mất 10,9 giây ở lần đầu.
+
 ## 2026-10-19 — Deploy `17e87dc` lên VPS (chart giá, chỉ restart web)
 
 - Image cũ được gắn tag `rollback-bbd320f-20261019`. Image mới: worker `056eda55a1de`, web `49588d2e0aa2`, admin `6a40c6a18101`.
