@@ -4,6 +4,21 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Thiết kế nghiên cứu bộ lọc nhanh cho Setup-2 (chưa chạy)
+
+Julius thấy Setup-2 bắt xu hướng chậm và đề xuất 5 hướng. Thiết kế được viết và commit trước khi chạy, chi tiết ở [docs/setup2-fast-filter-research.md](docs/setup2-fast-filter-research.md).
+
+- **Không thử lại:** vào lại khi giá hồi về EMA, vì Setup-3 đã không đạt và chờ 1 nến xác nhận làm kết quả tệ hơn.
+- **Năm biến thể:**
+  - V1: breakout luôn vào, 0,5x khi thiếu bộ lọc;
+  - V2: vào hai tầng, thêm 0,5x khi EMA/ADX/DMI xác nhận trong 24 giờ;
+  - V3: EMA20/50 thay EMA50/200;
+  - V4: ADX cao hơn 3 nến trước, bỏ ngưỡng 20;
+  - V5: thân nến breakout ≥ 1 ATR thay bộ lọc EMA50 và ADX/DMI.
+- **Cách chạy:** trên danh mục slot của ADR-007, với lệnh thị trường và với limit 0,25 ATR cho Perp.
+- **Tiêu chí đạt:** phải hơn luật hiện tại về lợi nhuận và lợi nhuận/sụt giảm ở cả hai cách vào lệnh, sụt giảm ≤ 10%, hơn ở cả hai nửa dữ liệu, và vẫn hơn khi chi phí gấp đôi.
+- Đạt cũng chỉ dẫn tới đề xuất theo dõi shadow, không đổi luật đang chạy.
+
 ## 2026-10-19 — Deploy `5054708` lên VPS (chart rõ hơn, chỉ restart web)
 
 - Image cũ được gắn tag `rollback-17e87dc-20261019`. Image mới: worker `3622ab59715b`, web `840f6ec96c79`, admin `22cd9bdf3d64`.
