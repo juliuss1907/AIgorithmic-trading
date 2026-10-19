@@ -4,6 +4,26 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Deploy `fba4e55` lên VPS (trang `/setup2`, theo dõi limit 0,25 ATR)
+
+Julius duyệt push và deploy. Làm theo [runbook](docs/runbooks/deploy-a88825b.md), từ `7b815f4` lên `fba4e55`, sau nến 08Z. Schema, active set và `.env.intraday` không đổi. Vòng học hằng tuần vẫn **chưa** được lên lịch.
+
+- **Trước deploy (08:29Z):**
+  - `doctor` ok; chế độ paper, `execution_enabled: false`.
+  - Worker chạy liên tục từ 12:24Z ngày 18/10, `RestartCount` 0, qua lần đổi ngày 00:00Z mà không bị khởi động lại.
+  - Heartbeat: 9 route có nến tới 08Z. ETH Perp và NEAR Spot 96,8%, các route còn lại 100%; HYPE Spot 0% là lỗi đã biết.
+  - Image cũ được gắn tag `rollback-7b815f4-20261019`: worker `62bcab6bfd1d`, web `7be8e6f913d2`, admin `40534650d642`.
+- **Sao lưu:** `intraday-20261019T082948123359Z.sqlite3`, 2,83 GB, SHA-256 `551973c1…2b8c98`. Lệnh verify trả `status` ok và `integrity` ok.
+- **Deploy:**
+  - Build: worker `5f7cd99fd738`, web `13af88f65c13`, admin `5b7f02a73682`.
+  - Web lên trước (healthz 200), sau đó worker lúc 08:32:57Z (`RestartCount` 0).
+- **Sau deploy:**
+  - `doctor` ok; vẫn chế độ paper, `execution_enabled: false`; active set `c3d57eda…` seq 1. Log worker không có lỗi.
+  - `/setup2` trả 200. Lần tải đầu mất 5,3 giây (lúc server vừa khởi động), các lần sau khoảng 0,8 giây.
+  - **Ghi nhận thêm:** trang `/` (Operations) có sẵn từ trước mất khoảng 10,5 giây mỗi lần tải. Lần deploy này chỉ thêm một link vào trang đó, không đổi phần đọc dữ liệu của nó.
+- **Lùi lại nếu cần:** `docker tag intraday-<svc>:rollback-7b815f4-20261019 intraday-<svc>:latest`, rồi `git checkout --detach 7b815f4`. Khởi động lại web trước, worker sau.
+- **Còn kiểm:** sau nến 12Z, cả 9 route phải có nến mới.
+
 ## 2026-10-19 — Trang theo dõi `/setup2` trên web VPS
 
 Julius chọn đặt dashboard trên web app sẵn có thay vì artifact. Trang chỉ đọc dữ liệu, tự làm mới mỗi phút, và có link từ trang Operations. Đọc dữ liệu nằm ở `intraday/setup2_dashboard.py`; route `/setup2` và `/api/setup2` nằm trong `intraday/web.py`.
