@@ -4,6 +4,19 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Vòng học theo dõi lệnh limit 0,25 ATR cho short Perp
+
+Julius chốt: chỉ giữ cách vào lệnh bằng limit 0,25 ATR để theo dõi, các phép kiểm còn lại coi như đã xong. Runtime vẫn vào lệnh ngay như cũ. Bộ câu hỏi đổi thành `learning-questions-v4`.
+
+- **Cách tính:** với mỗi tín hiệu short Perp của Setup-2 từ đầu soak, vòng học tính hai kết quả:
+  - vào ngay theo luật hiện tại;
+  - vào bằng lệnh sell limit cao hơn giá đóng 0,25 ATR, chỉ chờ trong nến H4 kế tiếp, khớp đọc trên M15. Không khớp thì tính 0%.
+
+  Cả hai dùng chung trailing ATR có trần 5% và thoát theo kênh Donchian. Báo cáo cộng dồn chênh lệch theo từng cặp (số cặp, trung bình, sai số chuẩn), và tin Telegram có thêm một dòng tóm tắt.
+- **Chạy thử trên dữ liệu VPS** (chỉ đọc, chưa deploy):
+  - 4 tín hiệu từ 15/10, khớp cả 4. Có 3 cặp đã đóng, limit hơn trung bình +0,19% (sai số 0,16).
+  - Riêng HYPE ngày 15/10: vào ngay thì chạm stop −5%, vào bằng limit thì vẫn đang mở ở −0,7%. Lý do là stop của lệnh limit cao hơn, vì giá khớp cao hơn.
+
 ## 2026-10-19 — Kiểm cách vào lệnh của Setup-2; đăng ký thiết kế nghiên cứu Setup-3
 
 Nguyên nhân: tín hiệu soak ZEC Perp short lúc 20Z ngày 18/10 vào ở đáy kênh rồi chạm stop sau khoảng 2 giờ (−5,2% nếu là lệnh thật). Các phép kiểm dưới đây chỉ đọc dữ liệu VPS, script nằm ngoài repo, và runtime không đổi.

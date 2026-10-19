@@ -194,6 +194,9 @@ def facts_for_review():
         hour_scores=dict(since="2026-10-12", summary={"hourscore:summary": {
             name: dict(signals=0, wins=0, n=0, mean_return_pct=None) for name in ("with_hours", "against_hours")}},
                          items=[{"id": "hourscore:ETHUSDT:perp:x"}]),
+        limit_entries=dict(limit_atr="0.25", summary={"limitentry:summary": dict(
+            signals=0, filled=0, unfilled=0, pending=0, n=0, mean_return_pct=None)},
+                           items=[{"id": "limitentry:ETHUSDT:perp:x"}]),
         trades=[dict(trade_id="t1", news_before=[{"id": "n1"}])],
         missed=dict(items=[{"id": "missed:x"}], by_filter={"filter:ema200": {}}),
         jev=dict(decisions=[{"id": "jev:a"}],
@@ -208,7 +211,8 @@ def answer(**changes):
         session_patterns=[dict(symbol="ETHUSDT", hour_utc=8, direction="pump", condition="always",
                                consistent_60d=True, confidence=0.6,
                                evidence=["session:ETHUSDT:08:7d", "session:ETHUSDT:08:60d"])],
-        hour_score=dict(summary="chưa đủ mẫu", evidence=["hourscore:summary", "hourscore:ETHUSDT:perp:x"]),
+        hour_score=dict(summary="chưa đủ mẫu", evidence=["hourscore:summary", "hourscore:ETHUSDT:perp:x",
+                                                          "limitentry:summary"]),
         trades=[dict(trade_id="t1", cause="prior_event", explanation="tin xấu", evidence=["n1"])],
         trade_proposals=[], exits=[], exit_proposals=[],
         filters=[dict(filter="filter:ema200", verdict="too_few", explanation="ít mẫu", evidence=["filter:ema200"])],
@@ -261,6 +265,40 @@ def test_hour_score_signs_the_hours_after_a_signal_and_compares_groups(store):
     assert len(scores["items"]) == 3 and 12 not in by_hour
 
 
+def quarters(store, symbol, opened, highs, low=98.0):
+    rows = [kline(opened+k*M15, 100, h, low, 99, width=M15) for k, h in enumerate(highs)]
+    setup2_store.record_candles(store, symbol, "perp", "15m", rows)
+
+
+def test_a_shadow_limit_fills_on_m15_and_is_compared_with_entering_at_once(store):
+    trigger = START+timedelta(days=1)
+    for symbol in ("ETHUSDT", "NEARUSDT"):
+        setup2_store.record_candles(store, symbol, "perp", "4h", [
+            kline(trigger, 100, 100.8, 98, 98.5), kline(trigger+H4, 98.5, 99, 97, 97.5)])
+        observe(store, symbol, "perp", trigger, side=-1, close=100, entry=True, donchian=True)
+        observe(store, symbol, "perp", trigger+H4, side=-1, close=98.5)
+        observe(store, symbol, "perp", trigger+2*H4, side=-1, close=97.5, exit=True)
+    quarters(store, "ETHUSDT", trigger, [100.3, 100.8]+[99.0]*14)   # level 100 + 0.25*2 = 100.5, reached in the 2nd
+    quarters(store, "NEARUSDT", trigger, [100.3]*16)                 # never reached
+    observe(store, "ETHUSDT", "perp", END-timedelta(hours=2), side=-1, close=100, entry=True, donchian=True)
+
+    entries = lr._limit_entries(store, [("ETHUSDT", "perp"), ("NEARUSDT", "perp")], START, END)
+
+    by_id = {i["id"]: i for i in entries["items"]}
+    filled = by_id[f"limitentry:ETHUSDT:perp:{trigger.isoformat()}"]
+    assert filled["status"] == "filled" and D(filled["fill"]) == D("100.5")
+    assert filled["market_entry"]["status"] == "donchian_exit"
+    assert filled["market_entry"]["gross_return_pct"] == pytest.approx(2.5)          # short 100 -> 97.5
+    assert filled["limit"]["gross_return_pct"] == pytest.approx((1-97.5/100.5)*100)  # short 100.5 -> 97.5
+    assert filled["diff_pct"] == round((1-97.5/100.5)*100-2.5, 4)
+    unfilled = by_id[f"limitentry:NEARUSDT:perp:{trigger.isoformat()}"]
+    assert unfilled["status"] == "unfilled" and unfilled["diff_pct"] == pytest.approx(-2.5)
+    assert by_id[f"limitentry:ETHUSDT:perp:{(END-timedelta(hours=2)).isoformat()}"]["status"] == "pending"
+    summary = entries["summary"]["limitentry:summary"]
+    assert (summary["signals"], summary["filled"], summary["unfilled"], summary["pending"], summary["n"]) == (3, 1, 1, 1, 2)
+    assert "khớp 1, không khớp 1" in lr._limit_entry_line(entries)
+
+
 def test_an_hour_score_needs_history_before_the_signal():
     hourly = {datetime(2026, 9, 1, 8, tzinfo=timezone.utc)+timedelta(days=d): (None, 100, 0, 0, 101)
               for d in range(10)}
@@ -298,7 +336,8 @@ def test_jev_parameter_proposals_are_dropped_while_switched_off():
     assert review["screened"][0]["proposal"]["proposed"] == "0.10"
     assert "Code bỏ 1 đề xuất đổi thông số Jev" in lr.telegram_summary("lr-1", dict(
         window=dict(start="2026-10-12", end="2026-10-19"), results=dict(closed=0, wins=0, net_pnl_usdt=0),
-        jev=dict(confident_wrong=[], agreed_losing_trades=[]), hour_scores=facts_for_review()["hour_scores"]),
+        jev=dict(confident_wrong=[], agreed_losing_trades=[]), hour_scores=facts_for_review()["hour_scores"],
+        limit_entries=facts_for_review()["limit_entries"]),
         review, [])
 
 

@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from intraday import setup2, setup2_store
 from intraday.decision_evaluation import _brier, _bucket, _probabilities, _truth
 
-QUESTIONS_VERSION = "learning-questions-v3"
+QUESTIONS_VERSION = "learning-questions-v4"
 H4 = setup2.H4
 H1 = timedelta(hours=1)
 HOURS = tuple(range(24))       # session statistics run on H1 bars built from M15 Perp candles
@@ -33,6 +33,8 @@ SESSION_WINDOWS = (7, 60)
 LOOKBACK_HOURS = 4             # "the move before an hour" = the four H1 bars before it
 HOUR_SCORE_DAYS = 60           # history behind the hour score of a Setup-2 signal
 HOUR_SCORE_HOURS = 4           # the hours after the signal that the score covers
+LIMIT_ATR = Decimal("0.25")    # shadow Perp-short limit above the signal close (entry research, 2026-10-19)
+M15 = timedelta(minutes=15)
 MARKETS = ("spot", "perp")
 SCOPE_MARKETS = {"spot_4h": "spot", "perp_intraday": "perp"}
 JEV_CONFIDENT = 0.8            # "confident" Jev answer for the review; not a gate threshold
@@ -302,11 +304,15 @@ def _trades(store, execution_db, start, end):
     return sorted(trades, key=lambda t: t["entered_at"])
 
 
-def _simulate(store, symbol, market, trigger, end):
-    """'Had it entered': entry at the trigger close, the rule's capped ATR trail and Donchian exit after it."""
+def _simulate(store, symbol, market, trigger, end, *, entry=None, first=None):
+    """'Had it entered': entry at the trigger close, the rule's capped ATR trail and Donchian exit after it.
+
+    `entry` and `first` simulate a fill inside the first bar instead: at `entry`, with the M15 bars from the fill on
+    (`first`) standing in for that bar's high and low."""
     from intraday.replay_v2.donchian_filter_book import ATRTrail
     side = trigger["side"]
-    entry, atr = Decimal(trigger["close"]), Decimal(trigger["atr"]) if trigger.get("atr") else None
+    atr = Decimal(trigger["atr"]) if trigger.get("atr") else None
+    entry = Decimal(trigger["close"]) if entry is None else entry
     if atr is None or atr <= 0:
         return dict(status="no_atr")
     profile = PROFILES_BY_VERSION.get(trigger.get("evaluator_version"), "setup2_v1")
@@ -314,8 +320,11 @@ def _simulate(store, symbol, market, trigger, end):
     opened = datetime.fromisoformat(trigger["bar_close"])
     bars = setup2_store.list_bars(store, symbol, market, "4h", since=opened, until=end)
     exits = {o["bar_close"]: o for o in _observations(store, symbol, market, since=opened, until=end)}
-    for bar in bars:
-        breached = bar.low <= trail.stop if side > 0 else bar.high >= trail.stop
+    for k, bar in enumerate(bars):
+        high, low = bar.high, bar.low
+        if k == 0 and first:
+            high, low = max(q.high for q in first), min(q.low for q in first)
+        breached = low <= trail.stop if side > 0 else high >= trail.stop
         if breached:
             return dict(status="stop", exit_at=bar.available_at.isoformat(), gross_return_pct=side*_pct(trail.stop, entry))
         seen = exits.get(bar.available_at.isoformat())
@@ -324,7 +333,7 @@ def _simulate(store, symbol, market, trigger, end):
                         gross_return_pct=side*_pct(bar.close, entry))
         bar_atr = (seen or {}).get("features", {}).get("atr")
         if bar_atr and Decimal(bar_atr) > 0:
-            trail.update(bar.high, bar.low, Decimal(bar_atr))
+            trail.update(high, low, Decimal(bar_atr))
     last = bars[-1].close if bars else entry
     return dict(status="open", exit_at=None, gross_return_pct=side*_pct(last, entry))
 
@@ -412,6 +421,58 @@ def _hour_scores(store, routes, trades, start, end):
                 hours=HOUR_SCORE_HOURS, summary={"hourscore:summary": summary}, items=items,
                 note="Score = mean H1 return of the four hours after the signal over the 60 days before it, signed "
                      "by the side. Closed results are simulations gross of fees; n counts closed signals.")
+
+
+def _limit_fill(store, symbol, trigger, end):
+    """Shadow sell limit LIMIT_ATR x ATR above a Perp short's signal close, valid for the next H4 bar and read on
+    M15: (status, level, fill, M15 bars from the fill on)."""
+    opened = datetime.fromisoformat(trigger["bar_close"])
+    level = Decimal(trigger["close"])+LIMIT_ATR*Decimal(trigger["atr"])
+    if opened+H4 > end:
+        return "pending", level, None, None
+    quarters = setup2_store.list_bars(store, symbol, "perp", "15m", since=opened, until=opened+H4)
+    if len(quarters) != H4//M15 or quarters[0].opened_at != opened or not setup2.contiguous(quarters, M15):
+        return "no_data", level, None, None
+    for k, q in enumerate(quarters):
+        fill = q.open if q.open >= level else level if q.high >= level else None
+        if fill is not None:
+            return "filled", level, fill, quarters[k:]
+    return "unfilled", level, None, None
+
+
+def _limit_entries(store, routes, start, end):
+    """Every Perp-short Setup-2 entry signal so far, entered at once (the rule) and by the shadow limit. Monitoring
+    only: the 2026-10-19 replay favoured the limit by +0.44%/signal (t about 1.8), too weak to change the rule."""
+    everything, items, diffs = [], [], []
+    for symbol, market in routes:
+        if market != "perp":
+            continue
+        for o in _observations(store, symbol, market, until=end):
+            if not o.get("entry") or o.get("side") != -1 or not o.get("atr"):
+                continue
+            status, level, fill, first = _limit_fill(store, symbol, o, end)
+            market_entry = _simulate(store, symbol, market, o, end)
+            limit = _simulate(store, symbol, market, o, end, entry=fill, first=first) if status == "filled" else None
+            item = dict(id=f"limitentry:{symbol}:perp:{o['bar_close']}", symbol=symbol, bar_close=o["bar_close"],
+                        status=status, level=str(level), fill=None if fill is None else str(fill),
+                        market_entry=market_entry, limit=limit)
+            closed = {"stop", "donchian_exit"}
+            if market_entry.get("status") in closed and (status == "unfilled" or (limit or {}).get("status") in closed):
+                item["diff_pct"] = _round((float(limit["gross_return_pct"]) if limit else 0.0)
+                                          - float(market_entry["gross_return_pct"]))
+                diffs.append(item["diff_pct"])
+            everything.append(item)
+            if start <= datetime.fromisoformat(o["bar_close"]) < end:
+                items.append(item)
+    count = lambda s: sum(i["status"] == s for i in everything)
+    summary = dict(signals=len(everything), filled=count("filled"), unfilled=count("unfilled"),
+                   pending=count("pending"), no_data=count("no_data"), better=sum(d > 0 for d in diffs),
+                   **_moments(diffs))
+    return dict(since=min((i["bar_close"] for i in everything), default=None), limit_atr=str(LIMIT_ATR),
+                summary={"limitentry:summary": summary}, items=items,
+                note="Shadow sell limit 0.25 ATR above the signal close, valid for the next H4 bar, filled on M15 "
+                     "(an M15 bar reaching the level fills it). diff_pct = limit minus entering at once, gross of fees; "
+                     "an unfilled limit counts as 0%. n counts signals whose both outcomes are closed.")
 
 
 def _jev_parameters(store, rule_id):
@@ -609,6 +670,7 @@ def collect_week(store, execution_db, *, start, end, proposals=()):
         chart=_chart(store, routes, start, end), benchmark=_benchmark(store, start, end),
         sessions=_session_stats(store, symbols, end),
         hour_scores=_hour_scores(store, routes, trades, start, end),
+        limit_entries=_limit_entries(store, routes, start, end),
         trades=trades, results=_results(trades, expectations), replay=expectations,
         missed=_missed(store, routes, trades, start, end), jev=_jev(store, trades, start, end),
         next_week=_next_week(store, symbols, trades, end), prior_proposals=_prior(list(proposals)),
@@ -730,7 +792,9 @@ A2 session_patterns: which UTC hours (H1 bars) tend to pump or dump, either alwa
 A3 hour_score: every Setup-2 signal carries an hour score (see `hour_scores.note`); positive means the hours
    after it usually move with the signal. From "hourscore:summary", say whether signals with their hours have
    done better than signals against them so far, with the number of closed signals and the standard error, and
-   whether that is distinguishable from chance yet. Mention this window's signals by id. Monitoring only.
+   whether that is distinguishable from chance yet. Mention this window's signals by id. In the same summary,
+   from "limitentry:summary" (see `limit_entries.note`), say how the shadow limit entry on Perp shorts compares
+   with entering at once so far: fills, closed pairs n, mean diff and standard error. Monitoring only.
 B1 trades: one entry per trade in `trades`. You already know the outcome; use cause "prior_event" only when a news
    item in that trade's `news_before` (received before the entry) supports it, and cite that news id.
 B2 trade_proposals, C2 exit_proposals, D2 filter_proposals: at most 3 each.
@@ -760,6 +824,7 @@ def _references(facts):
     refs |= set(nxt["funding"]) | set(nxt["correlations_30d"]) | {n["id"] for n in nxt["verified_news"]}
     refs |= {p["id"] for p in facts["prior_proposals"]}
     refs |= set(facts["hour_scores"]["summary"]) | {i["id"] for i in facts["hour_scores"]["items"]}
+    refs |= set(facts["limit_entries"]["summary"]) | {i["id"] for i in facts["limit_entries"]["items"]}
     return refs
 
 
@@ -913,12 +978,19 @@ def _hour_score_line(scores):
             f"ngược chiều {group('against_hours')}")
 
 
+def _limit_entry_line(entries):
+    s = entries["summary"]["limitentry:summary"]
+    diff = "—" if s["mean_return_pct"] is None else f"{s['mean_return_pct']:+.2f}% (n={s['n']})"
+    return (f"Limit {entries['limit_atr']} ATR cho short Perp (theo dõi): {s['signals']} tín hiệu, khớp {s['filled']}, "
+            f"không khớp {s['unfilled']}; chênh so với vào ngay TB {diff}")
+
+
 def telegram_summary(review_id, facts, review, added) -> str:
     window, results, jev = facts["window"], facts["results"], facts["jev"]
     lines = [f"[VÒNG HỌC] {window['start'][:10]} → {window['end'][:10]} ({review_id})",
              f"Lệnh đóng: {results['closed']}, thắng {results['wins']}, lãi ròng {results['net_pnl_usdt']:+.2f} USDT",
              f"Jev sai mà tự tin: {len(jev['confident_wrong'])}; Jev đồng ý mà lỗ: {len(jev['agreed_losing_trades'])}",
-             _hour_score_line(facts["hour_scores"])]
+             _hour_score_line(facts["hour_scores"]), _limit_entry_line(facts["limit_entries"])]
     if review is None:
         lines.append("Chưa chạy LLM (--no-llm).")
     elif review["status"] != "valid":
