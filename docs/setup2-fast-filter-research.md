@@ -1,6 +1,6 @@
 # Setup-2: bộ lọc nhanh hơn và chia size theo bộ lọc (thiết kế nghiên cứu)
 
-Trạng thái: **thiết kế, viết và commit trước khi chạy.** Kết quả sẽ được ghi ở mục cuối.
+Trạng thái: **đã chạy ngày 2026-10-19, không biến thể nào đạt.** Phần thiết kế dưới đây được viết và commit (`517f42b`) trước khi chạy; kết quả ở mục cuối.
 
 Đây là nghiên cứu cục bộ trên dữ liệu đã thấy. Nến và quan sát Setup-2 được đọc từ database VPS ở chế độ `mode=ro`. Nghiên cứu không đụng tới runtime, active set, ADR-007, soak hay Jev, và không gọi model.
 
@@ -100,3 +100,68 @@ Với mỗi biến thể và mỗi cách vào lệnh:
 - Không có funding, không có Jev, không có luật lỗ 3% mỗi ngày.
 - HYPE Spot dùng giá Perp cho đoạn chưa có dữ liệu Spot; runtime chặn lệnh khi cửa sổ volume chạm đoạn này, và mô phỏng giữ đúng blocker đó.
 - Ở V2, phần tầng 2 có thể lỗ quá 5% nếu stop kéo theo giá vẫn còn xa giá vào tầng 2.
+
+## Kết quả (2026-10-19)
+
+**Code và dữ liệu:**
+- Code: `intraday/replay_v2/fast_filter_study.py`, test ở `tests/test_fast_filter_study.py` (9 test).
+- Dữ liệu: xuất bằng `scripts/fast_filter_export.py` lúc 12:04Z, gồm các nến tới nến H4 mở lúc 08:00Z ngày 19/10.
+- Hash dữ liệu: `525e8cdd…cf0eedfb`. Hash cấu hình: `4350baa6…2348f9e`.
+- Điểm chia hai nửa: 2025-07-15 02:00Z.
+- Trước khi chạy các biến thể, mốc B được chạy lại một mình để kiểm tra mô phỏng: lệnh thị trường +39,2% (DD 7,8%), limit +43,3% (DD 5,8%), khớp với phép kiểm danh mục slot (+39,3% và +43,5%; lệch do có thêm vài nến). Sau đó toàn bộ nghiên cứu chạy đúng một lần.
+
+**Kết quả chính** (lợi nhuận và DD tính theo % vốn; "lệnh thêm" là các lệnh B không có):
+
+| | Cách vào | Lợi nhuận | DD | Lợi nhuận/DD | Nửa đầu / nửa sau | Số lệnh | Lệnh thêm: số / TB mỗi lệnh |
+|---|---|---:|---:|---:|---|---:|---|
+| **B** | thị trường | +39,2% | 7,8% | 5,04 | +13,3 / +25,8 | 320 | – |
+| | limit | +43,3% | 5,8% | 7,53 | +13,7 / +29,7 | 304 | – |
+| **V1** 0,5x khi thiếu lọc | thị trường | +24,7% | 8,8% | 2,80 | +13,0 / +11,7 | 619 | 463 / +0,50% |
+| | limit | +26,9% | 8,1% | 3,33 | +13,6 / +13,3 | 594 | 436 / +0,42% |
+| **V2** hai tầng | thị trường | +32,0% | 14,1% | 2,27 | +14,8 / +17,2 | 618 | 462 / +0,49% |
+| | limit | +34,1% | 10,5% | 3,23 | +14,2 / +19,9 | 594 | 436 / +0,42% |
+| **V3** EMA20/50 | thị trường | +39,9% | 9,2% | 4,35 | +14,9 / +25,0 | 325 | 13 / −1,32% |
+| | limit | +42,2% | 6,9% | 6,08 | +14,3 / +28,0 | 309 | 38 / −1,16% |
+| **V4** ADX > 3 nến trước | thị trường | **+45,7%** | 8,9% | 5,12 | +20,1 / +25,6 | 349 | 109 / +1,58% |
+| | limit | **+51,7%** | 7,1% | 7,32 | +23,5 / +28,2 | 329 | 121 / +1,36% |
+| **V5** thân nến ≥ 1 ATR | thị trường | +37,7% | 10,5% | 3,61 | +16,1 / +21,6 | 307 | 115 / +1,67% |
+| | limit | +35,4% | 9,1% | 3,89 | +9,5 / +25,8 | 283 | 116 / +1,26% |
+
+Chi phí gấp đôi, lệnh thị trường: B +29,1%, V1 +12,0%, V2 +15,6%, V3 +29,6%, V4 +34,5%, V5 +27,7%.
+
+**Tiêu chí:**
+
+| | 1. Lãi hơn cả hai mốc | 2. DD ≤ 10% | 3. Lãi/DD không thấp hơn | 4. Hơn ở cả hai nửa | 5. Phí gấp đôi | Kết luận |
+|---|---|---|---|---|---|---|
+| V1 | ✗ | ✓ | ✗ | ✗ | ✗ | **Không đạt** |
+| V2 | ✗ | ✗ | ✗ | ✗ | ✗ | **Không đạt** |
+| V3 | ✗ | ✓ | ✗ | ✗ | ✓ | **Không đạt** |
+| V4 | ✓ | ✓ | ✗ (limit 7,32 < 7,53) | ✗ (nửa sau +25,6 < +25,8) | ✓ | **Không đạt** |
+| V5 | ✗ | ✗ | ✗ | ✗ | ✗ | **Không đạt** |
+
+**V1 và V2 thua vì chiếm slot, không phải vì lệnh thêm lỗ.**
+- Lệnh thêm có lãi trung bình dương (+0,4% đến +0,5% mỗi lệnh), nhưng thấp hơn nhiều so với lệnh đủ bộ lọc (+1,02%).
+- Gấp đôi số lệnh làm 3 slot luôn đầy: số tín hiệu bị chặn tăng từ 53 lên khoảng 300, chủ yếu vì chênh ADX chưa đủ để đổi vị thế (200 so với 43) và vì cổng lãi lỗ (104 so với 10).
+- Ở V2, phần tầng 2 được thêm 225 lần, lãi +7,5% vốn (TB +0,51% mỗi lệnh). Phần này không bù được phần slot bị chiếm.
+
+**V4 là biến thể duy nhất đáng chú ý.**
+- Lãi hơn B ở cả ba năm, với cả hai cách vào lệnh. Lệnh thị trường: 2024 +11,0 so với +9,4; 2025 +14,2 so với +10,9; 2026 +20,5 so với +18,8.
+- 109 lệnh thêm là những breakout có ADX dưới 20 nhưng đang lên trong 3 nến, tức xu hướng mới bắt đầu. Đúng điều Julius muốn bắt. TB +1,58% mỗi lệnh, tỉ lệ thắng 35%.
+- V4 trượt hai tiêu chí, cả hai đều rất sát:
+  - lợi nhuận/DD với cách vào limit thấp hơn 0,21;
+  - nửa sau thấp hơn 0,2 điểm, vì nửa sau năm 2025 kém hơn B.
+- Theo đúng thiết kế, V4 **không đạt** và không được dò thêm.
+
+**Chấm các dự đoán:**
+
+| Dự đoán | Kết quả |
+|---|---|
+| V1 không đạt vì lệnh thêm có kỳ vọng âm và chiếm slot | Đúng kết luận, **sai một nửa lý do**: lệnh thêm có lãi trung bình dương. Nghiên cứu 703 ngày là một luật khác (kênh 30, BTC/ETH/SOL, không có slot), nên không áp sang được |
+| V2 không đạt nhưng tốt hơn V1, tầng 2 có lãi | Đúng: lãi hơn V1 (+32,0% so với +24,7%) và tầng 2 có lãi, nhưng DD tệ hơn (14,1% so với 8,8%) |
+| V3 nhiều lệnh hơn, ngắn hơn, không đạt | Không đạt là đúng, nhưng số lệnh gần như không đổi (325 so với 320) |
+| V4 gần với B, không đạt tiêu chí 4 | Đúng cả hai, nhưng V4 hơn B nhiều hơn dự đoán (+6,5 điểm) |
+| V5 có ít lệnh thêm | Sai: có 115 lệnh thêm. Năm 2024 chỉ được +2,9% nên DD lên 10,5% |
+
+**Kết luận:** không biến thể nào đạt. Luật đang chạy giữ nguyên, nghiên cứu dừng tại đây đúng như đã đăng ký: không dò thêm ngưỡng hay số nến của V4.
+
+Việc theo dõi V4 trên soak, ghi lại các breakout ADX < 20 mà ADX đang lên trong 3 nến như cách đang làm với limit 0,25 ATR, nằm **ngoài** thiết kế này. Nếu muốn làm thì đó là một quyết định mới của Julius.

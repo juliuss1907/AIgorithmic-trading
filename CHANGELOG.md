@@ -4,6 +4,17 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Chạy nghiên cứu bộ lọc nhanh cho Setup-2: không biến thể nào đạt
+
+Chạy đúng một lần theo thiết kế đã commit ở `517f42b`. Kết quả ở [docs/setup2-fast-filter-research.md](docs/setup2-fast-filter-research.md); code ở `intraday/replay_v2/fast_filter_study.py` và `scripts/fast_filter_export.py`, có 9 test.
+
+- **Mốc B** (luật hiện tại): +39,2% / DD 7,8% với lệnh thị trường, +43,3% / DD 5,8% với limit 0,25 ATR.
+- **V1 và V2** (vào cả breakout thiếu lọc với 0,5x): lãi thấp hơn hẳn (+24,7% và +32,0%). Lệnh thêm vẫn có lãi nhỏ nhưng chiếm hết 3 slot, nên các tín hiệu tốt bị chặn.
+- **V3** (EMA20/50): gần như không khác B, 13 lệnh thêm đều lỗ.
+- **V4** (ADX cao hơn 3 nến trước, bỏ ngưỡng 20): +45,7% / DD 8,9% và +51,7% / DD 7,1%, hơn B ở cả ba năm. Vẫn trượt hai tiêu chí, đều rất sát: lãi/DD với limit thấp hơn 0,21, và nửa sau thấp hơn 0,2 điểm.
+- **V5** (thân nến ≥ 1 ATR): năm 2024 yếu, DD 10,5%.
+- Luật đang chạy giữ nguyên. Theo dõi V4 trên soak là một quyết định mới, chờ Julius.
+
 ## 2026-10-19 — Thiết kế nghiên cứu bộ lọc nhanh cho Setup-2 (chưa chạy)
 
 Julius thấy Setup-2 bắt xu hướng chậm và đề xuất 5 hướng. Thiết kế được viết và commit trước khi chạy, chi tiết ở [docs/setup2-fast-filter-research.md](docs/setup2-fast-filter-research.md).
