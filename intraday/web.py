@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
@@ -72,6 +74,45 @@ def _duration(value) -> str:
     return f"{minutes}m"
 
 
+class CachedSnapshot:
+    """A read model served from memory: a stale copy is returned at once while one background thread rebuilds
+    it, so the slow history queries never block a page. Only the first request waits for a build."""
+
+    def __init__(self, build, *, ttl_seconds: float, clock=time.monotonic):
+        self.build, self.ttl, self.clock = build, ttl_seconds, clock
+        self.value, self.built_at, self.refreshing = None, None, False
+        self.lock = threading.Lock()
+
+    def _rebuild(self):
+        try:
+            value = self.build(datetime.now(timezone.utc))
+            with self.lock:
+                self.value, self.built_at = value, self.clock()
+        finally:
+            with self.lock:
+                self.refreshing = False
+
+    def get(self):
+        with self.lock:
+            value = self.value
+            stale = self.built_at is None or self.clock()-self.built_at >= self.ttl
+            start = stale and not self.refreshing
+            if start:
+                self.refreshing = True
+        if value is None:
+            if start:
+                self._rebuild()
+            else:
+                while self.value is None and self.refreshing:
+                    time.sleep(0.05)
+            if self.value is None:
+                raise RuntimeError("snapshot build failed")
+            return self.value
+        if start:
+            threading.Thread(target=self._rebuild, daemon=True, name="snapshot-rebuild").start()
+        return value
+
+
 class CommandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     command_id: str = Field(min_length=4, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
@@ -130,6 +171,9 @@ def create_app(
     templates.env.filters["vn_time"] = _vn_time
     templates.env.filters["duration"] = _duration
     templates.env.filters["vn_short"] = _vn_short
+    # Both pages read long histories (about 10 s for the overview on the VPS): serve them from memory.
+    overview = CachedSnapshot(lambda now: build_dashboard_snapshot(store, now=now), ttl_seconds=60)
+    setup2_view = CachedSnapshot(lambda now: build_setup2_dashboard(store, now=now), ttl_seconds=30)
     app.include_router(replay_router(resolve_report_dir(replay_report_dir), templates))
     app.include_router(confidence_router(store.database, resolve_report_dir(replay_report_dir)))
     app.mount("/static", StaticFiles(directory=ASSETS / "static"), name="static")
@@ -274,7 +318,7 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):
-        snapshot = build_dashboard_snapshot(store, now=datetime.now(timezone.utc))
+        snapshot = overview.get()
         return templates.TemplateResponse(
             request=request,
             name="overview.html",
@@ -349,12 +393,12 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="setup2.html",
-            context={"dashboard": build_setup2_dashboard(store, now=datetime.now(timezone.utc))},
+            context={"dashboard": setup2_view.get()},
         )
 
     @app.get("/api/setup2")
     def setup2_snapshot():
-        return build_setup2_dashboard(store, now=datetime.now(timezone.utc))
+        return setup2_view.get()
 
     @app.get("/system-plan", response_class=HTMLResponse)
     def system_plan(request: Request):
@@ -385,7 +429,7 @@ def create_app(
 
     @app.get("/api/dashboard")
     def dashboard_snapshot():
-        return build_dashboard_snapshot(store, now=datetime.now(timezone.utc))
+        return overview.get()
 
     @app.get("/api/signals")
     def journal_signals(

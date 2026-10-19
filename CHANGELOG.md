@@ -4,6 +4,13 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-19 — Trang web trả số liệu đã tính sẵn để không bị chậm
+
+Julius thấy trang bị lag. Đo trên VPS: trang Operations (`/`) mất khoảng 10,8 giây mỗi lần tải, và gần như toàn bộ là truy vấn SQL đếm lại toàn bộ lịch sử (`venue_health` 3,8 giây, nguồn dữ liệu ngoài 2,9 giây, `scheduler_runs` 1,8 giây). Trang `/setup2` mất khoảng 0,8 giây.
+
+- **Cách sửa:** `CachedSnapshot` trong `intraday/web.py` giữ một bản số liệu đã tính sẵn trong bộ nhớ (Operations 60 giây, `/setup2` 30 giây). Khi bản đó đã cũ, trang vẫn trả bản cũ ngay và một luồng nền tính lại. Chỉ lần mở đầu tiên sau khi restart web là phải chờ tính. `/api/dashboard` và `/api/setup2` dùng chung bản này.
+- **Không đổi:** database, schema và worker. Thêm index cho các bảng lớn sẽ chữa tận gốc hơn, nhưng đó là đổi schema nên để sau G6.
+
 ## 2026-10-19 — Deploy `fba4e55` lên VPS (trang `/setup2`, theo dõi limit 0,25 ATR)
 
 Julius duyệt push và deploy. Làm theo [runbook](docs/runbooks/deploy-a88825b.md), từ `7b815f4` lên `fba4e55`, sau nến 08Z. Schema, active set và `.env.intraday` không đổi. Vòng học hằng tuần vẫn **chưa** được lên lịch.

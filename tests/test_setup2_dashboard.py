@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import timedelta
 
 import pytest
@@ -8,7 +9,7 @@ from intraday import setup2_store
 from intraday.replay_v2.gate_repository import GateRepository
 from intraday.setup2_dashboard import build_setup2_dashboard
 from intraday.store import IntradayStore
-from intraday.web import create_app
+from intraday.web import CachedSnapshot, create_app
 from tests.test_learning_review import END, H4, START, kline, observe, quarters
 
 NOW = END
@@ -72,3 +73,21 @@ def test_setup2_page_renders_on_an_empty_database(tmp_path):
     client = TestClient(create_app(database=tmp_path/"empty.sqlite3"))
     page = client.get("/setup2")
     assert page.status_code == 200 and "Chưa có tín hiệu" in page.text
+
+
+def test_cached_snapshot_serves_a_stale_copy_while_rebuilding_in_the_background():
+    clock, builds = [0.0], []
+
+    def build(now):
+        builds.append(now)
+        return len(builds)
+
+    snapshot = CachedSnapshot(build, ttl_seconds=30, clock=lambda: clock[0])
+    assert snapshot.get() == 1 and snapshot.get() == 1      # first call builds, the second is served from memory
+    clock[0] = 31.0
+    assert snapshot.get() == 1                              # stale: the old copy at once, a rebuild in the background
+    for _ in range(100):
+        if snapshot.value == 2 and not snapshot.refreshing:
+            break
+        time.sleep(0.01)
+    assert snapshot.get() == 2 and len(builds) == 2
