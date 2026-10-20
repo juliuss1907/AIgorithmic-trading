@@ -60,9 +60,11 @@ class FakeRemote(Remote):
         super().__init__("julius@vps")
         self.responses, self.tunnel_state, self.paths, self.ran = responses, tunnel, [], []
 
+    output = ("done",)
+
     def run(self, arguments, **_):
         self.ran.append(arguments)
-        yield "done"
+        yield from self.output
         yield "[exit 0]"
 
     def open_tunnel(self, **_):
@@ -268,4 +270,82 @@ def test_ops_logs_run_at_once_and_service_actions_wait_for_the_confirmation():
         await pilot.click("#cancel")
         await pilot.pause(0.2)
         assert len(remote.ran) == 1
+    run_app(remote, check)
+
+
+def spec(name):
+    from intraday.tui import commands
+    return next(s for s in commands.specs() if s.name == name)
+
+
+def test_every_command_has_a_safety_and_nothing_that_trades_or_takes_a_key_runs_from_the_tui():
+    from intraday.tui import commands
+    specs = commands.specs()
+    names = {s.name for s in specs}
+    assert "ui" not in names and {"execution demo run", "perp", "connect llm", "backup verify"} <= names
+    assert commands.READ | commands.WRITE <= names                        # no stale declaration
+    for s in specs:
+        kind = commands.safety(s)
+        assert kind in commands.LABEL
+        if s.path[0] in ("execution", "perp", "connect") or s.name in ("provider add", "provider activate"):
+            assert kind == "terminal", s.name
+    for name in ("active-set switch", "setup2 candidate", "assets rules activate", "portfolio flatten",
+                 "journal export"):
+        assert commands.safety(spec(name)) == "terminal"
+    proposals = spec("learning proposals")
+    assert commands.safety(proposals, ["learning", "proposals", "list"]) == "read"
+    assert commands.safety(proposals, ["learning", "proposals", "approve", "p-1"]) == "write"
+
+
+def test_build_argv_puts_positionals_first_and_rejects_a_missing_required_field():
+    from intraday.tui import commands
+    readiness = spec("assets readiness")
+    assert commands.build_argv(readiness, dict(symbol="ETHUSDT", market="perp", json_output=True)) == [
+        "assets", "readiness", "ETHUSDT", "--market", "perp", "--json"]
+    assert commands.build_argv(readiness, {}) == ["assets", "readiness"]          # symbol is optional here
+    with pytest.raises(ValueError, match="backup_path"):
+        commands.build_argv(spec("backup verify"), {})
+    with pytest.raises(ValueError, match="--symbol"):
+        commands.build_argv(spec("setup2 evaluate"), dict(market="perp"))
+
+
+def test_parse_output_separates_docker_progress_from_the_json():
+    from intraday.tui.palette import parse_output
+    assert parse_output([" Container x Creating", "{", '  "a": 1', "}"]) == ([" Container x Creating"], {"a": 1})
+    assert parse_output(["plain text"]) is None
+
+
+def test_palette_form_runs_read_commands_at_once_and_only_shows_terminal_commands():
+    from intraday.tui.confirm import ConfirmScreen
+    from intraday.tui.palette import CommandScreen
+    remote = full_remote()
+    remote.output = (" Container intraday-admin-run Creating", '{"status": "ok", "symbol": "ETHUSDT"}')
+
+    async def check(app, pilot):
+        app.open_command(spec("assets readiness"))
+        await pilot.pause(0.3)
+        screen = app.screen
+        assert isinstance(screen, CommandScreen)
+        assert [a.dest for a in screen.fields] == ["symbol", "market", "json_output"]   # no --database
+        screen.query_one("#field-0").value = "ETHUSDT"
+        await pilot.pause(0.1)
+        assert "aigt assets readiness ETHUSDT" in str(screen.query_one("#command-preview").content)
+        await pilot.click("#command-run")
+        await pilot.pause(0.3)
+        await app.workers.wait_for_complete()
+        await pilot.pause(0.2)
+        assert remote.ran == [["assets", "readiness", "ETHUSDT"]]
+        output = "\n".join(str(line.text) for line in screen.query_one("#command-output").lines)
+        assert '"symbol": "ETHUSDT"' in output
+        await pilot.press("escape")
+        app.open_command(spec("execution demo flatten"))
+        await pilot.pause(0.3)
+        assert not app.screen.query("#command-run")
+        assert "ssh -t julius@vps" in str(app.screen.query_one("#command-preview").content)
+        await pilot.press("escape")
+        app.open_command(spec("backup create"))
+        await pilot.pause(0.3)
+        await pilot.click("#command-run")
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, ConfirmScreen) and len(remote.ran) == 1
     run_app(remote, check)

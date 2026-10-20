@@ -69,6 +69,9 @@ aigt ui                                  # lần sau; --no-tunnel để đọc t
 Phím: `1`–`7` đổi tab, `r` làm mới (tự làm mới mỗi 60 giây), `z` thu/giãn nến ở tab Setup-2,
 `a`/`x` duyệt/từ chối đề xuất ở tab Vòng học, `q` thoát. Mọi thao tác ghi (duyệt đề xuất, backup, restart,
 start/stop) chạy `aigt` trên VPS qua SSH sau một hộp xác nhận hiện đúng câu lệnh sẽ chạy.
+`Ctrl+P` mở palette chứa mọi lệnh `aigt`, mỗi lệnh có form nhập tham số. Lệnh chỉ đọc chạy ngay; lệnh ghi
+cần xác nhận; lệnh đặt lệnh Demo, nhập key hoặc đổi luật/active set chỉ hiện câu lệnh để chạy trong terminal
+(`intraday/tui/commands.py`).
 
 Kiểm tra cấu hình và trạng thái:
 

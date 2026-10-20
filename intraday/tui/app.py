@@ -13,6 +13,7 @@ from textual.widgets import Footer, Header, RichLog, Static, TabbedContent, TabP
 
 from intraday.tui import fmt
 from intraday.tui.confirm import ConfirmScreen
+from intraday.tui.palette import AigtCommands, CommandScreen
 from intraday.tui.remote import Remote, RemoteError
 from intraday.tui.views import Pane
 from intraday.tui.views.learning import LearningPane
@@ -34,6 +35,7 @@ TABS = (("Tổng quan", "overview", OverviewPane), ("Setup-2", "setup2", Setup2P
 
 class AigtApp(App):
     TITLE = "AIGT"
+    COMMANDS = App.COMMANDS | {AigtCommands}
     CSS = """
     Screen { background: $surface; }
     .heading { color: $accent; text-style: bold; margin: 1 0 0 1; }
@@ -150,8 +152,11 @@ class AigtApp(App):
     def action_tab(self, tab_id: str) -> None:
         self.tabs.active = tab_id
 
+    def open_command(self, spec) -> None:
+        self.push_screen(CommandScreen(spec))
+
     def confirm_and_run(self, title: str, arguments: list[str], *, note: bool = False,
-                        log: RichLog | None = None) -> None:
+                        log: RichLog | None = None, render=None) -> None:
         """Run `aigt <arguments>` on the VPS once the confirmation showing the exact command is accepted; with
         `note`, a non-empty note is passed as `--note`."""
         try:
@@ -164,13 +169,14 @@ class AigtApp(App):
             if result is None:
                 self.notify("Đã huỷ.")
                 return
-            self.run_remote(arguments+(["--note", result] if note and result else []), log=log)
+            self.run_remote(arguments+(["--note", result] if note and result else []), log=log, render=render)
 
         self.push_screen(ConfirmScreen(title, command, note=note), decided)
 
     @work(thread=True, group="remote")
-    def run_remote(self, arguments: list[str], *, log: RichLog | None = None) -> None:
-        """Stream `aigt <arguments>` run on the VPS into `log`, or into a notification without one; then refetch."""
+    def run_remote(self, arguments: list[str], *, log: RichLog | None = None, render=None) -> None:
+        """Stream `aigt <arguments>` run on the VPS into `log`, or into a notification without one; then hand all
+        lines to `render` and refetch."""
         name = " ".join(arguments[:3])
         if log is not None:
             self.call_from_thread(log.write, Text(f"$ aigt {' '.join(arguments)}", style="bold cyan"))
@@ -183,6 +189,8 @@ class AigtApp(App):
         except (RemoteError, OSError) as error:
             self.call_from_thread(self.notify, f"aigt {name}: {error}", severity="error")
             return
+        if render is not None and lines:
+            self.call_from_thread(render, lines)
         code = lines[-1] if lines else "[exit ?]"
         failed = code != "[exit 0]"
         detail = "" if log is not None else "\n"+"\n".join(lines[-6:-1])

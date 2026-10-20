@@ -4,6 +4,20 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-20 — `aigt ui` bước 3: command palette cho mọi lệnh
+
+- **`Ctrl+P` liệt kê toàn bộ 94 lệnh `aigt`.** Danh sách đọc thẳng từ cây argparse, nên lệnh mới tự xuất hiện. Chọn một lệnh sẽ mở form sinh từ tham số của nó, kèm dòng xem trước đúng câu lệnh SSH sẽ chạy. Output JSON được tách khỏi các dòng tiến trình của Docker và tô màu.
+- **Ba nhóm an toàn** (`intraday/tui/commands.py`, khai báo tường minh):
+  - **chỉ đọc (18 lệnh):** chạy ngay. Chỉ gồm các lệnh `aigt` đưa vào container, vì host VPS còn một DB cũ ở `~/.local/state` nên lệnh chạy trên host sẽ đọc sai dữ liệu. Thêm `backup verify`.
+  - **ghi (18 lệnh):** chạy sau hộp xác nhận. Gồm backup, start/stop/restart, analysis, learning review, backfill, scan, replay, đánh giá soak, provider test.
+  - **terminal (58 lệnh):** TUI không chạy, chỉ hiện `ssh -t … aigt …` để Julius tự chạy. Gồm `execution`, `perp`, `connect`, thêm/xoá/kích hoạt provider, đổi luật, campaign, active set, và mọi lệnh chạy trên DB của host. Lệnh nào chưa được khai báo thì mặc định vào nhóm này.
+- **Form không có ô** `--database`, `--secrets-file`, `--report-dir`, `--execution-database`, vì các tham số này làm lệnh chạy trên host thay vì trong container.
+- **Đã thử trên VPS:**
+  - qua SSH, `assets list`, `active-set show`, `setup2 evaluate`, `provider list`, `assets readiness` đều trả JSON, exit 0;
+  - TUI tự mở tunnel ở cổng khác (18082) và tự đóng khi thoát;
+  - chạy headless với VPS: `/api/setup2`, `/api/dashboard`, `/api/portfolio`, `/api/signals` đều đọc được. `/api/learning` và `/api/setup2/chart` trả 404 cho tới khi deploy web.
+- **Test:** thêm 4 test, gồm kiểm tra không lệnh `execution`, `perp`, `connect` nào nằm ngoài nhóm terminal. `tests/test_tui.py` có tổng 14 test.
+
 ## 2026-10-20 — `aigt ui` bước 2: Lệnh, Vòng học, Vận hành
 
 - **3 tab mới:**
