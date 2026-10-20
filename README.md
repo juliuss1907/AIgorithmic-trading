@@ -58,6 +58,16 @@ aigt restart
 aigt logs
 ```
 
+Dashboard toàn màn hình trên máy local (đọc API web của VPS qua tunnel SSH, tự mở tunnel khi cần):
+
+```bash
+uv tool install --editable '.[tui]'      # Textual là extra tùy chọn, image Docker không cài
+aigt ui --host julius@<vps>              # host được lưu vào ~/.config/<app>/remote.toml
+aigt ui                                  # lần sau; --no-tunnel để đọc tunnel đã mở sẵn
+```
+
+Phím: `1`–`4` đổi tab, `r` làm mới (tự làm mới mỗi 60 giây), `z` thu/giãn nến ở tab Setup-2, `q` thoát.
+
 Kiểm tra cấu hình và trạng thái:
 
 ```bash

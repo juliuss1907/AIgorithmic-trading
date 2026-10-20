@@ -4,6 +4,24 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-20 — `aigt ui`: dashboard toàn màn hình trong terminal (bước 1)
+
+Julius muốn CLI có giao diện đẹp hơn và chọn dashboard toàn màn hình, chạy trên máy local, đọc dữ liệu từ VPS (kế hoạch gồm 3 bước). Bước 1:
+
+- **Lệnh mới `aigt ui`** (`intraday/tui/`), dùng Textual 8.2.8 làm extra tùy chọn `tui`. Image Docker không cài extra nên không đổi.
+  - Tự mở tunnel SSH tới web của VPS nếu chưa có, và tự đóng khi thoát.
+  - Host được lưu trong `remote.toml`, cạnh `deployment.toml`; IP VPS không nằm trong repo.
+  - Tự làm mới mỗi 60 giây; thanh trạng thái hiện tunnel, tuổi dữ liệu, nến H4 tiếp theo và lỗi của từng endpoint.
+- **4 tab:**
+  - **Tổng quan:** worker, việc cần chú ý, Telegram, chi phí model, nến H4 mới nhất của từng route, lỗi job trong 24 giờ;
+  - **Setup-2:** danh sách route, chart nến H4 vẽ bằng ký tự (EMA50, EMA200, kênh Donchian, mốc vào lệnh, stop), các tín hiệu kèm Jev, khung giờ, mô phỏng và limit;
+  - **Theo dõi ngầm:** V4, limit 0,25 ATR, điểm khung giờ;
+  - **Soak:** tiến độ và heartbeat từng route tới ngày review.
+- **Web:** endpoint chỉ đọc `GET /api/setup2/chart?route=` trả số liệu chart.
+  - Phần tính số liệu của `price_chart` được tách thành `chart_series`, nên SVG của `/setup2` giữ nguyên (đã so khớp với bản cũ).
+  - Endpoint này cần deploy web mới dùng được. Trước khi deploy, tab Setup-2 báo không tải được chart.
+- **Test:** `tests/test_tui.py` (7 test). Toàn bộ test: 1869 passed.
+
 ## 2026-10-19 — Deploy `9462520` lên VPS (theo dõi V4, chỉ restart web)
 
 Julius duyệt push và deploy. Push `5054708..9462520`, deploy lúc 12:58–13:05Z.

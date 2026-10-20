@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from intraday.active_set_cli import add_active_set_parser, dispatch_active_set
 from intraday.setup2_cli import add_setup2_parser, dispatch_setup2
 from intraday.learning_cli import add_learning_parser, dispatch_learning
+from intraday.tui import add_ui_parser, dispatch_ui
 from intraday.active_set import (allows as active_set_allows, is_active as active_set_is_active,
                                  record_skip as active_set_skip, watched as active_set_watched)
 from intraday.assets import ASSET_REGISTRY, asset_spec
@@ -198,6 +199,7 @@ def _parser() -> argparse.ArgumentParser:
     add_active_set_parser(commands)
     add_setup2_parser(commands)
     add_learning_parser(commands)
+    add_ui_parser(commands)
     serve = commands.add_parser("serve")
     serve.add_argument("--database", default=None)
     serve.add_argument("--execution-database", type=Path, default=None, help="opt-in Perp controller journal; never exchange credentials")
@@ -2242,6 +2244,9 @@ def main() -> None:
         return
     if arguments.command == "learning":
         dispatch_learning(arguments)
+        return
+    if arguments.command == "ui":
+        dispatch_ui(arguments)
         return
     if arguments.command == "provider":
         _provider_cli(arguments)

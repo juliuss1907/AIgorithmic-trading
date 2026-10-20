@@ -28,7 +28,7 @@ from intraday.dashboard_read_model import (
 from intraday.operator_service import build_operator_snapshot
 from intraday.portfolio_coordinator import ParentPortfolioPolicy
 from intraday.portfolio_view import latest_parent_market_view
-from intraday.setup2_dashboard import build_setup2_dashboard, price_chart
+from intraday.setup2_dashboard import build_setup2_dashboard, chart_payload, chart_series, price_chart
 from intraday.store import IntradayStore
 from intraday.asset_onboarding import AssetOnboarding
 from intraday.assets import spec_payload, ticker_symbol
@@ -389,6 +389,7 @@ def create_app(
         )
 
     charts: dict[str, CachedSnapshot] = {}
+    series_charts: dict[str, CachedSnapshot] = {}
 
     @app.get("/setup2", response_class=HTMLResponse)
     def setup2_page(request: Request, route: str | None = Query(default=None, max_length=32)):
@@ -412,6 +413,17 @@ def create_app(
     @app.get("/api/setup2")
     def setup2_snapshot():
         return setup2_view.get()
+
+    @app.get("/api/setup2/chart")
+    def setup2_chart(route: str = Query(max_length=32)):
+        if route not in {c["route"] for c in setup2_view.get()["campaigns"]}:
+            raise HTTPException(status_code=404, detail="unknown route")
+        if route not in series_charts:
+            series_charts[route] = CachedSnapshot(
+                lambda now, chosen=route: chart_payload(
+                    chart_series(store, chosen, setup2_view.get()["signals"], now=now)),
+                ttl_seconds=60)
+        return series_charts[route].get()
 
     @app.get("/system-plan", response_class=HTMLResponse)
     def system_plan(request: Request):

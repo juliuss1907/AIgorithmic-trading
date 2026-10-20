@@ -190,20 +190,21 @@ def _price(value):
     return f"{value:.6g}"
 
 
-def price_chart(store, route, signals=(), *, now, bars=CHART_BARS):
-    """SVG geometry of one route's last `bars` H4 candles with EMA50, EMA200, the 25-bar Donchian entry channel,
-    volume and the rule's entry signals (initial stop and shadow limit level); no candles without history."""
+def chart_series(store, route, signals=(), *, now, bars=CHART_BARS):
+    """Numbers of one route's last `bars` H4 candles: OHLCV, EMA50, EMA200, the 25-bar Donchian entry channel and
+    the rule's entry signals (initial stop, shadow limit level, the bar the stop line ends); `window` is empty
+    without history. Shared by the SVG chart of `/setup2` and the terminal chart of `aigt ui`."""
     from intraday.replay_v2.donchian_filters import indicator_series
     symbol, market = route.split(":")
     stored = setup2_store.list_bars(store, symbol, market, "4h")
     if not stored:
-        return dict(route=route, candles=[])
+        return dict(route=route, window=[])
     settings = setup2_store.coin_settings(store, symbol, anchor=stored[0].opened_at)
     series = setup2.anchored(setup2_store.proxied_bars(store, symbol, market, "4h", since=settings.anchor,
                                                        until=setup2.floor_h4(now), settings=settings),
                              settings.anchor) or []
     if len(series) <= CHANNEL:
-        return dict(route=route, candles=[])
+        return dict(route=route, window=[])
     indicators = indicator_series(series)
     first = max(CHANNEL, len(series)-bars)
     window = series[first:]
@@ -226,6 +227,26 @@ def price_chart(store, route, signals=(), *, now, bars=CHART_BARS):
         level = float(o["close"])+float(lr.LIMIT_ATR)*float(o["atr"]) if o["side"] < 0 else None
         marks.append(dict(k=k, side=o["side"], close=float(o["close"]), stop=stop, end=max(end, k+1), level=level,
                           at=o["bar_close"]))
+    return dict(route=route, window=window, upper=upper, lower=lower, ema50=ema["ema50"], ema200=ema["ema200"],
+                marks=marks)
+
+
+def chart_payload(series):
+    """`chart_series` as JSON for `/api/setup2/chart`."""
+    return dict(route=series["route"], bars=[
+        dict(at=b.opened_at.isoformat(), open=float(b.open), high=float(b.high), low=float(b.low),
+             close=float(b.close), volume=float(b.volume)) for b in series["window"]],
+        **{k: series.get(k, []) for k in ("upper", "lower", "ema50", "ema200", "marks")})
+
+
+def price_chart(store, route, signals=(), *, now, bars=CHART_BARS):
+    """SVG geometry of `chart_series`; no candles without history."""
+    series = chart_series(store, route, signals, now=now, bars=bars)
+    window = series["window"]
+    if not window:
+        return dict(route=route, candles=[])
+    upper, lower, marks = series["upper"], series["lower"], series["marks"]
+    ema = dict(ema50=series["ema50"], ema200=series["ema200"])
     values = [float(v) for b in window for v in (b.high, b.low)]+upper+lower
     values += [v for line in ema.values() for v in line if v is not None]+[m["stop"] for m in marks]
     low, high = min(values), max(values)

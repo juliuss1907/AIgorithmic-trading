@@ -68,6 +68,9 @@ def test_setup2_page_and_api_render(store):
     assert "Biến thể V4" in page.text and "Thiếu ADX" in page.text      # the entry has no ADX three bars back
     api = client.get("/api/setup2").json()
     assert api["signals"][0]["route"] == "ETHUSDT:perp"
+    chart = client.get("/api/setup2/chart", params=dict(route="ETHUSDT:perp"))
+    assert chart.status_code == 200 and chart.json()["bars"] == []            # two bars: shorter than the channel
+    assert client.get("/api/setup2/chart", params=dict(route="BTCUSDT:perp")).status_code == 404
 
 
 def test_setup2_page_renders_on_an_empty_database(tmp_path):
@@ -95,7 +98,7 @@ def test_cached_snapshot_serves_a_stale_copy_while_rebuilding_in_the_background(
 
 
 def test_price_chart_draws_candles_rule_lines_and_the_signal_stop(tmp_path):
-    from intraday.setup2_dashboard import CHANNEL, price_chart
+    from intraday.setup2_dashboard import CHANNEL, chart_payload, chart_series, price_chart
     store = IntradayStore(tmp_path/"chart.sqlite3")
     setup2_store.install(store)
     first = END-60*H4
@@ -111,3 +114,10 @@ def test_price_chart_draws_candles_rule_lines_and_the_signal_stop(tmp_path):
     [mark] = chart["marks"]
     assert mark["side"] == -1 and mark["stop_label"] == "109.2"        # the 5% cap (109.2) is tighter than 3 ATR (110)
     assert price_chart(store, "NEARUSDT:perp", now=END)["candles"] == []
+
+    payload = chart_payload(chart_series(store, "ETHUSDT:perp", now=END, bars=30))
+    assert len(payload["bars"]) == len(payload["ema50"]) == len(payload["upper"]) == 30
+    assert payload["bars"][0] == dict(at=(first+30*H4).isoformat(), open=103.0, high=104.0, low=102.0, close=103.5,
+                                      volume=payload["bars"][0]["volume"])
+    assert payload["marks"][0]["stop"] == pytest.approx(109.2) and payload["marks"][0]["k"] == 19   # closes bar 49
+    json.dumps(payload)
