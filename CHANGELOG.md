@@ -4,6 +4,23 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-20 — Deploy `3ae60eb` lên VPS (`aigt ui`, chỉ restart web)
+
+Julius duyệt push và deploy. Push `8f668a8..3ae60eb` lúc 06:59Z.
+
+- **Lần thử đầu bị hoãn:** lúc 06:59Z máy local đang ở mạng khác, không SSH được tới VPS, nên chưa chạy bước nào. Deploy lại lúc 12:27–12:33Z, sau khi máy về mạng nhà.
+- **Trước khi đổi code:**
+  - image cũ được gắn tag `rollback-9462520-20261020` (worker `db564bb489a7`, web `3188c9025ce4`, admin `60a8812ae7e7`);
+  - backup `intraday-20261020T122739709085Z.sqlite3`, kiểm tra `ok`.
+- **Image mới:** worker `3d1fb3b4e0ac`, web `620209ac5edb`, admin `6840d8d55d64`.
+- **Worker không bị restart:** vẫn chạy từ 19/10 08:32:57Z, `RestartCount` 0, dùng image `5f7cd99fd738`. Image này cũ hơn tag rollback vì lần deploy trước cũng không restart worker.
+- **Kết quả:**
+  - healthz 200;
+  - `/api/setup2/chart` trả 120 nến cho các route có thật (khoảng 0,2–0,3 giây) và 404 với route lạ;
+  - `/api/learning` trả danh sách rỗng, vì chưa có review nào;
+  - `aigt learning proposals list` trên host VPS chạy trong container admin;
+  - `aigt ui` trên máy local đọc được dữ liệu thật và vẽ được chart nến.
+
 ## 2026-10-20 — `aigt ui` bước 3: command palette cho mọi lệnh
 
 - **`Ctrl+P` liệt kê toàn bộ 94 lệnh `aigt`.** Danh sách đọc thẳng từ cây argparse, nên lệnh mới tự xuất hiện. Chọn một lệnh sẽ mở form sinh từ tham số của nó, kèm dòng xem trước đúng câu lệnh SSH sẽ chạy. Output JSON được tách khỏi các dòng tiến trình của Docker và tô màu.
