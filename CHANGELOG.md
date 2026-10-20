@@ -4,6 +4,17 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-20 — `aigt ui` bước 2: Lệnh, Vòng học, Vận hành
+
+- **3 tab mới:**
+  - **Lệnh:** danh mục mẹ (vốn, lãi đã chốt, phí, vị thế, giới hạn của profile `setup2_slots_v1`) và 50 quyết định gần nhất trong journal;
+  - **Vòng học:** các lần review và các đề xuất (chờ duyệt xếp trước), xem chi tiết từng đề xuất; phím `a`/`x` để duyệt hoặc từ chối, có ô ghi chú;
+  - **Vận hành:** job gần nhất, nguồn dữ liệu ngoài, nút tải 200 dòng log, backup DB, restart, start, stop.
+- **Thao tác ghi:** chạy `~/.local/bin/aigt …` trên VPS qua SSH, chỉ sau khi Julius bấm "Chạy" trong hộp xác nhận. Hộp này hiện đúng câu lệnh sẽ chạy, nút mặc định là "Huỷ". Riêng tải log là chỉ đọc nên chạy ngay.
+- **`aigt learning` chạy trong container admin** khi có deployment đã đăng ký, giống `status` và `doctor`. Lý do: report và sổ đề xuất nằm trong volume `replay-reports`, mà chỉ container mount volume này (trên host còn một DB cũ ở `~/.local/state`). Truyền `--database`, `--output` hoặc `--execution-database` thì vẫn chạy trực tiếp như cũ.
+- **Web:** endpoint chỉ đọc `GET /api/learning` (`learning_review.review_index`) trả các review (không kèm facts) và đề xuất. Trên VPS hiện chưa có review nào.
+- **Test:** thêm 4 test, gồm: lệnh ghi chỉ chạy sau khi xác nhận, huỷ thì không chạy, đề xuất đã quyết thì không mở hộp xác nhận.
+
 ## 2026-10-20 — `aigt ui`: dashboard toàn màn hình trong terminal (bước 1)
 
 Julius muốn CLI có giao diện đẹp hơn và chọn dashboard toàn màn hình, chạy trên máy local, đọc dữ liệu từ VPS (kế hoạch gồm 3 bước). Bước 1:

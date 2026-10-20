@@ -66,7 +66,9 @@ aigt ui --host julius@<vps>              # host được lưu vào ~/.config/<ap
 aigt ui                                  # lần sau; --no-tunnel để đọc tunnel đã mở sẵn
 ```
 
-Phím: `1`–`4` đổi tab, `r` làm mới (tự làm mới mỗi 60 giây), `z` thu/giãn nến ở tab Setup-2, `q` thoát.
+Phím: `1`–`7` đổi tab, `r` làm mới (tự làm mới mỗi 60 giây), `z` thu/giãn nến ở tab Setup-2,
+`a`/`x` duyệt/từ chối đề xuất ở tab Vòng học, `q` thoát. Mọi thao tác ghi (duyệt đề xuất, backup, restart,
+start/stop) chạy `aigt` trên VPS qua SSH sau một hộp xác nhận hiện đúng câu lệnh sẽ chạy.
 
 Kiểm tra cấu hình và trạng thái:
 

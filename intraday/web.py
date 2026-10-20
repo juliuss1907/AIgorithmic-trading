@@ -28,6 +28,8 @@ from intraday.dashboard_read_model import (
 from intraday.operator_service import build_operator_snapshot
 from intraday.portfolio_coordinator import ParentPortfolioPolicy
 from intraday.portfolio_view import latest_parent_market_view
+from intraday.learning_cli import report_dir as learning_report_dir
+from intraday.learning_review import review_index
 from intraday.setup2_dashboard import build_setup2_dashboard, chart_payload, chart_series, price_chart
 from intraday.store import IntradayStore
 from intraday.asset_onboarding import AssetOnboarding
@@ -174,6 +176,7 @@ def create_app(
     # Both pages read long histories (about 10 s for the overview on the VPS): serve them from memory.
     overview = CachedSnapshot(lambda now: build_dashboard_snapshot(store, now=now), ttl_seconds=60)
     setup2_view = CachedSnapshot(lambda now: build_setup2_dashboard(store, now=now), ttl_seconds=30)
+    learning_view = CachedSnapshot(lambda now: review_index(learning_report_dir()), ttl_seconds=60)
     app.include_router(replay_router(resolve_report_dir(replay_report_dir), templates))
     app.include_router(confidence_router(store.database, resolve_report_dir(replay_report_dir)))
     app.mount("/static", StaticFiles(directory=ASSETS / "static"), name="static")
@@ -413,6 +416,10 @@ def create_app(
     @app.get("/api/setup2")
     def setup2_snapshot():
         return setup2_view.get()
+
+    @app.get("/api/learning")
+    def learning_snapshot():
+        return learning_view.get()
 
     @app.get("/api/setup2/chart")
     def setup2_chart(route: str = Query(max_length=32)):

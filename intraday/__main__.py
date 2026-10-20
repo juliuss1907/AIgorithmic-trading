@@ -2189,10 +2189,12 @@ def main() -> None:
             raise SystemExit(code)
         return
     explicit_native_paths = any(
-        item in raw_arguments for item in ("--database", "--secrets-file")
+        item in raw_arguments
+        for item in ("--database", "--secrets-file", "--output", "--execution-database")
     )
+    # learning: its reports live in the replay-reports volume, which only the containers mount.
     if arguments.command in {
-        "analysis", "doctor", "status", "provider", "connect"
+        "analysis", "doctor", "status", "provider", "connect", "learning"
     } and not explicit_native_paths:
         deployment = deployment_cli.load_deployment()
         if deployment is not None:

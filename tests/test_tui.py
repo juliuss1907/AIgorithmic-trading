@@ -58,7 +58,12 @@ def text(renderable, width=200):
 class FakeRemote(Remote):
     def __init__(self, responses, tunnel="existing"):
         super().__init__("julius@vps")
-        self.responses, self.tunnel_state, self.paths = responses, tunnel, []
+        self.responses, self.tunnel_state, self.paths, self.ran = responses, tunnel, [], []
+
+    def run(self, arguments, **_):
+        self.ran.append(arguments)
+        yield "done"
+        yield "[exit 0]"
 
     def open_tunnel(self, **_):
         if isinstance(self.tunnel_state, Exception):
@@ -176,3 +181,91 @@ def test_app_survives_a_failing_endpoint_and_a_failed_tunnel():
 def test_ui_command_parses():
     arguments = _parser().parse_args(["ui", "--host", "julius@vps", "--port", "18082"])
     assert (arguments.command, arguments.host, arguments.port, arguments.no_tunnel) == ("ui", "julius@vps", 18082, False)
+
+
+PROPOSAL = dict(id="lr-1-D2-1", review_id="lr-1", section="D2", status="pending", created_at="2026-10-19T02:31:00+00:00",
+                decided_at=None, actor=None, note=None,
+                payload=dict(kind="watch", title="volume_ma chặn breakout tốt", detail="Ba lần đều lãi.", evidence=["f1"]))
+LEARNING = dict(reviews=[dict(review_id="lr-1", created_at="2026-10-19T02:30:00+00:00", status="valid", errors=0,
+                              model="opus", proposals=["lr-1-D2-1"])],
+                proposals=[PROPOSAL, dict(PROPOSAL, id="lr-1-B2-1", section="B2", status="approved")])
+PORTFOLIO = dict(portfolio=dict(initial_equity=10000.0, realized_pnl=12.5, fees=1.0, funding=0.0, spot_quantity=0.0,
+                                perp_quantity=0.0, entries_paused=True, halt_reason="soak_not_promoted",
+                                updated_at="2026-09-24T13:07:50Z"),
+                 limits=dict(profile="setup2_slots_v1", spot_budget_pct=0.5, perp_budget_pct=0.5, leverage=1,
+                             daily_loss_limit_pct=0.03, max_drawdown_pct=0.15))
+SIGNALS = [dict(timestamp="2026-10-18T20:00:04+00:00", symbol="ZECUSDT", scope="perp_intraday", direction="Buy",
+                confidence=0.36, regime="Trending Down", outcome="REJECTED", gate_reason="setup2_soak_observation_only")]
+DASHBOARD = dict(status=dict(code="OK", label="OK", reasons=[]),
+                 soak=dict(evidence_version="v2", persisted_evaluation=None),
+                 scheduler=[dict(job_name="asset_spot_4h_hypeusdt", scheduled_for="2026-10-20T04:00:00+00:00",
+                                 status="error", started_at="2026-10-20T04:00:05+00:00", error_code="StaleMarketData")],
+                 external_sources=dict(aster=dict(status="healthy", last_received_at="2026-10-20T04:00:00+00:00",
+                                                  total_observations=170268)))
+
+
+def full_remote():
+    return FakeRemote({"/api/setup2": SETUP2, "/api/dashboard": DASHBOARD, "/api/setup2/chart": CHART,
+                       "/api/learning": LEARNING, "/api/portfolio": PORTFOLIO, "/api/signals?limit=50": SIGNALS})
+
+
+def test_trades_and_ops_tabs_show_the_portfolio_journal_scheduler_and_sources():
+    async def check(app, pilot):
+        portfolio = text(app.query_one("#trades-portfolio").content)
+        assert "setup2_slots_v1" in portfolio and "tạm dừng (soak_not_promoted)" in portfolio and "12.50" in portfolio
+        assert [str(c) for c in app.query_one("#trades-signals").get_row_at(0)][1:3] == ["ZEC", "perp_intraday"]
+        assert [str(c) for c in app.query_one("#ops-scheduler").get_row_at(0)][4] == "StaleMarketData"
+        assert [str(c) for c in app.query_one("#ops-sources").get_row_at(0)][3] == "170,268"
+    run_app(full_remote(), check)
+
+
+def test_learning_decisions_run_on_the_vps_only_after_the_confirmation():
+    from intraday.tui.confirm import ConfirmScreen
+    remote = full_remote()
+
+    async def check(app, pilot):
+        app.action_tab("learning")
+        app.query_one("#learning-proposals").focus()
+        await pilot.pause(0.2)
+        assert "Ba lần đều lãi." in text(app.query_one("#learning-detail").content)
+        await pilot.press("a")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ConfirmScreen)
+        assert "learning proposals approve lr-1-D2-1 --actor" in app.screen.command
+        await pilot.press("escape")                                       # cancelled: nothing runs
+        await pilot.pause(0.2)
+        assert remote.ran == []
+        await pilot.press("x")
+        await pilot.pause(0.2)
+        app.screen.query_one("#confirm-note").value = "mẫu nhỏ"
+        await pilot.click("#run")
+        await pilot.pause(0.3)
+        await app.workers.wait_for_complete()
+        [arguments] = remote.ran
+        assert arguments[:4] == ["learning", "proposals", "reject", "lr-1-D2-1"] and arguments[-2:] == ["--note", "mẫu nhỏ"]
+        app.query_one("#learning-proposals").move_cursor(row=1)        # already approved: no confirmation
+        await pilot.press("a")
+        await pilot.pause(0.2)
+        assert not isinstance(app.screen, ConfirmScreen) and len(remote.ran) == 1
+    run_app(remote, check)
+
+
+def test_ops_logs_run_at_once_and_service_actions_wait_for_the_confirmation():
+    from intraday.tui.confirm import ConfirmScreen
+    remote = full_remote()
+
+    async def check(app, pilot):
+        app.action_tab("ops")
+        await pilot.pause(0.2)
+        await pilot.click("#ops-logs")
+        await pilot.pause(0.3)
+        await app.workers.wait_for_complete()
+        assert remote.ran == [["logs", "--no-follow", "--tail", "200"]]
+        assert any("done" in str(line) for line in app.query_one("#ops-log").lines)
+        await pilot.click("#ops-restart")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ConfirmScreen) and app.screen.command.endswith("aigt restart'")
+        await pilot.click("#cancel")
+        await pilot.pause(0.2)
+        assert len(remote.ran) == 1
+    run_app(remote, check)

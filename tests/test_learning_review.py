@@ -388,6 +388,30 @@ def test_proposals_are_queued_pending_and_decided_once(tmp_path):
     assert [p["id"] for p in lr._prior(lr.load_proposals(tmp_path))] == ["lr-1-E2-1"]
 
 
+def test_review_index_lists_reviews_without_facts_and_pending_proposals_first(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from intraday.web import create_app
+    reports = tmp_path/"reports"
+    assert lr.review_index(reports/"learning") == dict(reviews=[], proposals=[])
+    directory = reports/"learning"
+    directory.mkdir(parents=True)
+    for review_id, status in (("lr-20261012-023000", None), ("lr-20261019-023000", "valid")):
+        (directory/f"{review_id}.json").write_text(json.dumps(dict(
+            review_id=review_id, created_at="x", facts={"big": [1]*100},
+            review=None if status is None else dict(status=status, errors=[], model="opus"), proposals=[])))
+    lr.record_proposals(directory, "lr-1", answer().model_dump(), now=END)
+    lr.record_proposals(directory, "lr-2", answer().model_dump(), now=END+H4)
+    lr.decide_proposal(directory, "lr-2-E2-1", status="approved", actor="julius", note=None, now=END+H4)
+    index = lr.review_index(directory)
+    assert [(r["review_id"], r["status"]) for r in index["reviews"]] == [
+        ("lr-20261019-023000", "valid"), ("lr-20261012-023000", "facts_only")]
+    assert "facts" not in index["reviews"][0]
+    assert [p["id"] for p in index["proposals"]] == ["lr-1-E2-1", "lr-2-E2-1"]
+    monkeypatch.setenv("INTRADAY_REPLAY_REPORT_DIR", str(reports))
+    api = TestClient(create_app(database=tmp_path/"intraday.sqlite3")).get("/api/learning").json()
+    assert api == json.loads(json.dumps(index))
+
+
 def test_cli_writes_a_facts_only_report_from_a_bare_database(store, tmp_path, capsys):
     seasonal(store)
     observe(store, "ETHUSDT", "perp", END-H4, side=-1, close=100)

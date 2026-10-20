@@ -586,8 +586,11 @@ def test_global_aigt_routes_doctor_to_registered_docker_deployment(
     ]
 
 
-def test_global_aigt_routes_analysis_to_registered_docker_deployment(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("arguments", [
+    ["analysis"], ["learning", "proposals", "approve", "p-1", "--actor", "julius"],
+])
+def test_global_aigt_routes_analysis_and_learning_to_registered_docker_deployment(
+    monkeypatch, tmp_path, arguments
 ):
     from intraday import deployment as deployment_module
 
@@ -605,12 +608,12 @@ def test_global_aigt_routes_analysis_to_registered_docker_deployment(
         "execute",
         lambda command, *, cwd: calls.append((command, cwd)) or 0,
     )
-    monkeypatch.setattr(sys, "argv", ["aigt", "analysis"])
+    monkeypatch.setattr(sys, "argv", ["aigt", *arguments])
 
     main()
 
     assert calls == [
-        (deployment_module.admin_command(registered, ["analysis"]), root)
+        (deployment_module.admin_command(registered, arguments), root)
     ]
 
 

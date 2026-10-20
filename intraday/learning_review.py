@@ -1013,6 +1013,24 @@ def record_proposals(directory, review_id, answer, *, now) -> list[dict]:
     return added
 
 
+def review_index(directory, *, limit=12) -> dict:
+    """The latest reviews without their facts, and every proposal, pending first: the `aigt ui` learning tab."""
+    directory = Path(directory)
+    reviews = []
+    for path in sorted(directory.glob("lr-*.json"), reverse=True)[:limit]:
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        review = payload.get("review") or {}
+        reviews.append(dict(review_id=payload.get("review_id", path.stem), created_at=payload.get("created_at"),
+                            status=review.get("status", "facts_only"), errors=len(review.get("errors") or []),
+                            model=review.get("model"), proposals=payload.get("proposals", [])))
+    proposals = sorted(load_proposals(directory) if directory.is_dir() else [], key=lambda p: p["created_at"],
+                       reverse=True)
+    return dict(reviews=reviews, proposals=sorted(proposals, key=lambda p: p["status"] != "pending"))
+
+
 def decide_proposal(directory, proposal_id, *, status, actor, note, now) -> dict:
     if status not in {"approved", "rejected"}:
         raise ValueError("a proposal is approved or rejected")
