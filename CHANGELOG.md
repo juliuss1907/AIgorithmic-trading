@@ -4,6 +4,27 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-21 — Sự cố: job ETH Spot 4h dừng vì Binance sửa nến đã đóng
+
+**Phát hiện:** khi kiểm tra VPS lúc 12:02Z, job `asset_spot_4h_ethusdt` đã báo `ValueError` liên tục 4 nến (21/10 00:00, 04:00, 08:00, 12:00Z). Heartbeat của ETH Spot giảm còn 90,9%.
+
+**Nguyên nhân:**
+- Lúc 20:00:53Z ngày 20/10, worker lưu nến ETH Spot 4h mở lúc 20/10 16:00Z vào `asset_daily_candles`.
+- Sau đó Binance sửa lại nến này: giá đóng từ 2437,32 thành 2437,92, có thêm 169 giao dịch.
+- Ở mỗi nến H4 sau đó, `record_asset_candles` tải lại nến này, thấy khác bản đã lưu, báo `historical 4h candle changed` và dừng cả job. Vì job dừng sớm, Setup-2 không được đánh giá.
+- `setup2_candles` đã lưu đúng bản Binance đã sửa. Không có nến 8h, 1d hay coin nào khác bị lệch.
+
+**Cách sửa** (Julius duyệt, khoảng 12:10Z):
+- Backup trước: `intraday-20261021T120657741631Z.sqlite3`, kiểm tra `ok`.
+- Sửa đúng một dòng trong `asset_daily_candles` (ETHUSDT, 4h, open 20/10 16:00Z) thành bản Binance hiện tại.
+- Script có kiểm tra: bản cũ trong DB phải khớp chính xác, và bản mới phải trùng với `setup2_candles`.
+- Chạy lại probe chỉ-đọc: không còn nến nào lệch.
+- Không deploy code, không restart worker.
+
+**Ảnh hưởng tới soak:** 4 nến đã mất không được bù lại. Nếu từ nến 16:00Z không mất thêm nến nào, đến buổi review 28/10 ETH Spot còn 80/84 nến = 95,2%, vừa đủ ngưỡng 95%.
+
+**Việc còn mở:** code vẫn sẽ dừng job nếu Binance sửa một nến khác. Cần sửa để job nhận bản đã sửa (ghi đè và ghi log) thay vì dừng; bản sửa này sẽ được duyệt riêng.
+
 ## 2026-10-20 — Deploy `3ae60eb` lên VPS (`aigt ui`, chỉ restart web)
 
 Julius duyệt push và deploy. Push `8f668a8..3ae60eb` lúc 06:59Z.
