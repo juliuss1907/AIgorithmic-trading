@@ -67,7 +67,7 @@ def test_legacy_snapshot_readers_remain_btc_scoped(tmp_path):
     assert store.latest_snapshot(symbol="ETHUSDT") == eth
 
 
-def test_native_spot_candle_intervals_are_isolated_and_immutable(tmp_path):
+def test_native_spot_candle_intervals_are_isolated_and_take_binance_revisions(tmp_path, capsys):
     store = IntradayStore(tmp_path / "intraday.sqlite")
     for interval, width in (("4h", 14_400_000), ("8h", 28_800_000),
                             ("1d", 86_400_000)):
@@ -75,11 +75,12 @@ def test_native_spot_candle_intervals_are_isolated_and_immutable(tmp_path):
         assert store.record_asset_candles("ETHUSDT", interval, [candle]) == 1
         assert store.record_asset_candles("ETHUSDT", interval, [candle]) == 0
         assert store.list_asset_candles("ETHUSDT", interval) == [candle]
-        with pytest.raises(ValueError, match="historical"):
-            store.record_asset_candles(
-                "ETHUSDT", interval,
-                [[0, "100", "103", "99", "101", "10", width - 1]],
-            )
+        # Binance corrected a closed bar (21/10, ETH Spot 4h): the revision replaces it instead of failing the job.
+        revised = [0, "100", "103", "99", "101", "11", width - 1]
+        assert store.record_asset_candles("ETHUSDT", interval, [revised]) == 0
+        assert store.list_asset_candles("ETHUSDT", interval) == [revised]
+        logged = json.loads(capsys.readouterr().err)["candle_revised"]
+        assert logged["interval"] == interval and json.loads(logged["stored"]) == candle
 
 
 def test_v21_candle_constraint_migrates_without_losing_daily_history(tmp_path):

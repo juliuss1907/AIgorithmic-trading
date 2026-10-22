@@ -97,6 +97,23 @@ def test_cached_snapshot_serves_a_stale_copy_while_rebuilding_in_the_background(
     assert snapshot.get() == 2 and len(builds) == 2
 
 
+def test_cached_snapshot_rebuilds_before_answering_once_the_copy_is_too_old():
+    clock, builds = [0.0], []
+
+    def build(now):
+        builds.append(now)
+        if len(builds) == 3:
+            raise RuntimeError("database locked")
+        return len(builds)
+
+    snapshot = CachedSnapshot(build, ttl_seconds=30, max_stale_seconds=600, clock=lambda: clock[0])
+    assert snapshot.get() == 1
+    clock[0] = 601.0
+    assert snapshot.get() == 2                              # nobody looked for ten minutes: wait for a fresh copy
+    clock[0] = 1300.0
+    assert snapshot.get() == 2 and not snapshot.refreshing  # a failed rebuild still answers with the old copy
+
+
 def test_price_chart_draws_candles_rule_lines_and_the_signal_stop(tmp_path):
     from intraday.setup2_dashboard import CHANNEL, chart_payload, chart_series, price_chart
     store = IntradayStore(tmp_path/"chart.sqlite3")

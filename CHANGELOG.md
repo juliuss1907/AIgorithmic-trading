@@ -4,6 +4,24 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-22 — Nhận nến Binance sửa lại; web không trả bản cache quá cũ
+
+Julius duyệt cả hai bản sửa sau sự cố ETH Spot ngày 21/10 và lần kiểm tra chart ETH.
+
+- **Nến Binance sửa sau khi đóng** (`IntradayStore.record_asset_candles`):
+  - Trước đây, khi Binance trả một nến đã lưu với nội dung khác, job báo `ValueError` và dừng ở mọi nến H4 sau đó.
+  - Giờ bản Binance sửa sẽ thay bản đã lưu, và worker in một dòng log `{"candle_revised": …}` có cả bản cũ lẫn bản mới, xem được bằng `aigt logs`.
+  - `setup2_candles` không cần sửa: `setup2_store.sync` chỉ tải các nến sau nến cuối đã lưu, nên không tải lại nến cũ.
+- **Cache của web** (`CachedSnapshot`):
+  - Trước đây, request đầu tiên sau một thời gian dài không ai mở web nhận lại bản cũ. Ví dụ ngày 22/10, chart ETH Perp trả nến cuối là 20/10 08:00.
+  - Giờ nếu bản cache cũ hơn 10 phút (`max_stale_seconds=600`), request chờ tính lại xong rồi mới trả. Nếu tính lại lỗi thì vẫn trả bản cũ.
+  - Trong 10 phút đầu, web vẫn trả bản cache ngay rồi tính lại ở nền như trước.
+- **Test:**
+  - `test_native_spot_candle_intervals_are_isolated_and_take_binance_revisions` thay cho test "immutable" cũ;
+  - thêm `test_cached_snapshot_rebuilds_before_answering_once_the_copy_is_too_old`;
+  - toàn bộ suite: 1879 passed. `test_perp_collection_migration` vẫn có 1 test fail như trước khi sửa.
+- **Deploy:** cần restart worker để bản sửa nến có hiệu lực, và restart web để bản sửa cache có hiệu lực.
+
 ## 2026-10-21 — Sự cố: job ETH Spot 4h dừng vì Binance sửa nến đã đóng
 
 **Phát hiện:** khi kiểm tra VPS lúc 12:02Z, job `asset_spot_4h_ethusdt` đã báo `ValueError` liên tục 4 nến (21/10 00:00, 04:00, 08:00, 12:00Z). Heartbeat của ETH Spot giảm còn 90,9%.

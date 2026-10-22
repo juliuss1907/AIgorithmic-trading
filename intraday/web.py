@@ -78,10 +78,11 @@ def _duration(value) -> str:
 
 class CachedSnapshot:
     """A read model served from memory: a stale copy is returned at once while one background thread rebuilds
-    it, so the slow history queries never block a page. Only the first request waits for a build."""
+    it, so the slow history queries never block a page. The first request, and one after the copy has aged past
+    `max_stale_seconds` (nobody looked for a while), waits for a build: a days-old chart is worse than a slow one."""
 
-    def __init__(self, build, *, ttl_seconds: float, clock=time.monotonic):
-        self.build, self.ttl, self.clock = build, ttl_seconds, clock
+    def __init__(self, build, *, ttl_seconds: float, max_stale_seconds: float = 600, clock=time.monotonic):
+        self.build, self.ttl, self.max_stale, self.clock = build, ttl_seconds, max_stale_seconds, clock
         self.value, self.built_at, self.refreshing = None, None, False
         self.lock = threading.Lock()
 
@@ -97,15 +98,19 @@ class CachedSnapshot:
     def get(self):
         with self.lock:
             value = self.value
-            stale = self.built_at is None or self.clock()-self.built_at >= self.ttl
-            start = stale and not self.refreshing
+            age = None if self.built_at is None else self.clock()-self.built_at
+            start = (age is None or age >= self.ttl) and not self.refreshing
             if start:
                 self.refreshing = True
-        if value is None:
+        if value is None or age >= self.max_stale:
             if start:
-                self._rebuild()
+                try:
+                    self._rebuild()
+                except Exception:
+                    if value is None:
+                        raise
             else:
-                while self.value is None and self.refreshing:
+                while self.refreshing:
                     time.sleep(0.05)
             if self.value is None:
                 raise RuntimeError("snapshot build failed")

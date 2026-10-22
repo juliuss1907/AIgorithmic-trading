@@ -7,6 +7,7 @@ import hashlib
 import math
 import re
 import sqlite3
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -1184,7 +1185,10 @@ class IntradayStore:
     def record_asset_candles(
         self, symbol: str, interval: str, candles: list[list]
     ) -> int:
-        """Append native closed Binance bars, immutable per symbol and interval."""
+        """Append native closed Binance bars, one per symbol, interval and open time.
+
+        Binance may still correct a bar after its close (21/10: ETH Spot 4h of 20/10 16:00Z, 169 late trades).
+        The exchange's revision replaces the stored payload and is logged; it must not stop the collection job."""
         symbol = self.asset_spec(symbol).symbol
         lengths = {"4h": 14_400_000, "8h": 28_800_000, "1d": 86_400_000}
         if interval not in lengths:
@@ -1212,7 +1216,15 @@ class IntradayStore:
                 ).fetchone()
                 if existing is not None:
                     if existing["payload_json"] != payload:
-                        raise ValueError(f"historical {interval} candle changed")
+                        connection.execute(
+                            "UPDATE asset_daily_candles SET payload_json=? "
+                            "WHERE symbol=? AND interval=? AND open_time=?",
+                            (payload, symbol, interval, opening),
+                        )
+                        print(json.dumps({"candle_revised": {
+                            "symbol": symbol, "interval": interval, "open_time": opening,
+                            "stored": existing["payload_json"], "revised": payload,
+                        }}), file=sys.stderr, flush=True)
                     continue
                 connection.execute(
                     "INSERT INTO asset_daily_candles VALUES (?, ?, ?, ?, ?)",
