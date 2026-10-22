@@ -16,35 +16,20 @@ Prices are floats: the study compares outcomes and never sizes an order. Nothing
 import argparse
 import hashlib
 import json
-from collections import defaultdict
-from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
 from statistics import fmean
 
-from intraday.replay_v2 import donchian_rotation_select as sel
+from intraday.replay_v2 import slot_replay
+from intraday.replay_v2.slot_replay import CAP, COST_PCT, MARGIN, SIDES, SLEEVE, SLOTS, Route
 
-CAP, SLEEVE, SLOTS, MARGIN = 0.05, 0.5, 3, 5
-COST_PCT = {'perp': 0.20, 'spot': 0.30}   # round trip: the replay profile's fee + slippage on both sides
-LIMIT_ATR, QUARTERS = 0.25, 16
+LIMIT_ATR = 0.25
 HALF, TIER2_BARS = 0.5, 6
 TIER2_FILTERS = frozenset(('ema200', 'ema50', 'adx', 'dmi'))
 VARIANTS = ('B', 'V1', 'V2', 'V3', 'V4', 'V5')
 MODES = ('market', 'limit')
 MAX_DD = 10.0
-SIDES = {'perp': -1, 'spot': 1}
 NUMBERS = ('mult', 'atr', 'adx', 'prior_adx', 'adx3', 'plus_di', 'minus_di', 'volume', 'volume_ma', 'ema20',
            'prior_ema20', 'ema50')
-
-
-@dataclass(frozen=True)
-class Route:
-    symbol: str
-    market: str
-    side: int
-    bars: tuple      # (opened_at, open, high, low, close)
-    obs: tuple       # per bar: the observation dict, None before warm-up
-    index: dict      # opened_at -> bar index
 
 
 def observation(item):
@@ -106,162 +91,19 @@ def tier2_ready(s):
     return s is not None and not (s['failed'] & TIER2_FILTERS)
 
 
-class Trail:
-    """ATR14 x 3 trail from the first entry, capped at 5% from it; never loosens."""
-
-    def __init__(self, side, entry, atr):
-        self.side, self.extreme = side, entry
-        stop, hard = entry-side*3*atr, entry*(1-side*CAP)
-        self.stop = max(stop, hard) if side > 0 else min(stop, hard)
-
-    def update(self, high, low, atr):
-        self.extreme = max(self.extreme, high) if self.side > 0 else min(self.extreme, low)
-        c = self.extreme-self.side*3*atr
-        self.stop = max(self.stop, c) if self.side > 0 else min(self.stop, c)
-
-    def hit(self, high, low):
-        return low <= self.stop if self.side > 0 else high >= self.stop
-
-
 # Portfolio replay.
 
 def run(routes, m15, variant, *, mode='market', cost_mult=1.0):
     """Closed tranches (one per entry fill) and the blocked-entry counts of one variant and entry mode."""
-    trades, pos, pending, blocked = [], {}, {}, defaultdict(int)
-    times = sorted({b[0] for r in routes.values() for b in r.bars})
-
-    def open_(rt, price, weight, tier, signal, signal_index, factor, atr, add):
-        if rt in pos:
-            pos[rt]['tranches'].append(dict(entry=price, weight=weight, tier=tier))
-            return
-        pos[rt] = dict(trail=Trail(routes[rt].side, price, atr), signal=signal, signal_index=signal_index,
-                       factor=factor, add_until=signal_index+TIER2_BARS if add else None,
-                       base_weight=weight, tranches=[dict(entry=price, weight=weight, tier=tier)])
-
-    def close(rt, at, price, reason):
-        p, r = pos.pop(rt), routes[rt]
-        for tr in p['tranches']:
-            ret = r.side*(price/tr['entry']-1)*100-COST_PCT[r.market]*cost_mult
-            trades.append(dict(route=rt, market=r.market, signal=p['signal'], exited=at, ret=ret,
-                               pnl=ret*tr['weight'], reason=reason, tier=tr['tier'], factor=p['factor']))
-
-    def book(rt, i):
-        p, r = pos[rt], routes[rt]
-        price = r.bars[i][1] if i is not None else p['tranches'][0]['entry']
-        weight = sum(t['weight'] for t in p['tranches'])
-        pnl = sum(r.side*(price/t['entry']-1)*t['weight'] for t in p['tranches'])
-        return pnl, pnl/weight
-
-    for t in times:
-        live = {rt: r.index[t] for rt, r in routes.items() if t in r.index}
-        # 1. Exits at the open: gaps through the stop, then Donchian exits of the last closed bar.
-        for rt in list(pos):
-            if rt not in live:
-                continue
-            r, i = routes[rt], live[rt]
-            o = r.bars[i][1]
-            if (o <= pos[rt]['trail'].stop) if r.side > 0 else (o >= pos[rt]['trail'].stop):
-                close(rt, t, o, 'gap')
-            elif i and r.obs[i-1] and r.obs[i-1]['exit']:
-                close(rt, t, o, 'donchian_exit')
-        # 2. V2 second half at the open after a confirming bar inside the window.
-        for rt in list(pos):
-            p = pos[rt]
-            if p['add_until'] is None or rt not in live:
-                continue
-            r, i = routes[rt], live[rt]
-            if p['signal_index'] < i-1 <= p['add_until'] and tier2_ready(r.obs[i-1]):
-                open_(rt, r.bars[i][1], p['base_weight'], 2, p['signal'], p['signal_index'], p['factor'], None, False)
-                p['add_until'] = None
-            elif i-1 >= p['add_until']:
-                p['add_until'] = None
-        # 3. Entries of the last closed bar, ranked and granted by the runtime's selection.
-        busy = {routes[rt].symbol for rt in list(pos)+list(pending)}
-        cands, factors = [], {}
-        for rt, i in live.items():
-            r = routes[rt]
-            if not i or rt in pos or rt in pending or r.symbol in busy:
-                continue
-            s = r.obs[i-1]
-            factor = entry_factor(variant, r.side, s, r.bars[i-1])
-            if factor:
-                factors[rt] = factor
-                ratio = s['volume']/s['volume_ma'] if s['volume_ma'] else 0
-                cands.append(sel.Candidate(r.market, r.symbol, Decimal(str(s['mult']*factor)),
-                                           Decimal(str(s['adx'] or 0)), Decimal(str(ratio))))
-        granted = []
-        if cands:
-            held, total = [], 0.0
-            for rt in pos:
-                r, i = routes[rt], live.get(rt)
-                f = r.obs[i-1] if i else None
-                strength = sel.trend_strength({k: None if f is None or f[k] is None else Decimal(str(f[k]))
-                                               for k in ('adx', 'plus_di', 'minus_di')}, r.side)
-                pnl, ratio = book(rt, i)
-                total += pnl
-                held.append(sel.Held(r.market, r.symbol, strength, Decimal(str(ratio)), i is not None))
-            for rt in pending:
-                held.append(sel.Held(routes[rt].market, routes[rt].symbol, Decimal(999), Decimal(0), False))
-            if sel.pnl_gate_blocks(len(pos), Decimal(str(total))):
-                blocked['pnl_gate'] += len(cands)
-            else:
-                for st in sel.select_entries(cands, held, max_positions=SLOTS, limit_scope='total', rotation=True,
-                                             margin=Decimal(MARGIN)):
-                    if st.kind == 'blocked':
-                        blocked[st.reason] += 1
-                    else:
-                        granted.append((f'{st.symbol}:{st.market}', st.victim))
-        filled_now = set()
-        for rt, victim in granted:
-            if victim:
-                vr = f'{victim[1]}:{victim[0]}'
-                close(vr, t, routes[vr].bars[live[vr]][1], 'rotated')
-            r, i = routes[rt], live[rt]
-            s, factor = r.obs[i-1], factors[rt]
-            weight, signal = SLEEVE/SLOTS*s['mult']*factor, r.bars[i-1][0]
-            add = variant == 'V2' and factor < 1
-            if r.market == 'perp' and mode == 'limit':
-                pending[rt] = dict(level=r.bars[i-1][4]+LIMIT_ATR*s['atr'], atr=s['atr'], weight=weight,
-                                   signal=signal, signal_index=i-1, factor=factor, add=add)
-            else:
-                open_(rt, r.bars[i][1], weight, 1, signal, i-1, factor, s['atr'], add)
-        # 4. Pending limits fill on M15 inside this H4 bar; the stop is read from the fill's M15 bar on.
-        for rt in list(pending):
-            if rt not in live:
-                continue
-            p, r, i = pending.pop(rt), routes[rt], live[rt]
-            quarter = (m15.get(f"{r.symbol}:{p['signal']}") or [])[:QUARTERS]
-            if len(quarter) < QUARTERS or any(q is None for q in quarter):
-                quarter = [(t, *r.bars[i][1:5])]   # no M15: the H4 bar stands in
-            for k, (qt, qo, qh, ql, qc) in enumerate(quarter):
-                fill = qo if qo >= p['level'] else p['level'] if qh >= p['level'] else None
-                if fill is None:
-                    continue
-                open_(rt, fill, p['weight'], 1, p['signal'], p['signal_index'], p['factor'], p['atr'], p['add'])
-                filled_now.add(rt)
-                rest = quarter[k:]
-                if any(q[2] >= pos[rt]['trail'].stop for q in rest):
-                    close(rt, qt, pos[rt]['trail'].stop, 'stop')
-                else:
-                    pos[rt]['after_fill'] = (max(q[2] for q in rest), min(q[3] for q in rest))
-                break
-        # 5. Intrabar stops of positions held through the bar, then the trail ratchets at the close.
-        for rt in list(pos):
-            if rt not in live:
-                continue
-            r, i = routes[rt], live[rt]
-            _, o, h, l, c = r.bars[i]
-            if rt not in filled_now and pos[rt]['trail'].hit(h, l):
-                close(rt, t, pos[rt]['trail'].stop, 'stop')
-                continue
-            cur = r.obs[i]
-            hh, ll = pos[rt].pop('after_fill', (h, l))
-            if cur and not cur['exit'] and cur['atr']:
-                pos[rt]['trail'].update(hh, ll, cur['atr'])
-    for rt in list(pos):
-        last = routes[rt].bars[-1]
-        close(rt, last[0], last[4], 'open')
-    return trades, dict(blocked)
+    def plan(rt, i):
+        r = routes[rt]
+        factor = entry_factor(variant, r.side, r.obs[i], r.bars[i])
+        if not factor:
+            return None
+        limit = r.bars[i][4]+LIMIT_ATR*r.obs[i]['atr'] if r.market == 'perp' and mode == 'limit' else None
+        return slot_replay.Entry(factor, i, limit=limit, window_key=f'{r.symbol}:{r.bars[i][0]}',
+                                 add=variant == 'V2' and factor < 1)
+    return slot_replay.run(routes, m15, plan, cost_mult=cost_mult, add_ready=tier2_ready, add_bars=TIER2_BARS)
 
 
 # Scoring.
