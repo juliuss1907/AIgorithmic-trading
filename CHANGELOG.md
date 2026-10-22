@@ -4,6 +4,34 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-22 — Nghiên cứu vùng hỗ trợ/kháng cự cho Setup-2: không biến thể nào đạt
+
+**Vì sao làm:**
+- 2 lệnh ZEC Spot LONG ngày 21/10 vào ngay dưới vùng kháng cự 1349–1385, và cả hai chạm stop −5%.
+- Julius đưa 3 indicator TradingView (LuxAlgo, SRchannel, ChartPrime). Sau các phép thử nhanh, Julius duyệt plan: thử 4 cách vào lệnh dựa trên vùng, và nếu đạt thì đưa vào luật sau buổi review 28/10.
+
+**Code** (đều thuộc research, không đụng runtime):
+- `9e8859d`: `replay_v2/sr_zones.py`, bản port SRchannel (MPL-2.0), tham số mặc định.
+- `f35ce28`: tách vòng lặp danh mục slot ra `replay_v2/slot_replay.py`. Bản mới cho đúng cùng danh sách lệnh như bản cũ, kiểm trên dữ liệu ngẫu nhiên và trên dữ liệu thật.
+- `28f233a`: thiết kế đăng ký trước, commit trước khi chạy.
+- `ff9305d`: `scripts/sr_zone_export.py` và `replay_v2/sr_zone_study.py`.
+
+**Kết quả** (dữ liệu tới nến H4 mở lúc 04:00Z ngày 22/10; xuất chỉ đọc qua container `admin`):
+
+| | Lệnh thị trường | DD | Lợi nhuận/DD |
+|---|---:|---:|---:|
+| B (luật hiện tại) | +38,7% | 7,8% | 4,98 |
+| S1 lọc | +21,6% | 8,9% | 2,43 |
+| S2 chờ vượt hẳn | +20,0% | 9,4% | 2,12 |
+| S3 hồi về vùng | +5,9% | 16,1% | 0,36 |
+| S4 stop theo vùng | +28,1% | 10,8% | 2,60 |
+
+- **Vùng không chặn giá hơn vùng ngẫu nhiên:** 41,3% so với 40,0%. Với ZEC và HYPE, vùng thật còn chặn ít hơn vùng ngẫu nhiên.
+- **Breakout có vùng chặn là lệnh tốt nhất của B:** 124 lệnh, TB +1,60% mỗi lệnh, so với khoảng +0,62% ở các lệnh còn lại. Lọc chúng đi làm mất lãi.
+- Luật Setup-2 giữ nguyên, không có ADR-008.
+
+Chi tiết: [docs/setup2-sr-zone-research.md](docs/setup2-sr-zone-research.md).
+
 ## 2026-10-22 — Deploy `269d6a5` lên VPS (restart cả worker và web)
 
 Julius duyệt push và deploy. Push `60e1f1c..269d6a5` lúc 01:53Z, deploy lúc 01:53–01:59Z, nằm giữa nến 00:00Z và nến 04:00Z.

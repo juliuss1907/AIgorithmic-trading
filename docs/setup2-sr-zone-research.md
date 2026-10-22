@@ -1,6 +1,6 @@
 # Setup-2: vùng hỗ trợ/kháng cự và cách vào lệnh (thiết kế nghiên cứu)
 
-Trạng thái: **thiết kế, chưa chạy.** Tài liệu này được viết và commit trước khi chạy. Kết quả sẽ được ghi ở mục cuối.
+Trạng thái: **đã chạy ngày 2026-10-22, không biến thể nào đạt.** Phần thiết kế dưới đây được viết và commit (`28f233a`) trước khi chạy; kết quả ở mục cuối.
 
 Đây là nghiên cứu cục bộ trên dữ liệu đã thấy. Nến và quan sát Setup-2 được đọc từ database VPS ở chế độ `mode=ro`. Nghiên cứu không đụng tới runtime, active set, ADR-007, soak hay Jev, và không gọi model.
 
@@ -166,3 +166,90 @@ Tiêu chí 1–5 giống nghiên cứu ngày 19/10. Tiêu chí 6–7 được th
 2. Chạy `intraday/replay_v2/sr_zone_study.py`, có test cho từng luật ở `tests/test_sr_zone_study.py`.
 3. Trước khi chạy các biến thể, kiểm mốc: chạy B bằng `slot_replay` và bằng bản `fast_filter_study.run` trước khi tách code, trên cùng dữ liệu. Hai bên phải ra đúng cùng danh sách lệnh.
 4. Chạy toàn bộ đúng một lần. Ghi hash dữ liệu, hash cấu hình và kết quả vào mục "Kết quả" dưới đây và vào CHANGELOG.
+
+## Kết quả (2026-10-22)
+
+**Code và dữ liệu:**
+- Code: `intraday/replay_v2/sr_zones.py`, `slot_replay.py`, `sr_zone_study.py`. Test ở `tests/test_sr_zones.py`, `test_slot_replay.py` và `test_sr_zone_study.py`.
+- Dữ liệu: xuất bằng `scripts/sr_zone_export.py` lúc 08:54Z, gồm các nến tới nến H4 mở lúc 04:00Z ngày 22/10. Có 802 breakout đủ điều kiện B.
+- Hash dữ liệu: `46981411…5094b36f`. Hash cấu hình: `b4fdde12…85c01427`.
+- Điểm chia hai nửa: 2025-07-16 12:00Z.
+
+**Kiểm tra trước khi chạy biến thể:**
+- B chạy qua `sr_zone_study`/`slot_replay` ra **đúng cùng danh sách lệnh** như `fast_filter_study.run` bản trước khi tách code: lệnh thị trường +38,7% (321 lệnh), limit +42,8% (305 lệnh). Năm biến thể của nghiên cứu ngày 19/10 cũng ra giống hệt bản cũ.
+- Ví dụ ZEC ngày 21/10 trên dữ liệu VPS: cả hai breakout (nến mở 12:00Z và 16:00Z) có vùng chặn 1349,3–1385. ATR lúc đó khoảng 47.
+
+Sau đó toàn bộ nghiên cứu được chạy đúng một lần.
+
+**Phần 0: vùng gần như không chặn giá hơn vùng ngẫu nhiên.**
+
+| Route | Lần chạm, vùng thật | Bị chặn, vùng thật | Bị chặn, vùng giả |
+|---|---:|---:|---:|
+| ETH Perp / Spot | 1544 / 1482 | 41,7% / 41,2% | 40,1% / 40,5% |
+| HYPE Perp / Spot | 951 / 917 | 38,2% / 38,3% | 41,4% / 42,3% |
+| NEAR Perp / Spot | 1582 / 1502 | 44,8% / 42,7% | 38,6% / 37,9% |
+| SOL Perp / Spot | 1739 / 1607 | 43,5% / 43,7% | 40,4% / 39,6% |
+| ZEC Perp / Spot | 1496 / 1590 | 37,6% / 38,0% | 41,5% / 40,1% |
+| **Gộp** | **14410** | **41,3%** | **40,0%** (32848 lần chạm) |
+
+- Gộp lại, vùng thật chỉ chặn giá nhiều hơn vùng giả 1,3 điểm phần trăm.
+- NEAR và SOL có chênh lệch rõ hơn (3–6 điểm).
+- Ở **ZEC và HYPE**, vùng thật chặn giá **ít hơn** vùng giả. Nói cách khác, với ZEC và HYPE, giá vượt vùng cũ còn dễ hơn vượt một mức bất kỳ.
+
+**Các biến thể** (lợi nhuận và DD tính theo % vốn):
+
+| | Cách vào | Lợi nhuận | DD | Lợi nhuận/DD | Nửa đầu / nửa sau | Số lệnh | TB mỗi lệnh |
+|---|---|---:|---:|---:|---|---:|---:|
+| **B** | thị trường | +38,7% | 7,8% | 4,98 | +13,3 / +25,3 | 321 | +1,00% |
+| | limit | +42,8% | 5,8% | 7,44 | +13,7 / +29,2 | 305 | |
+| **S1** lọc | thị trường | +21,6% | 8,9% | 2,43 | −3,3 / +24,9 | 261 | +0,64% |
+| | limit | +25,6% | 9,5% | 2,69 | −4,6 / +30,2 | 247 | |
+| **S2** chờ vượt hẳn | thị trường | +20,0% | 9,4% | 2,12 | −4,6 / +24,5 | 271 | +0,53% |
+| | limit | +22,8% | 11,0% | 2,06 | −6,6 / +29,4 | 257 | |
+| **S3** hồi về vùng | limit ở mép vùng | +5,9% | 16,1% | 0,36 | −10,4 / +16,3 | 272 | −0,02% |
+| **S4** stop theo vùng | thị trường | +28,1% | 10,8% | 2,60 | +11,2 / +16,9 | 343 | +0,75% |
+| | limit | +35,3% | 7,7% | 4,61 | +12,6 / +22,7 | 324 | |
+
+**Chi phí gấp đôi, lệnh thị trường:** B +28,5%, S1 +13,3%, S2 +11,5%, S3 −2,4%, S4 +17,3%.
+
+**Kiểm độ bền, lệnh thị trường:**
+
+| | Bỏ ZEC từ 1/10 | Bỏ ETH | Bỏ HYPE | Bỏ NEAR | Bỏ SOL | Bỏ ZEC |
+|---|---:|---:|---:|---:|---:|---:|
+| B | +40,0 | +27,7 | +41,1 | +23,5 | +30,6 | +24,4 |
+| S1 | +21,6 | +10,8 | +24,1 | +14,4 | +18,6 | +11,8 |
+| S2 | +20,0 | +10,0 | +22,6 | +14,1 | +16,6 | +10,3 |
+| S3 | +5,9 | +2,3 | +8,7 | +6,6 | +5,4 | −4,6 |
+| S4 | +29,3 | +19,5 | +34,0 | +15,7 | +25,6 | +15,1 |
+
+**Tiêu chí:**
+- S1, S2, S3 và S4 **trượt cả 7 tiêu chí**, trừ S1 đạt riêng tiêu chí 2 (DD 8,9% và 9,5%, đều ≤ 10%).
+- Không biến thể nào được chọn.
+
+**Lý do chính: breakout có vùng chặn lại là những lệnh tốt nhất của B.**
+- Có 225 trên 802 breakout có vùng chặn, tức 28%.
+- B vào 124 lệnh trong số đó: TB **+1,60%** mỗi lệnh, tỉ lệ thắng 40%, đóng góp +24,1% trên tổng +38,7% của B.
+- 197 lệnh còn lại của B chỉ được TB khoảng +0,62% mỗi lệnh.
+- Vì vậy bỏ các lệnh này (S1) làm mất phần lãi lớn nhất. Với một hệ thống theo xu hướng, phá qua một vùng cũ gần đó thường mở ra một cú chạy dài. Hai lệnh ZEC ngày 21/10 là trường hợp thiểu số.
+
+**Chi tiết từng biến thể:**
+- **S2:** trong 225 breakout có vùng chặn, 92 lần giá đóng vượt hẳn vùng trong 6 nến; 133 lần thì không. S2 vào được 56 lệnh muộn: TB +0,62% mỗi lệnh, tỉ lệ thắng 36%. Vào muộn thì giá vào kém hơn, nên mất phần lớn lợi thế của các breakout này.
+- **S3:** 39 lệnh khớp limit khi giá hồi về vùng: TB −1,20%, tỉ lệ thắng 15%. Breakout thật sự mạnh thường không quay lại kiểm tra vùng. Những lệnh có khớp phần lớn là lúc breakout thất bại.
+- **S4:** stop theo vùng chặt hơn 3 ATR ở 254 lần, rộng hơn chỉ 3 lần; 545 lần không có vùng phù hợp. Tỉ lệ lệnh thoát vì chạm stop tăng từ 88,5% lên 90,4%. Số lệnh tăng (343), vì bị dừng sớm nên slot được giải phóng sớm hơn, nhưng lợi nhuận mỗi lệnh giảm.
+
+**Chấm các dự đoán:**
+
+| Dự đoán | Kết quả |
+|---|---|
+| Phần 0: vùng thật chặn hơn vùng giả 5–10 điểm | **Sai.** Gộp chỉ hơn 1,3 điểm; ZEC và HYPE còn thua vùng giả |
+| S1 bỏ 25–40% số lệnh của B | Đúng: 28% số breakout, 39% số lệnh B (124/321) |
+| S1 tăng tỉ lệ thắng nhưng giảm lợi nhuận tổng | Giảm lợi nhuận là đúng; **tỉ lệ thắng giảm** (34,5% so với 36,8%) |
+| S2 gần B nhất | Sai: S4 gần B hơn. S2 chỉ được +20,0% |
+| S3 ít lệnh hơn, không đạt | Đúng |
+| S4 stop chặt hơn, bị quét nhiều hơn, lãi thấp hơn | Đúng |
+| Khoảng 60% không biến thể nào đạt | Đúng: không biến thể nào đạt |
+
+**Kết luận:**
+- Không biến thể nào đạt. Luật Setup-2 giữ nguyên và không có ADR-008; nghiên cứu dừng tại đây đúng như đã đăng ký, không dò thêm mức ATR, số nến chờ hay tham số của vùng.
+- Trên H4 của 5 coin này, vùng SRchannel không chặn giá hơn vùng ngẫu nhiên. Với Setup-2, breakout gần vùng cũ còn là lệnh tốt hơn trung bình. Hai lệnh ZEC ngày 21/10 là một trường hợp đáng nhớ nhưng không đại diện.
+- Module `sr_zones` vẫn có thể dùng để **vẽ** vùng trên chart, nhưng không có cơ sở để dùng làm luật vào lệnh.
