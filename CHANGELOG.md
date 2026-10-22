@@ -4,6 +4,23 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-22 — Deploy `269d6a5` lên VPS (restart cả worker và web)
+
+Julius duyệt push và deploy. Push `60e1f1c..269d6a5` lúc 01:53Z, deploy lúc 01:53–01:59Z, nằm giữa nến 00:00Z và nến 04:00Z.
+
+- **Trước khi đổi code:**
+  - image cũ được gắn tag `rollback-c27b48e-20261022` (worker `3d1fb3b4e0ac`, web `620209ac5edb`, admin `6840d8d55d64`);
+  - image worker đang chạy (`5f7cd99fd738`, build từ `fba4e55`) được gắn thêm tag `intraday-worker:rollback-fba4e55-running-20261022`;
+  - backup `intraday-20261022T015340329236Z.sqlite3`, kiểm tra `ok`.
+- **Những gì worker nhận thêm:** worker trước đó chạy code `fba4e55`. Từ đó đến nay, phần worker thực sự chạy chỉ đổi ở bản sửa nến trong `store.py`. Các thay đổi còn lại thuộc CLI (`aigt ui`, định tuyến `learning`), web và research.
+- **Image mới:** worker `d45b48638a7f`, web `99c406385b7e`, admin `c847344681ff`.
+- **Kết quả:**
+  - web lên lúc 01:58:28Z (healthy), worker lúc 01:59:09Z (`RestartCount` 0);
+  - log worker không có lỗi;
+  - `doctor` trả `ok`, vẫn chế độ paper, `execution_enabled: false`;
+  - chart ETH Perp và `/api/setup2` trả dữ liệu mới ngay từ request đầu tiên.
+- **Lùi lại nếu cần:** `docker tag intraday-<svc>:rollback-c27b48e-20261022 intraday-<svc>:latest`, rồi `git checkout --detach c27b48e`. Khởi động lại web trước, worker sau. Muốn về đúng code worker cũ thì dùng tag `rollback-fba4e55-running-20261022`.
+
 ## 2026-10-22 — Nhận nến Binance sửa lại; web không trả bản cache quá cũ
 
 Julius duyệt cả hai bản sửa sau sự cố ETH Spot ngày 21/10 và lần kiểm tra chart ETH.
