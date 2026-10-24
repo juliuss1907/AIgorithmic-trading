@@ -4,9 +4,13 @@
 `select_entries`/`pnl_gate_blocks`; size 50% sleeve x 1/3 x the ATR multiplier; an ATR14 x 3 trail capped at 5%
 from the first entry; Donchian exits at the next open; a gap through the stop exits at the open.
 
-A study supplies `plan(route, i)`: the `Entry` taken on closed bar `i` of a free route, or None. A market entry
+A study supplies `plan(route, i)`: the `Entry` taken on closed bar `i` of a free route, None, or a tuple of an
+entry at the next open and an early entry. A market entry
 fills at the next H4 open; a limit entry works for `bars` H4 bars and is read on the M15 window `window_key`
 (16 quarters per H4 bar from the bar after `signal_index`), or on the H4 bar itself when that window is missing.
+An early entry (H1 early entry study) fills at market at the open of quarter `early` of the next H4 bar, read on
+`window_key` (that bar's 16 quarters); it takes only a slot left free after the entries at the H4 open, never
+rotates, and is ranked and sized on its own observation `obs`.
 
 Prices are floats: the studies compare outcomes and never size an order. Nothing here touches the runtime.
 """
@@ -43,6 +47,8 @@ class Entry:
     window_key: str | None = None    # M15 window of the limit
     stop: float | None = None        # initial stop; None is 3 ATR. Either is capped at 5% and trails at 3 ATR
     add: bool = False                # a second half may follow while `add_ready` holds (fast filter V2)
+    obs: dict | None = None          # observation that ranks and sizes the entry; default the rank bar's
+    early: int | None = None         # M15 quarter of the next H4 bar whose open fills an early entry
 
 
 class Trail:
@@ -62,6 +68,10 @@ class Trail:
         return low <= self.stop if self.side > 0 else high >= self.stop
 
 
+def as_tuple(planned):
+    return () if planned is None else planned if isinstance(planned, tuple) else (planned,)
+
+
 def run(routes, m15, plan, *, cost_mult=1.0, add_ready=None, add_bars=6):
     """Closed tranches (one per entry fill) and the blocked-entry counts of one entry plan."""
     trades, pos, pending, blocked = [], {}, {}, defaultdict(int)
@@ -79,8 +89,8 @@ def run(routes, m15, plan, *, cost_mult=1.0, add_ready=None, add_bars=6):
         p, r = pos.pop(rt), routes[rt]
         for tr in p['tranches']:
             ret = r.side*(price/tr['entry']-1)*100-COST_PCT[r.market]*cost_mult
-            trades.append(dict(route=rt, market=r.market, signal=p['signal'], exited=at, ret=ret,
-                               pnl=ret*tr['weight'], reason=reason, tier=tr['tier'], factor=p['factor']))
+            trades.append(dict(route=rt, market=r.market, signal=p['signal'], entry=tr['entry'], exited=at,
+                               ret=ret, pnl=ret*tr['weight'], reason=reason, tier=tr['tier'], factor=p['factor']))
 
     def book(rt, i):
         p, r = pos[rt], routes[rt]
@@ -112,70 +122,80 @@ def run(routes, m15, plan, *, cost_mult=1.0, add_ready=None, add_bars=6):
                 p['add_until'] = None
             elif i-1 >= p['add_until']:
                 p['add_until'] = None
-        # 3. Entries of the last closed bar, ranked and granted by the runtime's selection.
-        busy = {routes[rt].symbol for rt in list(pos)+list(pending)}
-        cands, entries = [], {}
-        for rt, i in live.items():
-            r = routes[rt]
-            if not i or rt in pos or rt in pending or r.symbol in busy:
-                continue
-            e = plan(rt, i-1)
-            if e is None or not e.factor:
-                continue
-            entries[rt] = e
-            s = r.obs[i-1 if e.rank_index is None else e.rank_index]
-            ratio = s['volume']/s['volume_ma'] if s['volume_ma'] else 0
-            cands.append(sel.Candidate(r.market, r.symbol, Decimal(str(s['mult']*e.factor)),
-                                       Decimal(str(s['adx'] or 0)), Decimal(str(ratio))))
-        granted = []
-        if cands:
-            held, total = [], 0.0
-            for rt in pos:
-                r, i = routes[rt], live.get(rt)
-                f = r.obs[i-1] if i else None
-                strength = sel.trend_strength({k: None if f is None or f[k] is None else Decimal(str(f[k]))
-                                               for k in ('adx', 'plus_di', 'minus_di')}, r.side)
-                pnl, ratio = book(rt, i)
-                total += pnl
-                held.append(sel.Held(r.market, r.symbol, strength, Decimal(str(ratio)), i is not None))
-            for rt in pending:
-                held.append(sel.Held(routes[rt].market, routes[rt].symbol, Decimal(999), Decimal(0), False))
-            if sel.pnl_gate_blocks(len(pos), Decimal(str(total))):
-                blocked['pnl_gate'] += len(cands)
-            else:
-                for st in sel.select_entries(cands, held, max_positions=SLOTS, limit_scope='total', rotation=True,
-                                             margin=Decimal(MARGIN)):
-                    if st.kind == 'blocked':
-                        blocked[st.reason] += 1
-                    else:
-                        granted.append((f'{st.symbol}:{st.market}', st.victim))
+        # 3. Entries of the last closed bar, ranked and granted by the runtime's selection; early entries
+        #    then compete for the slots still free.
         filled_now = set()
-        for rt, victim in granted:
-            if victim:
-                vr = f'{victim[1]}:{victim[0]}'
-                close(vr, t, routes[vr].bars[live[vr]][1], 'rotated')
-            r, i, e = routes[rt], live[rt], entries[rt]
-            s = r.obs[i-1 if e.rank_index is None else e.rank_index]
-            weight, signal = SLEEVE/SLOTS*s['mult']*e.factor, r.bars[e.signal_index][0]
-            if e.limit is not None:
-                pending[rt] = dict(level=e.limit, atr=s['atr'], weight=weight, signal=signal,
-                                   signal_index=e.signal_index, factor=e.factor, add=e.add, stop=e.stop,
-                                   key=e.window_key, first=i, last=i+e.bars-1)
-            else:
-                open_(rt, r.bars[i][1], weight, 1, signal, e.signal_index, e.factor, s['atr'], e.add, e.stop)
-        # 4. Pending limits fill on M15 inside this H4 bar; the stop is read from the fill's M15 bar on.
+        for early in (False, True):
+            busy = {routes[rt].symbol for rt in list(pos)+list(pending)}
+            cands, entries = [], {}
+            for rt, i in live.items():
+                r = routes[rt]
+                if not i or rt in pos or rt in pending or r.symbol in busy:
+                    continue
+                e = next((e for e in as_tuple(plan(rt, i-1)) if (e.early is not None) == early), None)
+                if e is None or not e.factor:
+                    continue
+                entries[rt] = e
+                s = e.obs or r.obs[i-1 if e.rank_index is None else e.rank_index]
+                ratio = s['volume']/s['volume_ma'] if s['volume_ma'] else 0
+                cands.append(sel.Candidate(r.market, r.symbol, Decimal(str(s['mult']*e.factor)),
+                                           Decimal(str(s['adx'] or 0)), Decimal(str(ratio))))
+            granted = []
+            if cands:
+                held, total = [], 0.0
+                for rt in pos:
+                    r, i = routes[rt], live.get(rt)
+                    f = r.obs[i-1] if i else None
+                    strength = sel.trend_strength({k: None if f is None or f[k] is None else Decimal(str(f[k]))
+                                                   for k in ('adx', 'plus_di', 'minus_di')}, r.side)
+                    pnl, ratio = book(rt, i)
+                    total += pnl
+                    held.append(sel.Held(r.market, r.symbol, strength, Decimal(str(ratio)), i is not None))
+                for rt in pending:
+                    held.append(sel.Held(routes[rt].market, routes[rt].symbol, Decimal(999), Decimal(0), False))
+                prefix = 'early_' if early else ''
+                if sel.pnl_gate_blocks(len(pos), Decimal(str(total))):
+                    blocked[prefix+'pnl_gate'] += len(cands)
+                else:
+                    for st in sel.select_entries(cands, held, max_positions=SLOTS, limit_scope='total',
+                                                 rotation=not early, margin=Decimal(MARGIN)):
+                        if st.kind == 'blocked':
+                            blocked[prefix+st.reason] += 1
+                        else:
+                            granted.append((f'{st.symbol}:{st.market}', st.victim))
+            for rt, victim in granted:
+                if victim:
+                    vr = f'{victim[1]}:{victim[0]}'
+                    close(vr, t, routes[vr].bars[live[vr]][1], 'rotated')
+                r, i, e = routes[rt], live[rt], entries[rt]
+                s = e.obs or r.obs[i-1 if e.rank_index is None else e.rank_index]
+                weight, signal = SLEEVE/SLOTS*s['mult']*e.factor, r.bars[e.signal_index][0]
+                if e.limit is not None or e.early is not None:
+                    pending[rt] = dict(level=e.limit, early=e.early, atr=s['atr'], weight=weight, signal=signal,
+                                       signal_index=e.signal_index, factor=e.factor, add=e.add, stop=e.stop,
+                                       key=e.window_key, first=i, last=i+e.bars-1,
+                                       base=i if e.early is not None else e.signal_index+1)
+                else:
+                    open_(rt, r.bars[i][1], weight, 1, signal, e.signal_index, e.factor, s['atr'], e.add, e.stop)
+        # 4. Pending limit and early entries fill on M15 inside this H4 bar; the stop is read from the fill's
+        #    M15 bar on.
         for rt in list(pending):
             if rt not in live:
                 continue
             p, r, i = pending[rt], routes[rt], live[rt]
             if i < p['first']:
                 continue
-            offset = (i-p['signal_index']-1)*QUARTERS
+            offset = (i-p['base'])*QUARTERS
             quarter = (m15.get(p['key']) or [])[offset:offset+QUARTERS]
             if len(quarter) < QUARTERS or any(q is None for q in quarter):
+                if p['early'] is not None:   # an early entry exists only on M15
+                    del pending[rt]
+                    continue
                 quarter = [(t, *r.bars[i][1:5])]   # no M15: the H4 bar stands in
             for k, (qt, qo, qh, ql, qc) in enumerate(quarter):
-                if r.side < 0:
+                if p['early'] is not None:
+                    fill = qo if k == p['early'] else None
+                elif r.side < 0:
                     fill = qo if qo >= p['level'] else p['level'] if qh >= p['level'] else None
                 else:
                     fill = qo if qo <= p['level'] else p['level'] if ql <= p['level'] else None
