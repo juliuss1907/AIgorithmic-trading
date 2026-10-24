@@ -136,18 +136,23 @@ def build_spot_feature_snapshot(
 def build_spot_multiframe_snapshot(
     *, symbol: str, candle_sets: dict[str, list[list]], book: dict,
     event_time: datetime, built_at: datetime, sentiment_score: float | None,
+    allow_short_context: bool = False,
 ) -> FeatureSnapshot:
     """Causal 4h trigger with Binance-native 8h/1d context, never an entry signal."""
     now_ms = int(event_time.timestamp() * 1000)
+    short_context = set()
     for interval, length_ms in SPOT_INTERVAL_MS.items():
         rows = candle_sets.get(interval, [])
-        if len(rows) < 35 or int(rows[-1][6]) >= now_ms:
+        short_allowed = allow_short_context and interval != "4h"
+        if not rows or (len(rows) < 35 and not short_allowed) or int(rows[-1][6]) >= now_ms:
             raise StaleMarketData(f"candles_{interval} missing or unclosed")
         age_ms = now_ms - int(rows[-1][6])
         if age_ms > length_ms + 300_000:
             raise StaleMarketData(f"candles_{interval} stale")
         if any(int(row[6]) != int(row[0]) + length_ms - 1 for row in rows):
             raise StaleMarketData(f"candles_{interval} invalid interval")
+        if len(rows) < 35:
+            short_context.add(interval)
     primary = build_spot_feature_snapshot(
         symbol=symbol, candles=candle_sets["4h"], book=book,
         event_time=event_time, built_at=built_at, sentiment_score=sentiment_score,
@@ -155,18 +160,22 @@ def build_spot_multiframe_snapshot(
     features = dict(primary.features)
     features["volume_4h"] = features.pop("volume_1d")
     for interval in ("8h", "1d"):
-        context = compute_indicators(candle_sets[interval])
+        # Setup-2 uses its own anchored H4/M15 series. A young listing may lack legacy
+        # context; mark it unavailable rather than computing indicators on too few bars.
+        context = None if interval in short_context else compute_indicators(candle_sets[interval])
         for name in ("price", "rsi14", "macd", "macd_hist", "path_efficiency"):
-            features[f"context_{interval}_{name}"] = context[name]
-        features[f"context_{interval}_volume"] = context["volume_1h"]
+            features[f"context_{interval}_{name}"] = context[name] if context else None
+        features[f"context_{interval}_volume"] = context["volume_1h"] if context else None
     return FeatureSnapshot.create(
         symbol=symbol, market="binance_spot", timeframe="4h",
         feature_schema_version="3", event_time=event_time, built_at=built_at,
         bid=primary.bid, ask=primary.ask, features=features,
         freshness={**primary.freshness, **{
-            f"candles_{interval}": True for interval in SPOT_INTERVAL_MS
+            f"candles_{interval}": interval not in short_context for interval in SPOT_INTERVAL_MS
         }},
-        quality_flags=primary.quality_flags,
+        quality_flags=primary.quality_flags + tuple(
+            f"candles_{interval}_insufficient_history" for interval in sorted(short_context)
+        ),
     )
 class BinanceSpotDailyClient:
     """Read-only public daily candles and quotes for registered spot assets."""
@@ -363,6 +372,7 @@ class MultiTimeframeSpotCache:
     def snapshot(
         self, symbol: str = "BTCUSDT", *, now: datetime | None = None,
         sentiment_score: float | None = 0.0, candle_limit: int = 100,
+        allow_short_context: bool = False,
     ) -> FeatureSnapshot:
         from intraday.assets import normalize_symbol
         symbol = normalize_symbol(symbol)
@@ -403,4 +413,5 @@ class MultiTimeframeSpotCache:
         return build_spot_multiframe_snapshot(
             symbol=symbol, candle_sets=self._candles, book=self._book,
             event_time=now, built_at=now, sentiment_score=sentiment_score,
+            allow_short_context=allow_short_context,
         )

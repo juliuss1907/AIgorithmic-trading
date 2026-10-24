@@ -4,6 +4,15 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-31 — Gom nhánh về `main`, giảm journal, sửa lịch gate Perp, thêm backup tự động
+
+- **Khôi phục bản sửa đang chạy:** `871dd9d` (HYPE Spot thiếu context 1d) đang chạy trên VPS nhưng chưa từng vào `feature/slot-runtime`. Nếu gộp hoặc deploy từ nhánh này mà không có nó, route HYPE Spot sẽ lỗi lại. Đã cherry-pick vào nhánh.
+- **Journal:** chu kỳ không đổi trạng thái (`portfolio_cycle`, `paused_reconciled`) không ghi nữa; trước đó mỗi chu kỳ tốn khoảng 4 KB. `slot_selection.at` giờ là lần cuối trạng thái đổi.
+- **Gate Perp không tự chạy (nguyên nhân ngày 28/10):** `automation_jobs` dùng `allows()`, vốn hỏi scope Jev, mà active set Setup-2 không bao giờ có `perp_intraday`, nên mọi route Perp bị bỏ qua. Tái hiện bằng cách chạy projection chỉ đọc trên bản backup 24/10: cả Perp đều `due` nhưng `allows` là False. Giờ dùng trọng số Perp của coin (`route_in_plan`). Cần restart worker mới có hiệu lực; hiện không có soak Perp nào đang chờ.
+- **Test:** `test_perp_collection_migration` lỗi vì CLI dùng đồng hồ thật trong khi dữ liệu test cố định ở 01/10; đã ghim đồng hồ. Lỗi `WorkerCancelled` lúc có lúc không ở `test_tui.py` chưa tái hiện được nên chưa sửa.
+- **Backup:** `scripts/vps_backup.py` và `deploy/systemd/aigt-backup.{service,timer}`, chạy 02:00Z mỗi ngày: database nguồn và journal Demo, giữ 7 bản trong `backups/daily/`, diễn tập khôi phục vào Chủ nhật, lỗi thì báo Telegram. Thư mục riêng để không đụng các backup deploy thủ công. Chưa chạy trên VPS.
+- **`feature/jev-setup2-review`:** không merge. Đây là nghiên cứu overlay Jev, đã kết luận Jev không phân biệt được lệnh tốt xấu ([hiệu chỉnh](docs/jev-calibration-2026-10-16.md)) và runtime giữ chế độ tư vấn. Giữ nhánh làm tư liệu.
+
 ## 2026-10-31 — Runner Demo không còn tự pause vì một lỗi API tạm thời
 
 **Sự cố:** runner tự pause lúc 22:53Z ngày 29/10 vì `stale Demo execution quote`, lần thứ hai sau khi bật G6, và không ai được báo. Đến 03:29Z ngày 31/10 vẫn pause, 0 lệnh, 0 fill. Tín hiệu ETH Perp SHORT ở nến đóng 00:00Z ngày 30/10 (giá 2252,34) không thành lệnh Demo. Trong lúc pause còn gặp 13 lỗi nữa: 6 transport, 5 `-1021`, 2 quote cũ. Đồng hồ VPS đã đồng bộ NTP, lệch khoảng 85 ms so với Binance; chưa rõ vì sao API Demo lỗi.
@@ -148,6 +157,28 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
 - Cả hai biến thể trượt 6/7 tiêu chí. Luật Setup-2 giữ nguyên, không có ADR, không dò thêm.
 
 Chi tiết: [docs/setup2-h1-early-entry-research.md](docs/setup2-h1-early-entry-research.md).
+## 2026-10-23 — Sửa HYPE Spot mất nến và observation Setup-2 vì thiếu context 1d
+
+- **Nguyên nhân đã tái hiện:** collector dựng snapshot Spot trước khi sync H4/M15. Snapshot cũ đòi ≥35 nến
+  ở cả 4h/8h/1d nên HYPE Spot ít ngày niêm yết báo `StaleMarketData`, bỏ qua cả sync lẫn observation Setup-2.
+- **Cách sửa:** chỉ với route Setup-2 được active set cho phép hoặc watch, context 8h/1d có 1–34 nến hợp lệ
+  trở thành `None`, freshness `false`, quality flag `candles_*_insufficient_history` và log `spot_context: degraded`.
+  H4 vẫn cần ≥35 nến; dữ liệu thiếu hoàn toàn, cũ, chưa đóng, sai interval và book hết hạn vẫn lỗi.
+  Route legacy giữ kiểm tra strict; khi lịch sử đầy đủ snapshot giống hệt trước sửa.
+- Scheduler H4 ghi `success` khi Setup-2 hoàn tất, kể cả không có setup; cảnh báo thiếu context vẫn lưu trong
+  snapshot và log. Lỗi sync/evaluator vẫn ghi `error`. Không sửa feature/luật/hash evaluator Setup-2,
+  `EVALUATOR_VERSIONS`, schema, active set, campaign hay ADR-007.
+- Test dùng sync/evaluator thật với SQLite và dữ liệu giả lập: bù H4/M15 từ sau nến H4 mở 13/10 20:00Z,
+  ghi một observation mới; chạy lại idempotent. Không tạo heartbeat quá khứ từ nến bù.
+- **Kiểm thử kết thúc 24/10:** nhóm liên quan 97 test qua; lượt toàn bộ cuối 1.927 qua, duy nhất 1 lỗi
+  migration có sẵn (đã tái hiện trên commit gốc). Hai lỗi TUI `WorkerCancelled` ở lượt toàn bộ đầu không
+  tái hiện ở lượt cuối; giữ đầy đủ kết quả và checksum trong báo cáo.
+- **Chỉ local, chưa push/deploy.** Julius đổi quyết định chờ lịch sử ngày 14/10 và giao sửa ngày 23/10;
+  soak vẫn đóng băng tới review 28/10. Đề xuất deploy sau review, bắt đầu lại campaign HYPE Spot sau khi
+  kiểm dữ liệu/replay đạt (có thể 28/10, sớm hơn 29/10); vẫn cần đủ 14 ngày soak thật.
+
+Chi tiết cách sửa, kết quả kiểm thử và đề xuất bù dữ liệu/triển khai:
+[hype-spot-stale-fix-2026-10-23](docs/hype-spot-stale-fix-2026-10-23.md).
 
 ## 2026-10-22 — Nghiên cứu vùng hỗ trợ/kháng cự cho Setup-2: không biến thể nào đạt
 

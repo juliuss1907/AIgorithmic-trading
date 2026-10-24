@@ -1741,21 +1741,36 @@ def _run_registered_asset_cycles(
             if slot is None:
                 continue
             try:
-                snapshot = markets[symbol].snapshot(symbol, now=now)
                 spot_candles = spot_rule = None
+                setup2_spot = False
+                if scope is DecisionScope.SPOT_4H:
+                    spot_rule = (
+                        store.load_scoped_challenger(scope, symbol=symbol)
+                        or store.load_active_scoped_rule(scope, symbol=symbol)
+                    )
+                    setup2_spot = (
+                        spot_rule is not None
+                        and (active_set_allows(store, symbol, scope) or active_set_watched(store, symbol))
+                        and is_setup2_profile(getattr(spot_rule.parameters, "entry_profile", "donchian_v1"))
+                    )
+                if setup2_spot:
+                    snapshot = markets[symbol].snapshot(symbol, now=now, allow_short_context=True)
+                    context_flags = [flag for flag in snapshot.quality_flags
+                                     if flag.endswith("_insufficient_history")]
+                    if context_flags:
+                        print(json.dumps({"spot_context": {
+                            "symbol": symbol, "status": "degraded", "quality_flags": context_flags,
+                            "snapshot_id": snapshot.snapshot_id,
+                        }}), flush=True)
+                else:
+                    snapshot = markets[symbol].snapshot(symbol, now=now)
                 if scope is DecisionScope.SPOT_4H:
                     for candle_interval in ("4h", "8h", "1d"):
                         rows = markets[symbol].closed_candles(candle_interval)
                         if rows:
                             store.record_asset_candles(symbol, candle_interval, rows)
                     spot_candles = markets[symbol].closed_candles("4h")
-                    spot_rule = (
-                        store.load_scoped_challenger(scope, symbol=symbol)
-                        or store.load_active_scoped_rule(scope, symbol=symbol)
-                    )
-                    if (spot_rule is not None
-                            and (active_set_allows(store, symbol, scope) or active_set_watched(store, symbol))
-                            and is_setup2_profile(getattr(spot_rule.parameters, "entry_profile", "donchian_v1"))):
+                    if setup2_spot:
                         from intraday.setup2_store import coin_anchor, sync as setup2_sync
                         setup2_sync(store, symbol, "spot", anchor=coin_anchor(store, symbol), now=now)
                 result = run_asset_lifecycle_observation(
