@@ -4,6 +4,29 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-23 — Sửa HYPE Spot mất nến và observation Setup-2 vì thiếu context 1d
+
+- **Nguyên nhân đã tái hiện:** collector dựng snapshot Spot trước khi sync H4/M15. Snapshot cũ đòi ≥35 nến
+  ở cả 4h/8h/1d nên HYPE Spot ít ngày niêm yết báo `StaleMarketData`, bỏ qua cả sync lẫn observation Setup-2.
+- **Cách sửa:** chỉ với route Setup-2 được active set cho phép hoặc watch, context 8h/1d có 1–34 nến hợp lệ
+  trở thành `None`, freshness `false`, quality flag `candles_*_insufficient_history` và log `spot_context: degraded`.
+  H4 vẫn cần ≥35 nến; dữ liệu thiếu hoàn toàn, cũ, chưa đóng, sai interval và book hết hạn vẫn lỗi.
+  Route legacy giữ kiểm tra strict; khi lịch sử đầy đủ snapshot giống hệt trước sửa.
+- Scheduler H4 ghi `success` khi Setup-2 hoàn tất, kể cả không có setup; cảnh báo thiếu context vẫn lưu trong
+  snapshot và log. Lỗi sync/evaluator vẫn ghi `error`. Không sửa feature/luật/hash evaluator Setup-2,
+  `EVALUATOR_VERSIONS`, schema, active set, campaign hay ADR-007.
+- Test dùng sync/evaluator thật với SQLite và dữ liệu giả lập: bù H4/M15 từ sau nến H4 mở 13/10 20:00Z,
+  ghi một observation mới; chạy lại idempotent. Không tạo heartbeat quá khứ từ nến bù.
+- **Kiểm thử kết thúc 24/10:** nhóm liên quan 97 test qua; lượt toàn bộ cuối 1.927 qua, duy nhất 1 lỗi
+  migration có sẵn (đã tái hiện trên commit gốc). Hai lỗi TUI `WorkerCancelled` ở lượt toàn bộ đầu không
+  tái hiện ở lượt cuối; giữ đầy đủ kết quả và checksum trong báo cáo.
+- **Chỉ local, chưa push/deploy.** Julius đổi quyết định chờ lịch sử ngày 14/10 và giao sửa ngày 23/10;
+  soak vẫn đóng băng tới review 28/10. Đề xuất deploy sau review, bắt đầu lại campaign HYPE Spot sau khi
+  kiểm dữ liệu/replay đạt (có thể 28/10, sớm hơn 29/10); vẫn cần đủ 14 ngày soak thật.
+
+Chi tiết cách sửa, kết quả kiểm thử và đề xuất bù dữ liệu/triển khai:
+[hype-spot-stale-fix-2026-10-23](docs/hype-spot-stale-fix-2026-10-23.md).
+
 ## 2026-10-22 — Nghiên cứu vùng hỗ trợ/kháng cự cho Setup-2: không biến thể nào đạt
 
 **Vì sao làm:**
