@@ -4,6 +4,32 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-24 — Nghiên cứu vào lệnh sớm bằng H1 cho Setup-2: không biến thể nào đạt
+
+**Vì sao làm:**
+- Ngày 23/10, ZEC thủng đáy H1 nhưng Setup-2 không có tín hiệu, vì luật chỉ xét nến H4 đã đóng.
+- Julius hỏi có thể kết hợp H1 với H4 để vào sớm không, và chọn thử cách A: vẫn là breakout Donchian 25 của H4, nhưng vào ngay khi một nến H1 đóng vượt kênh.
+
+**Code** (đều thuộc research, không đụng runtime):
+- `44c841e`: thiết kế đăng ký trước, commit trước khi chạy.
+- `fa3df91`:
+  - `slot_replay` có thêm lệnh vào sớm ở giá mở một nến M15 trong nến H4. Lệnh sớm chỉ lấy slot còn trống sau các lệnh ở giá mở, và không đổi vị thế. Luật B ra đúng cùng danh sách lệnh như trước.
+  - Thêm `scripts/h1_early_export.py` và `replay_v2/h1_early_study.py`. Quan sát được tính lại bằng chính `setup2._observe` trên nến H4 dở dang, và đã kiểm trùng với VPS ở mọi nến.
+
+**Kết quả** (dữ liệu tới nến H4 mở lúc 04:00Z ngày 24/10; xuất chỉ đọc qua container `admin`):
+
+| | Lệnh thị trường | DD | Lợi nhuận/DD |
+|---|---:|---:|---:|
+| B (luật hiện tại) | +38,7% | 7,8% | 4,98 |
+| E1 vào sớm, đủ bộ lọc (volume ngoại suy ×4/h) | +34,5% | 8,3% | 4,15 |
+| E2 vào sớm, bỏ volume | +35,9% | 7,9% | 4,53 |
+
+- **Vào sớm có giá tốt hơn B khoảng 1,1% (0,46 ATR)** trên các breakout mà nến H4 cũng xác nhận. Trên cùng 162 breakout, E1 lãi +41,6 điểm % vốn so với +25,3 của B.
+- **Nhưng 34–38% số lệnh sớm là phá giả** (nến H4 đóng lại không thành tín hiệu), trung bình −0,8% mỗi lệnh. Các lệnh này còn chiếm slot và làm cổng lãi lỗ đóng nhiều hơn, nên mất 52–61 lệnh tốt của B.
+- Cả hai biến thể trượt 6/7 tiêu chí. Luật Setup-2 giữ nguyên, không có ADR, không dò thêm.
+
+Chi tiết: [docs/setup2-h1-early-entry-research.md](docs/setup2-h1-early-entry-research.md).
+
 ## 2026-10-22 — Nghiên cứu vùng hỗ trợ/kháng cự cho Setup-2: không biến thể nào đạt
 
 **Vì sao làm:**

@@ -1,6 +1,6 @@
 # Setup-2: vào lệnh sớm bằng nến H1 trong nến H4 (thiết kế nghiên cứu)
 
-Trạng thái: **thiết kế, chưa chạy.** Tài liệu này được commit trước khi chạy; kết quả sẽ ghi ở mục cuối.
+Trạng thái: **đã chạy ngày 2026-10-24, không biến thể nào đạt.** Phần thiết kế dưới đây được viết và commit (`44c841e`) trước khi chạy; kết quả ở mục cuối.
 
 Đây là nghiên cứu cục bộ trên dữ liệu đã thấy. Nến được đọc từ database VPS ở chế độ `mode=ro`. Nghiên cứu không đụng tới runtime, active set, ADR-007, soak hay Jev, và không gọi model.
 
@@ -148,6 +148,58 @@ Giống 7 tiêu chí của nghiên cứu vùng hỗ trợ/kháng cự. Một bi�
    - B chạy bằng `slot_replay` sau khi sửa engine phải ra đúng như trước khi sửa.
 4. Chạy toàn bộ đúng một lần. Ghi hash dữ liệu, hash cấu hình và kết quả vào mục "Kết quả" dưới đây và vào CHANGELOG.
 
-## Kết quả
+## Kết quả (2026-10-24)
 
-Chưa chạy.
+**Dữ liệu và kiểm mốc:**
+- Nến H4 mở tới 04:00Z ngày 24/10, xuất chỉ đọc qua container `admin`. Hash dữ liệu (JSON giải nén) `aba7a4cb…6ce1`; hash cấu hình `cf91032c…d221`; điểm giữa 2025-07-17 08:00Z.
+- Quan sát tính lại trên máy trùng với VPS ở **mọi** nến của cả 10 route: breakout, bộ lọc, blocker, cờ thoát, hệ số size.
+- B chạy trên engine trước và sau khi sửa ra đúng cùng danh sách lệnh: lệnh thị trường 321 lệnh, +38,67%; limit 305 lệnh, +42,83%.
+
+**Kết quả chính.** E1 và E2 chỉ có một cách vào; cột limit của chúng là cùng kết quả đó.
+
+| | Lợi nhuận | DD | Lợi nhuận/DD | Số lệnh | Thắng | Nửa đầu / nửa sau | Chi phí ×2 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| B, lệnh thị trường | +38,7% | 7,8% | 4,98 | 321 | 36,8% | +16,6 / +22,1 | +28,5% |
+| B, Perp limit | +42,8% | 5,8% | 7,44 | 305 | 36,7% | +16,9 / +25,9 | |
+| E1 vào sớm, đủ bộ lọc | +34,5% | 8,3% | 4,15 | 378 | 35,2% | +15,9 / +18,6 | +22,4% |
+| E2 vào sớm, bỏ volume | +35,9% | 7,9% | 4,53 | 387 | 35,4% | +18,5 / +17,4 | +23,5% |
+
+**Tiêu chí:** cả hai trượt tiêu chí 1, 3, 4, 5, 6 và 7, chỉ đạt tiêu chí 2 (DD ≤ 10%).
+
+| | Bỏ ZEC từ 10/2026 | Bỏ ETH | Bỏ HYPE | Bỏ NEAR | Bỏ SOL | Bỏ ZEC |
+|---|---:|---:|---:|---:|---:|---:|
+| B | +40,0 | +27,7 | +41,1 | +23,5 | +30,6 | +24,4 |
+| E1 | +35,8 | +26,1 | +37,0 | +24,6 | +27,8 | +19,9 |
+| E2 | +37,2 | +27,7 | +38,8 | +25,3 | +26,6 | +18,4 |
+
+**Phần vào sớm:**
+
+| | E1 | E2 |
+|---|---:|---:|
+| Giờ đạt kiểm tra sớm (h = 1 / 2 / 3) | 378 / 297 / 251 | 410 / 348 / 297 |
+| Lệnh vào sớm thật sự (h = 1 / 2 / 3) | 92 / 71 / 90 | 91 / 81 / 101 |
+| Lệnh sớm bị bỏ vì cổng lãi lỗ / hết slot | 60 / 56 | 66 / 59 |
+| Nến H4 cũng đóng thành tín hiệu B | 166 lệnh, TB +2,05%, thắng 42% | 168 lệnh, TB +2,26%, thắng 43% |
+| Giá vào tốt hơn B ở các lệnh đó | 1,07% (0,46 ATR) | 1,13% (0,47 ATR) |
+| Nến H4 **không** đóng thành tín hiệu B | 87 lệnh (34%), TB −0,86%, thắng 25% | 105 lệnh (38%), TB −0,77%, thắng 26% |
+| Tỉ lệ lệnh thoát vì stop (B: 88,5%) | 89,2% | 89,7% |
+
+**Phân tích thêm (không đăng ký trước, chỉ để giải thích):**
+- Trên 162 breakout mà cả B lẫn E1 đều vào, E1 lãi +41,6 điểm % vốn, B chỉ +25,3. E2 so với B là +48,1 và +31,2. **Vào sớm thật sự cho giá tốt hơn và lãi hơn trên cùng một breakout.**
+- Phần lãi đó bị mất ở hai chỗ:
+  - **Phá giả:** lệnh vào sớm mà nến H4 không đóng thành tín hiệu lỗ −5,7 (E1) và −8,0 (E2).
+  - **Chiếm slot:** các lệnh phá giả giữ slot và đẩy cổng lãi lỗ đóng nhiều hơn (B 10 lần, E1 25 lần). Vì vậy E1 mất 52 lệnh mà B có, tổng +13,0; E2 mất 61 lệnh, tổng +9,6.
+- Kết quả không ổn định giữa hai nửa: E2 hơn B ở nửa đầu (+18,5 so với +16,6) nhưng kém ở nửa sau (+17,4 so với +22,1).
+
+**So với dự đoán:**
+- Đúng:
+  - giá vào tốt hơn khoảng 1% (đoán 1–2%);
+  - phá giả 34–38% số lệnh sớm (đoán 30–45%), và nhóm này lỗ;
+  - E2 lợi nhuận thấp hơn B;
+  - không biến thể nào đạt.
+- Sai: E1 không hề ít lệnh sớm. Ngoại suy volume ×4/h dễ đạt ngưỡng ở giờ đầu, nên E1 có gần bằng số lệnh sớm của E2.
+
+**Kết luận:**
+- Luật Setup-2 giữ nguyên, không có ADR.
+- Theo thiết kế, dừng ở đây: không dò thêm cách ngoại suy volume, số giờ hay khung M30.
+- Lợi thế về giá vào là có thật, nhưng không bù được phá giả và việc chiếm slot của danh mục 3 vị thế.
