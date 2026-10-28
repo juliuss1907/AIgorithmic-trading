@@ -4,6 +4,36 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-28 — Kết thúc soak 14 ngày: 9 route pass gate, HYPE Spot hoãn
+
+**Soak paper (14/10–28/10):**
+- 9 tín hiệu. 8 lệnh đã đóng, cả 8 chạm stop (khoảng −3,4% tới −5%). ETH Perp SHORT (tín hiệu lúc 16:00Z ngày 24/10) còn mở, −1,9% lúc 02:24Z.
+- Julius đánh giá chuỗi thua là do thị trường và quyết định chuyển sang G5.
+- **Vào bằng limit** khớp 7/7 lần và lỗ ít hơn lệnh thị trường ở 4/6 lệnh đã đóng, trung bình +0,79 điểm % (t = 1,74).
+- **Jev:** 7 lần gọi thành công; 2 lần `provider_error` ở các tín hiệu lúc 16:00Z ngày 24/10, do khoá bị từ chối (401). Julius thay khoá lúc 02:27Z ngày 25/10; sau đó chưa có tín hiệu nào để kiểm khoá mới.
+- **Heartbeat:** 7 route đạt 100%, ETH Perp 98,8%, NEAR Spot 98,8%, ETH Spot 95,2%, HYPE Spot 28,9%.
+
+**Gate soak** (`replay-v2`, cửa sổ từ mốc neo tới nến đóng lúc 04:00Z ngày 28/10):
+- **Spot:** gate automation của worker tự evaluate lúc 04:10:03Z.
+  - ETH, NEAR, SOL và ZEC pass.
+  - HYPE Spot `deferred` vì `heartbeat_coverage_below_95pct`. Campaign vẫn active, chưa bị đóng.
+- **Perp:** automation không tạo job. Mình chạy thủ công lúc 07:39Z, với khoá Julius đã duyệt: lấy funding mới tới 04:00Z, rồi `assets rules evaluate`. Cả 5 route pass.
+- Trước đó đã chạy thử chỉ đọc trên container `admin` dùng một lần (không ghi gì) và ra kết quả giống hệt.
+
+| Route | Lãi ròng | DD | Lệnh | Soak evaluation |
+|---|---:|---:|---:|---|
+| ETH Spot | +1,98% | 5,26% | 36 | `098420cf3e5475cbab10d95b1608f2ea` |
+| NEAR Spot | +9,38% | 4,94% | 40 | `986cbdc1b23aee2a2244c6be5eb6ebb8` |
+| SOL Spot | +1,53% | 5,92% | 39 | `e29d2f70b2d308b22e5f2e24a9f5db36` |
+| ZEC Spot | +14,59% | 4,54% | 48 | `520eda76b75b98ef1f99776e4d52532b` |
+| ETH Perp | +4,28% | 5,53% | 48 | `411a4a9f96e4b61dbee1b20fbfc6c8c4` |
+| HYPE Perp | −4,57% (miễn trừ, sàn −5%) | 7,11% | 21 | `234fe099bd073fa7b95014e03f776767` |
+| NEAR Perp | +5,03% | 4,93% | 39 | `25b9ecdfb1726dc2c550c8a5db9479e5` |
+| SOL Perp | +4,54% | 3,71% | 42 | `2c8a404e7ee83aa5538ab91458972574` |
+| ZEC Perp | −2,49% (miễn trừ) | 6,50% | 33 | `371d946b620c49ba9e81def71e80ece8` |
+
+**Lưu ý:** HYPE Perp chỉ còn cách sàn −5% có 0,43 điểm. **Chưa activate route nào**, chưa đụng Demo, VPS vẫn chạy bản 871dd9d.
+
 ## 2026-10-24 — Nghiên cứu vào lệnh sớm bằng H1 cho Setup-2: không biến thể nào đạt
 
 **Vì sao làm:**
