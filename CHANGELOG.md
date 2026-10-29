@@ -62,6 +62,13 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
 - **G6, chạy thử một chu kỳ** (Julius duyệt), 07:18Z: `execution demo run --multi --once`.
   - Kết quả `status: running`, equity 1.000 USDT, không có route nào có tín hiệu. 0 lệnh, 0 fill.
   - Journal chỉ ghi `portfolio_cycle`. Runner liên tục chưa khởi động.
+- **Deploy `a0e9ddb`** (Julius duyệt push và deploy), lúc 07:37–07:40Z:
+  - Backup trên host `~/.local/state/aigorithmic-trading/backups/intraday-20261029T073709174957Z.sqlite3`: 3.630.338.048 byte, SHA-256 `540ab9ed…c81c`, `verify` ok.
+  - Image `web` cũ được tag `intraday-web:rollback-871dd9d-20261029`.
+  - Chỉ rebuild và khởi động lại `web`. `worker` giữ nguyên container, `demo-execution` không chạy.
+  - Sau deploy: web healthy; `/setup2` và chart trả 200. API hiện đủ 10 route (9 `champion`, HYPE Spot `soak`) và 9 tín hiệu.
+  - VPS đang ở detached HEAD `a0e9ddb`.
+- Bài học: `backup create` không có `--output-dir` thì file nằm trong container `admin` dùng một lần và mất khi container bị xoá. Phải mount thư mục backup trên host và chạy `--user 1000:1000`.
 
 ## 2026-10-24 — Nghiên cứu vào lệnh sớm bằng H1 cho Setup-2: không biến thể nào đạt
 
