@@ -77,6 +77,17 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   - `setup2 backfill`: không có nến mới.
   - Replay v2 pass (`400c443b50c395021465e9c972482f89`): 0 lệnh, 3.091 nến, phủ 100%, có miễn trừ số lệnh và lãi ròng khi không có lệnh.
   - 07:46Z: `start-soak`, campaign `f8864be56d684826ea1ce24a2eabc602`. Đánh giá sớm nhất 2026-11-12 07:46Z.
+- **Runner Demo tự pause lúc 08:57:55Z**, lý do `venue_or_state_unavailable_reconcile_required`.
+  - Chu kỳ gặp một exception nhưng code không ghi lỗi cụ thể ra log.
+  - Kiểm lại `_risk` trên bản sao journal (chỉ đọc) thì qua: Spot USDT 5.005,41 và Perp 5.000 khớp baseline, không lệnh treo, không vị thế, funding 0. Nhiều khả năng là lỗi API tạm thời của Demo.
+  - Không lỡ lệnh: nến 12:00Z không có tín hiệu trên 9 route Demo.
+- **Tín hiệu soak đầu tiên của HYPE Spot**, nến đóng 12:00Z: LONG ở 87,98, không trượt bộ lọc nào, stop 83,58 (mốc 5%). Chỉ là lệnh soak, không có lệnh Demo.
+  - Jev gọi thành công lần đầu từ khi đổi key ngày 25/10: "Take Profit" 0,59, điểm vào lệnh 1,36/4. Jev chỉ tư vấn.
+- **Mở lại runner Demo** (Julius duyệt), 14:00–14:02Z:
+  - `stop demo-execution`, rồi `status --multi`: đúng 9 route, flat.
+  - `activate --multi` ETH Spot bằng soak `098420cf…`: `orders_submitted: false`, portfolio `paused: false`.
+  - `start demo-execution` (giữ nguyên container); chu kỳ đầu lúc 14:02:48Z báo `running`.
+  - Việc còn lại: ghi lỗi cụ thể vào log khi runner tự pause.
 - Bài học: `backup create` không có `--output-dir` thì file nằm trong container `admin` dùng một lần và mất khi container bị xoá. Phải mount thư mục backup trên host và chạy `--user 1000:1000`.
 
 ## 2026-10-24 — Nghiên cứu vào lệnh sớm bằng H1 cho Setup-2: không biến thể nào đạt
