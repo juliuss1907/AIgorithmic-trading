@@ -72,6 +72,11 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   - Kiểm trước khi bật: không có runner nào khác.
   - Sau khi bật: worker giữ nguyên container; chu kỳ đầu báo `running`, equity 1.000 USDT, không có route nào có tín hiệu.
   - Từ đây, tín hiệu Setup-2 trên 9 route sẽ thành lệnh thật trên Binance Demo.
+- **Soak lại HYPE Spot** (Julius duyệt). Điều kiện: Binance Spot có 36 nến 1d, job `spot_4h` không lỗi từ 27/10.
+  - 07:45Z: `setup2 candidate --retire-open` tạo `hypeusdt-spot-4h-setup2-slots-v1-1793259927` và đóng campaign cũ.
+  - `setup2 backfill`: không có nến mới.
+  - Replay v2 pass (`400c443b50c395021465e9c972482f89`): 0 lệnh, 3.091 nến, phủ 100%, có miễn trừ số lệnh và lãi ròng khi không có lệnh.
+  - 07:46Z: `start-soak`, campaign `f8864be56d684826ea1ce24a2eabc602`. Đánh giá sớm nhất 2026-11-12 07:46Z.
 - Bài học: `backup create` không có `--output-dir` thì file nằm trong container `admin` dùng một lần và mất khi container bị xoá. Phải mount thư mục backup trên host và chạy `--user 1000:1000`.
 
 ## 2026-10-24 — Nghiên cứu vào lệnh sớm bằng H1 cho Setup-2: không biến thể nào đạt
