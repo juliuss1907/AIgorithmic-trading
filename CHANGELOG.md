@@ -32,7 +32,14 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
 | SOL Perp | +4,54% | 3,71% | 42 | `2c8a404e7ee83aa5538ab91458972574` |
 | ZEC Perp | −2,49% (miễn trừ) | 6,50% | 33 | `371d946b620c49ba9e81def71e80ece8` |
 
-**Lưu ý:** HYPE Perp chỉ còn cách sàn −5% có 0,43 điểm. **Chưa activate route nào**, chưa đụng Demo, VPS vẫn chạy bản 871dd9d.
+**Lưu ý:** HYPE Perp chỉ còn cách sàn −5% có 0,43 điểm. Ngày 28/10 chưa activate route nào, chưa đụng Demo; VPS vẫn chạy bản 871dd9d.
+
+**Cập nhật 29/10 (G5, bước 1–2; Julius duyệt):**
+- Lệnh ETH Perp SHORT chạm stop lúc 12:00Z ngày 28/10, lỗ −3,3% (nếu vào bằng limit thì −2,9%). Cả đợt soak: 9 lệnh đã đóng, 9 lệnh lỗ.
+- 02:02Z: `assets rules activate` cả 9 route bằng đúng các soak evaluation ở bảng trên. Cả 9 thành champion, challenger để trống. HYPE Spot không được activate.
+- 02:03–02:05Z: `assets scan` (1.000 USDT), rồi `assets venue set --venue bnb --environment demo` cho cả 10 route. Tất cả `listed` và `selectable`.
+- Spread lúc quét: Spot từ 0,04 tới 2,5 bps. Perp rộng hơn lần quét ngày 15/10: ETH 1,6, ZEC 9,9, SOL 12, NEAR 13, HYPE 17 bps.
+- Chưa build image Demo, chưa có journal, chưa chỉnh leverage, chưa `configure`.
 
 ## 2026-10-24 — Nghiên cứu vào lệnh sớm bằng H1 cho Setup-2: không biến thể nào đạt
 
