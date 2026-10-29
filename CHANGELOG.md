@@ -88,6 +88,11 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   - `activate --multi` ETH Spot bằng soak `098420cf…`: `orders_submitted: false`, portfolio `paused: false`.
   - `start demo-execution` (giữ nguyên container); chu kỳ đầu lúc 14:02:48Z báo `running`.
   - Việc còn lại: ghi lỗi cụ thể vào log khi runner tự pause.
+- **Sửa: ghi lý do khi portfolio Demo tự pause** (commit `43a3f6f`; bản cherry-pick `e80e0ab` trên nhánh `fix/demo-pause-error` tách từ `a0e9ddb`, bản đang chạy trên VPS).
+  - Khi chu kỳ lỗi, portfolio lưu thêm `error` gồm tên exception và nội dung, tối đa 200 ký tự, bỏ phần sau dấu `?` để query đã ký không lọt vào log. Trường này nằm trong journal và trong output của chu kỳ.
+  - `activate` xoá `error` khi bỏ pause.
+  - Test: mở rộng test cash drift trong `test_multi_demo_runtime.py`. Toàn bộ: 1.904 passed; `test_tui.py::test_trades_and_ops_tabs_…` lỗi một lần khi chạy cả suite nhưng chạy riêng thì xanh 3/3. Chưa deploy.
+  - Telegram vẫn chưa báo khi runner tự pause.
 - Bài học: `backup create` không có `--output-dir` thì file nằm trong container `admin` dùng một lần và mất khi container bị xoá. Phải mount thư mục backup trên host và chạy `--user 1000:1000`.
 
 ## 2026-10-24 — Nghiên cứu vào lệnh sớm bằng H1 cho Setup-2: không biến thể nào đạt
