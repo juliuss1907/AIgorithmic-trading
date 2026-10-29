@@ -68,6 +68,10 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   - Chỉ rebuild và khởi động lại `web`. `worker` giữ nguyên container, `demo-execution` không chạy.
   - Sau deploy: web healthy; `/setup2` và chart trả 200. API hiện đủ 10 route (9 `champion`, HYPE Spot `soak`) và 9 tín hiệu.
   - VPS đang ở detached HEAD `a0e9ddb`.
+- **G6: bật runner `demo-execution` chạy liên tục lúc 07:42Z** (Julius duyệt), chu kỳ 30 giây.
+  - Kiểm trước khi bật: không có runner nào khác.
+  - Sau khi bật: worker giữ nguyên container; chu kỳ đầu báo `running`, equity 1.000 USDT, không có route nào có tín hiệu.
+  - Từ đây, tín hiệu Setup-2 trên 9 route sẽ thành lệnh thật trên Binance Demo.
 - Bài học: `backup create` không có `--output-dir` thì file nằm trong container `admin` dùng một lần và mất khi container bị xoá. Phải mount thư mục backup trên host và chạy `--user 1000:1000`.
 
 ## 2026-10-24 — Nghiên cứu vào lệnh sớm bằng H1 cho Setup-2: không biến thể nào đạt
