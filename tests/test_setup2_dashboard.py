@@ -60,6 +60,20 @@ def test_read_model_joins_soak_signals_jev_hour_score_and_shadow_limit(store):
     assert d["status"] == "attention" and any("Worker" in a for a in d["attention"])
 
 
+def test_a_promoted_champion_stays_on_the_page_and_a_superseded_one_does_not(store, monkeypatch):
+    from intraday import setup2_dashboard
+    with store._connect() as c:
+        c.execute("UPDATE replay_gate_campaigns SET status='promoted' WHERE scope='perp_intraday'")
+    monkeypatch.setattr(setup2_dashboard, "_champions", lambda s: {("ETHUSDT", "perp_intraday"): "rule-1"})
+    d = build_setup2_dashboard(store, now=NOW)
+    assert {c["route"]: c["phase"] for c in d["campaigns"]} == {"ETHUSDT:perp": "champion", "ETHUSDT:spot": "soak"}
+    assert next(c for c in d["campaigns"] if c["route"] == "ETHUSDT:perp")["bars"] == 3
+    assert [s["route"] for s in d["signals"]] == ["ETHUSDT:perp"]
+
+    monkeypatch.setattr(setup2_dashboard, "_champions", lambda s: {("ETHUSDT", "perp_intraday"): "rule-2"})
+    assert [c["route"] for c in build_setup2_dashboard(store, now=NOW)["campaigns"]] == ["ETHUSDT:spot"]
+
+
 def test_setup2_page_and_api_render(store):
     client = TestClient(create_app(database=store.database))
     page = client.get("/setup2")

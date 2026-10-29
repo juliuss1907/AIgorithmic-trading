@@ -32,18 +32,34 @@ def _table(store, name):
         return lr._table(c, name)
 
 
+def _champions(store):
+    if not _table(store, "asset_scoped_rule_registry"):
+        return {}
+    return {(r["symbol"], r["scope"]): r["champion_id"]
+            for r in _rows(store, "SELECT symbol, scope, champion_id FROM asset_scoped_rule_registry")}
+
+
 def _campaigns(store, now):
-    """Active soak campaigns of the coins in the current active set (all of them when no set is recorded)."""
+    """Soak campaigns, and promoted ones whose rule is still the route's champion, of the coins in the current active
+    set (all of them when no set is recorded). A promoted rule keeps recording observations, so its route stays on
+    the page; one row per route, the champion first."""
     if not _table(store, "replay_gate_campaigns"):
         return []
     version = active_set.current(store)
     coins = set(version.plan.coins) if version else None
+    champions, seen_routes = _champions(store), set()
     result = []
-    for row in _rows(store, "SELECT symbol, scope, candidate_id, started_at FROM replay_gate_campaigns "
-                            "WHERE status='active' ORDER BY symbol, scope"):
+    for row in _rows(store, "SELECT symbol, scope, candidate_id, started_at, status FROM replay_gate_campaigns "
+                            "WHERE status IN ('active', 'promoted') ORDER BY symbol, scope, status DESC"):
         market = SCOPE_MARKETS.get(row["scope"])
         if market is None or (coins is not None and row["symbol"] not in coins):
             continue
+        champion = row["status"] == "promoted"
+        if champion and champions.get((row["symbol"], row["scope"])) != row["candidate_id"]:
+            continue
+        if (row["symbol"], row["scope"]) in seen_routes:
+            continue
+        seen_routes.add((row["symbol"], row["scope"]))
         started = datetime.fromisoformat(row["started_at"])
         seen = setup2_store.observations(store, row["symbol"], market, rule_id=row["candidate_id"], since=started,
                                          until=now)
@@ -51,6 +67,7 @@ def _campaigns(store, now):
         review_at = started+timedelta(days=SOAK_DAYS)
         result.append(dict(
             route=f"{row['symbol']}:{market}", symbol=row["symbol"], market=market, started_at=row["started_at"],
+            phase="champion" if champion else "soak",
             coverage_pct=coverage*100, healthy=coverage >= COVERAGE_MIN, bars=len({r["bar_close"] for r in seen}),
             jev_errors=sum(r["jev_status"] in JEV_ERRORS for r in seen),
             last_bar=max((r["bar_close"] for r in seen), default=None), review_at=review_at.isoformat(),
