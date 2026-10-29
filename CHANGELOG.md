@@ -54,6 +54,14 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   - Mỗi route có `target_notional_cap` 166,67 USDT và `stop_distance` 0,05.
   - Sau đó portfolio `enabled`, không còn paused, 9 route active, không có `spot:HYPEUSDT`. 0 lệnh, 0 fill.
 - **Runner `demo-execution` chưa khởi động (G6 chờ Julius duyệt riêng).**
+- Nến 04:00Z: worker ghi quan sát của cả 10 route lúc 04:00:01. 9 route dùng đúng rule champion, không có tín hiệu. Promote không làm đứt heartbeat.
+- **Trang `/setup2` chỉ còn hiện HYPE Spot**, vì dashboard chỉ đọc campaign `active`.
+  - Sửa ở `a0e9ddb`, trên nhánh `fix/setup2-dashboard-champions` tách từ 871dd9d (cherry-pick sang nhánh này là `eff4a06`).
+  - Campaign `promoted` được hiện khi rule của nó vẫn là champion của route, ghi là "Rule chính". Mỗi route chỉ một dòng.
+  - Có 1 test mới. Toàn bộ test: 1.928 passed, chỉ bỏ qua `test_perp_collection_migration` (lỗi có từ trước). Chưa deploy.
+- **G6, chạy thử một chu kỳ** (Julius duyệt), 07:18Z: `execution demo run --multi --once`.
+  - Kết quả `status: running`, equity 1.000 USDT, không có route nào có tín hiệu. 0 lệnh, 0 fill.
+  - Journal chỉ ghi `portfolio_cycle`. Runner liên tục chưa khởi động.
 
 ## 2026-10-24 — Nghiên cứu vào lệnh sớm bằng H1 cho Setup-2: không biến thể nào đạt
 
