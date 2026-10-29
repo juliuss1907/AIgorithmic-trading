@@ -39,7 +39,12 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
 - 02:02Z: `assets rules activate` cả 9 route bằng đúng các soak evaluation ở bảng trên. Cả 9 thành champion, challenger để trống. HYPE Spot không được activate.
 - 02:03–02:05Z: `assets scan` (1.000 USDT), rồi `assets venue set --venue bnb --environment demo` cho cả 10 route. Tất cả `listed` và `selectable`.
 - Spread lúc quét: Spot từ 0,04 tới 2,5 bps. Perp rộng hơn lần quét ngày 15/10: ETH 1,6, ZEC 9,9, SOL 12, NEAR 13, HYPE 17 bps.
-- Chưa build image Demo, chưa có journal, chưa chỉnh leverage, chưa `configure`.
+- Build image `demo-execution` trên 871dd9d. Runner chưa khởi động, journal chưa có.
+- Kiểm quyền trong container Demo: đọc được source, ghi được journal, key 0600 thuộc uid 1000, runner chạy uid 1000.
+- Key Demo đọc được tài khoản Futures:
+  - 5.000 USDT, `canTrade`, One-way, Single-asset; không có vị thế hay lệnh mở.
+  - **Cả 5 cặp Perp đang ở `CROSSED`, leverage `0`.** Sàn trả 0 khi chưa từng chỉnh leverage cho cặp đó.
+  - `AccountSnapshot` đòi leverage ≥ 1 nên `aigt perp COIN` báo "Perp information unavailable". Cần đặt Isolated 1x trên giao diện Demo trước khi chạy wizard leverage và `configure`.
 
 ## 2026-10-24 — Nghiên cứu vào lệnh sớm bằng H1 cho Setup-2: không biến thể nào đạt
 
