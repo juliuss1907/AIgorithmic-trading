@@ -45,6 +45,15 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   - 5.000 USDT, `canTrade`, One-way, Single-asset; không có vị thế hay lệnh mở.
   - **Cả 5 cặp Perp đang ở `CROSSED`, leverage `0`.** Sàn trả 0 khi chưa từng chỉnh leverage cho cặp đó.
   - `AccountSnapshot` đòi leverage ≥ 1 nên `aigt perp COIN` báo "Perp information unavailable". Cần đặt Isolated 1x trên giao diện Demo trước khi chạy wizard leverage và `configure`.
+- Julius đặt Isolated 1x cho 5 cặp trên giao diện Demo. Mỗi ví Spot và Futures có 5.000 USDT.
+- Julius chạy wizard leverage trong TTY. Journal ghi verified 1x cho cả 5 cặp, từ 02:50Z (ETH) tới 03:21Z (SOL).
+- 03:22Z: `execution demo configure --from-active-set --jev-mode advisory --capital 1000`.
+  - Profile `setup2_slots_v1`; Spot và Perp mỗi bên 50%, mỗi coin 20%.
+  - Baseline: Perp 5.000 USDT, Spot 5.005,41 USDT.
+- `preflight` rồi `activate` cho 9 route, dùng các soak evaluation ở bảng trên.
+  - Mỗi route có `target_notional_cap` 166,67 USDT và `stop_distance` 0,05.
+  - Sau đó portfolio `enabled`, không còn paused, 9 route active, không có `spot:HYPEUSDT`. 0 lệnh, 0 fill.
+- **Runner `demo-execution` chưa khởi động (G6 chờ Julius duyệt riêng).**
 
 ## 2026-10-24 — Nghiên cứu vào lệnh sớm bằng H1 cho Setup-2: không biến thể nào đạt
 
