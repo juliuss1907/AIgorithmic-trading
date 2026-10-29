@@ -27,6 +27,11 @@ def identity(*parts):
     return "ag"+hashlib.sha256(":".join(map(str,parts)).encode()).hexdigest()[:32]
 
 
+def _error_text(error):
+    """Bounded cause for a safety pause; anything after '?' is dropped so a signed query never reaches the log."""
+    return (type(error).__name__+": "+str(error).split("?")[0])[:200]
+
+
 def require_paused_and_flat(journal):
     """Journal-only check for audited active-set changes; configure re-verifies with the exchange."""
     from intraday.execution.contracts import AccountRef
@@ -266,7 +271,7 @@ class MultiDemoRuntime:
             if previous:
                 route["consumed_bar"] = previous.get("consumed_bar")
             p["routes"][market+":"+symbol] = route
-            p.update(enabled=True,paused=False,reason=None)
+            p.update(enabled=True,paused=False,reason=None);p.pop("error",None)
             self._save(p,"operator_route_activate")
             return {"status":"activated","symbol":symbol,"market":market,"orders_submitted":False}
 
@@ -470,7 +475,7 @@ class MultiDemoRuntime:
                         except Exception:
                             pass  # Durable intents/stops remain; status explicitly requires reconciliation.
                     return {"status":"paused","reason":"portfolio_loss_limit","reconciliation_required":True}
-                p.update(paused=True,reason="venue_or_state_unavailable_reconcile_required")
+                p.update(paused=True,reason="venue_or_state_unavailable_reconcile_required",error=_error_text(error))
                 self._save(p,"portfolio_safety_pause")
                 # Cover a crash between an uncertain Perp submission and stop ACK.
                 # Spot balances cannot prove ownership, so never infer Spot exposure.
@@ -501,7 +506,7 @@ class MultiDemoRuntime:
                                       now=self.clock(),observed_perp_quantity=position.quantity)
                     except Exception:
                         pass
-                return {"status":"paused","reason":p["reason"]}
+                return {"status":"paused","reason":p["reason"],"error":p["error"]}
 
     def _sleeves(self,p,plan,markets,*,now):
         """Realized capital and used principal per sleeve (ADR-007); unrealized profit is never reinvested."""

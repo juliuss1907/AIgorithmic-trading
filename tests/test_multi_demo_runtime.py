@@ -215,8 +215,13 @@ def test_wrong_scope_evidence_configuration_mismatch_and_manual_cash_reset_block
     exchange.leverage = 3
     runtime.activate("ETHUSDT","perp",evaluation_id="ETHUSDT-perp-pass",now=NOW)
     exchange.wallet += 100
-    assert runtime.cycle(now=NOW)["status"] == "paused"
+    report = runtime.cycle(now=NOW)
+    assert report["status"] == "paused" and report["error"] == "ExecutionUnavailable: Perp account cash drift"
+    assert runtime.journal.portfolio(ACCOUNT)["error"] == report["error"]
     assert not exchange.orders
+    exchange.wallet -= 100
+    runtime.activate("ETHUSDT","perp",evaluation_id="ETHUSDT-perp-pass",now=NOW)
+    assert "error" not in runtime.journal.portfolio(ACCOUNT)
 
 
 def test_unknown_perp_entry_is_not_repeated_and_observed_exposure_gets_reducing_stop(tmp_path):
