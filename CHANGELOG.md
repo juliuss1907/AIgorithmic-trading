@@ -93,6 +93,12 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   - `activate` xoá `error` khi bỏ pause.
   - Test: mở rộng test cash drift trong `test_multi_demo_runtime.py`. Toàn bộ: 1.904 passed; `test_tui.py::test_trades_and_ops_tabs_…` lỗi một lần khi chạy cả suite nhưng chạy riêng thì xanh 3/3. Chưa deploy.
   - Telegram vẫn chưa báo khi runner tự pause.
+- **Deploy `e80e0ab`, chỉ `demo-execution`** (Julius duyệt push và deploy), lúc 14:15–14:18Z:
+  - Đã push `feature/slot-runtime` (`187b0de`) và nhánh mới `fix/demo-pause-error`.
+  - Image cũ được tag `intraday-demo-execution:rollback-a0e9ddb-20261029`; image mới `7541c398dd7e`.
+  - Đã dừng runner. Journal được sao lưu thành `binance-demo-backup-20261029T1418Z-e80e0ab.sqlite3`, cùng thư mục với journal: `integrity_check` ok, SHA-256 `6562d70487609d79…`.
+  - `up -d --no-deps demo-execution`; web và worker giữ nguyên container. Ba chu kỳ đầu (14:16:25, 14:17:08, 14:17:50Z) báo `running`.
+  - VPS đang ở detached HEAD `e80e0ab`. Phần web và worker của commit này giống hệt `a0e9ddb`.
 - Bài học: `backup create` không có `--output-dir` thì file nằm trong container `admin` dùng một lần và mất khi container bị xoá. Phải mount thư mục backup trên host và chạy `--user 1000:1000`.
 
 ## 2026-10-24 — Nghiên cứu vào lệnh sớm bằng H1 cho Setup-2: không biến thể nào đạt
