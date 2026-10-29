@@ -220,7 +220,7 @@
                 <td>{{ c.jev_errors }}</td>
                 <td>{{ c.last_bar|vn_short }}</td>
                 <td>{{ c.review_at|vn_short }}</td>
-                <td>{{ "%.0f"|format(c.progress_pct) }}%</td>
+                <td>{% if c.phase == 'champion' %}Rule chính{% else %}{{ "%.0f"|format(c.progress_pct) }}%{% endif %}</td>
               </tr>
               {% endfor %}
             </tbody>
