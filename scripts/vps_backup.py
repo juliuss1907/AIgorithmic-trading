@@ -58,6 +58,9 @@ def prune(backups, prefix, keep=KEEP):
     for path in sorted(backups.glob(prefix+"-*.sqlite3"))[:-keep]:
         path.unlink()
         path.with_suffix(".manifest.json").unlink(missing_ok=True)
+        # Opening a WAL-mode backup read-only leaves these beside it.
+        for suffix in ("-shm","-wal"):
+            path.with_name(path.name+suffix).unlink(missing_ok=True)
         removed.append(path.name)
     return removed
 

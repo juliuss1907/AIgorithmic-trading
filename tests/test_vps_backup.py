@@ -23,11 +23,13 @@ def test_prune_keeps_the_newest_and_removes_only_its_own_prefix(tmp_path):
     for day in range(1, 10):
         (tmp_path/f"intraday-202610{day:02d}T000000Z.sqlite3").write_text("x")
         (tmp_path/f"intraday-202610{day:02d}T000000Z.manifest.json").write_text("{}")
+        (tmp_path/f"intraday-202610{day:02d}T000000Z.sqlite3-shm").write_text("")
     other = tmp_path/"binance-demo-backup-20261029T1418Z-e80e0ab.sqlite3"
     other.write_text("keep")
     removed = vps_backup.prune(tmp_path, "intraday", keep=7)
     assert removed == ["intraday-20261001T000000Z.sqlite3", "intraday-20261002T000000Z.sqlite3"]
     assert not (tmp_path/"intraday-20261001T000000Z.manifest.json").exists()
+    assert not (tmp_path/"intraday-20261001T000000Z.sqlite3-shm").exists()
     assert len(list(tmp_path.glob("intraday-*.sqlite3"))) == 7 and other.exists()
 
 
