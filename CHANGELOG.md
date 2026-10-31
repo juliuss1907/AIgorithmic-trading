@@ -10,8 +10,16 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
 - **Journal:** chu kỳ không đổi trạng thái (`portfolio_cycle`, `paused_reconciled`) không ghi nữa; trước đó mỗi chu kỳ tốn khoảng 4 KB. `slot_selection.at` giờ là lần cuối trạng thái đổi.
 - **Gate Perp không tự chạy (nguyên nhân ngày 28/10):** `automation_jobs` dùng `allows()`, vốn hỏi scope Jev, mà active set Setup-2 không bao giờ có `perp_intraday`, nên mọi route Perp bị bỏ qua. Tái hiện bằng cách chạy projection chỉ đọc trên bản backup 24/10: cả Perp đều `due` nhưng `allows` là False. Giờ dùng trọng số Perp của coin (`route_in_plan`). Cần restart worker mới có hiệu lực; hiện không có soak Perp nào đang chờ.
 - **Test:** `test_perp_collection_migration` lỗi vì CLI dùng đồng hồ thật trong khi dữ liệu test cố định ở 01/10; đã ghim đồng hồ. Lỗi `WorkerCancelled` lúc có lúc không ở `test_tui.py` chưa tái hiện được nên chưa sửa.
-- **Backup:** `scripts/vps_backup.py` và `deploy/systemd/aigt-backup.{service,timer}`, chạy 02:00Z mỗi ngày: database nguồn và journal Demo, giữ 7 bản trong `backups/daily/`, diễn tập khôi phục vào Chủ nhật, lỗi thì báo Telegram. Thư mục riêng để không đụng các backup deploy thủ công. Chưa chạy trên VPS.
+- **Backup:** `scripts/vps_backup.py` và `deploy/systemd/aigt-backup.{service,timer}`, chạy 02:00Z mỗi ngày: database nguồn và journal Demo, giữ 7 bản trong `backups/daily/`, diễn tập khôi phục vào Chủ nhật, lỗi thì báo Telegram. Thư mục riêng để không đụng các backup deploy thủ công.
 - **`feature/jev-setup2-review`:** không merge. Đây là nghiên cứu overlay Jev, đã kết luận Jev không phân biệt được lệnh tốt xấu ([hiệu chỉnh](docs/jev-calibration-2026-10-16.md)) và runtime giữ chế độ tư vấn. Giữ nhánh làm tư liệu.
+
+**Deploy `d2cb428`, chỉ `demo-execution`, và cài timer backup** (Julius tự chạy), lúc 07:26–07:34Z:
+- VPS chuyển từ `cf3d8e4` sang `main` (`d2cb428`). Image cũ được tag `intraday-demo-execution:rollback-cf3d8e4-20261031`; image mới `8b786b88c7e5`. Web và worker giữ nguyên container nên chưa có bản sửa lịch gate Perp.
+- 20 chu kỳ trong khoảng 13 phút đều báo `running`. Journal giữ nguyên 21.872.640 byte từ 07:26Z, tức journal đã ngừng phình khi không có tín hiệu.
+- `aigt-backup.timer` đang active, lần chạy đầu 02:00Z ngày 01/11.
+- Lần chạy tay đầu tiên tạo `intraday-20261031T072644117019Z.sqlite3` (3,76 GB) và bản journal (`integrity_check` ok). Thư mục diễn tập khôi phục đã được dọn, không còn tiến trình chạy; agent không thấy dòng kết quả của script vì script chạy ở terminal của Julius.
+- Sửa thêm sau deploy: `prune` xoá cả file `-shm` và `-wal` đi kèm bản backup. VPS nhận bản này ở lần cập nhật code tiếp theo.
+- CI của `main` (run `41179130551`) chưa đọc được vì `gh` bị treo trên máy local.
 
 ## 2026-10-31 — Runner Demo không còn tự pause vì một lỗi API tạm thời
 
