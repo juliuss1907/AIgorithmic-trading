@@ -4,6 +4,16 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-31 — Dọn nhánh và file thừa theo delete request (Julius duyệt)
+
+- **Đã xoá:**
+  - 15 nhánh local đã merge vào `main`.
+  - Bản local của `research/donchian-adx-single`, `research/donchian-setup2-diagnostics`, `research/recent-48h-perp5x`, `feature/three-coin-runtime`, sau khi push và kiểm hash khớp GitHub.
+  - Worktree `system-trading-jev-review`. `state/` và `data/` trong đó (83 file, gồm bằng chứng kiểm chứng Jev 16/10) được chép trước sang `state/verification/jev-review-worktree-20261031/` và `diff -r` khớp.
+  - Trên VPS: 20 file `.intraday-backup.*.tmp-*` và 10 backup thủ công từ 13/10 tới 24/10. Thư mục backup giảm từ 34 GB còn 7 GB.
+- **Giữ lại:** backup 29/10 và `backups/daily/`.
+- **Chưa xoá vì còn điều kiện:** 4 nhánh `fix/*`, image rollback và build cache trên VPS chờ một lệnh Demo khép kín; timer BTC paper chờ sau G6; key Demo local chờ Julius xác nhận không còn dùng từ máy này.
+
 ## 2026-10-31 — Runner Demo pause lần nữa vì quote Spot chậm: danh sách lỗi tạm thời bỏ sót
 
 - **Sự cố:** 13:01:29Z, sau hơn 5 giờ và 508 chu kỳ `running`, runner pause với `Spot Demo quote identity or freshness unavailable`. Adapter Spot báo lỗi này khi quote về quá 3 giây hoặc sai symbol. Telegram đã báo đúng, lần đầu cảnh báo này chạy thật.
