@@ -14,7 +14,17 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
 - Lỗi tạm thời khi đang pause không còn ghi đè lý do pause.
 - Runner báo Telegram một lần cho mỗi lần pause, kèm lý do và lỗi; gửi hỏng thì thử lại ở chu kỳ sau.
 
-Chưa deploy; portfolio trên VPS vẫn pause cho tới khi được `activate`. `_protect` lỗi vì API vẫn dẫn tới `protection_failed` và đóng vị thế; giữ nguyên vì an toàn.
+`_protect` lỗi vì API vẫn dẫn tới `protection_failed` và đóng vị thế; giữ nguyên vì an toàn.
+
+**Deploy `cf3d8e4`, chỉ `demo-execution`** (Julius duyệt và tự chạy, vì lệnh deploy của agent bị chặn), lúc 04:03–04:13Z:
+- `cf3d8e4` là bản cherry-pick của `5e6e1bc` trên nhánh `fix/demo-transient-errors`, tách từ `e80e0ab`. VPS đang ở detached HEAD `cf3d8e4`.
+- Image cũ được tag `intraday-demo-execution:rollback-e80e0ab-20261031`; image mới `becd5b84d581`.
+- Journal được sao lưu thành `binance-demo-backup-20261031T0403Z-cf3d8e4.sqlite3`, cùng thư mục với journal: `integrity_check` ok, SHA-256 `d0e7d010ab8c5547…`.
+- `activate --multi` ETH Spot bằng soak `098420cf…`: portfolio hết pause, 9 route active, không có `spot:HYPEUSDT`, 0 lệnh, 0 fill.
+- Runner tắt khoảng 10 phút (04:03–04:13Z) do lỗi script deploy: `docker compose run` nuốt stdin của `bash -s`, nên script dừng sau `activate` mà không báo lỗi. Bài học: dùng `-n` hoặc `< /dev/null` cho `docker compose run` trong script đọc từ stdin.
+- Ba chu kỳ đầu (04:13:46, 04:14:26, 04:15:05Z) báo `running`, equity 1.000 USDT. `TELEGRAM_ENABLED=true`. Web và worker giữ nguyên container.
+- Nến đóng 00:00Z và 04:00Z ngày 31/10 không có tín hiệu vào lệnh trên route nào, nên lần tắt này không làm lỡ lệnh.
+- Cảnh báo Telegram khi pause và nhánh `degraded` chưa được thấy chạy thật. Chưa có lệnh Demo nào; nghiệm thu G6 vẫn chờ tín hiệu đầu tiên.
 
 ## 2026-10-28 — Kết thúc soak 14 ngày: 9 route pass gate, HYPE Spot hoãn
 
