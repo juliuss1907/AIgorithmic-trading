@@ -10,6 +10,11 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
 - **Nguyên nhân:** bản `cf3d8e4` chỉ liệt kê thông báo quote cũ của Perp, bỏ sót thông báo tương ứng của Spot. Lỗi lặp trong log sau đó chỉ là `error` đã lưu được in lại ở mỗi chu kỳ pause, không phải lỗi mới.
 - **Ảnh hưởng:** 0 lệnh, 0 fill. Từ nến 04:00Z tới 12:00Z ngày 31/10 không có tín hiệu vào lệnh. Đo lúc 13:04Z từ trong container runner: quote về khoảng 0,3 giây trên cả 5 coin.
 - **Sửa:** thêm thông báo quote của Spot và thông báo lệch đồng hồ của Spot, Perp vào danh sách lỗi tạm thời. Lệch đồng hồ thật vẫn pause sau 10 chu kỳ liền.
+- **Deploy `af5708f`, chỉ `demo-execution`** (Julius tự chạy), khoảng 13:55–13:56Z:
+  - Image cũ được tag `intraday-demo-execution:rollback-d2cb428-20261031`; image mới `d18b2a8dd048`. Web và worker giữ nguyên container.
+  - Journal được sao lưu thành `binance-demo-backup-20261031T1355Z-af5708f.sqlite3`: `integrity_check` ok.
+  - `activate` bỏ pause: 9 route active, không có `spot:HYPEUSDT`, 0 lệnh, 0 fill. Ba chu kỳ đầu báo `running`.
+  - Runner dừng từ 13:01Z tới 13:56Z, không có nến H4 nào đóng trong khoảng này.
 
 ## 2026-10-31 — Gom nhánh về `main`, giảm journal, sửa lịch gate Perp, thêm backup tự động
 
