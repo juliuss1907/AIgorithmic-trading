@@ -9,6 +9,14 @@ Roadmap này thay hướng SPY/ETF/BTC-only trước đây; bản gốc nằm �
 [research roadmap lịch sử](../docs/history/research-roadmap-2026-09-16.md).
 Subsystem `lab/` vẫn giữ dữ liệu, control và tests độc lập.
 
+## Trạng thái 2026-10-31
+
+Nguồn cập nhật tiến độ là [CHANGELOG](../CHANGELOG.md); mục dưới đây là ảnh chụp, không phải realtime.
+
+- Hệ thống hiện hành: Setup-2 slot, 5 coin, theo [ADR-007](../docs/decisions/007-slot-rotation-five-coin-runtime.md). 9 route là champion và chạy trên Binance Demo từ 29/10; HYPE Spot đang soak, đánh giá sớm nhất 2026-11-12 07:46Z.
+- Còn lại: nghiệm thu G6 khi có lệnh Demo đầu tiên, đánh giá HYPE Spot, tiêu chí Jev ở mốc 30 lệnh, lịch vòng học hằng tuần, cài timer backup trên VPS, delete request cho phần không dùng.
+- Phần còn lại của file này là bản 2026-10-01. Các mục về Perp decision soak, BTC, SOL và compact Jev thuộc thiết kế trước ADR-007 và không còn là việc đang làm.
+
 ## 1. Nền tảng đã xây
 
 | Hạng mục | Code hiện có | Giới hạn / nghiệm thu còn lại |

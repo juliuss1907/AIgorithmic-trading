@@ -4,6 +4,14 @@ Cập nhật 2026-10-01, baseline `29f05c8`, schema v23.
 [Kiến trúc chuẩn](../docs/crypto-intraday-system-design.md) · [Roadmap](roadmap.md).
 Checkbox code không thay cho quyền activation hoặc bằng chứng vận hành.
 
+## Trạng thái 2026-10-31
+
+Nguồn cập nhật tiến độ là [CHANGELOG](../CHANGELOG.md); mục dưới đây là ảnh chụp, không phải realtime.
+
+- Hệ thống hiện hành: Setup-2 slot, 5 coin, theo [ADR-007](../docs/decisions/007-slot-rotation-five-coin-runtime.md). 9 route là champion và chạy trên Binance Demo từ 29/10; HYPE Spot đang soak, đánh giá sớm nhất 2026-11-12 07:46Z.
+- Còn lại: nghiệm thu G6 khi có lệnh Demo đầu tiên, đánh giá HYPE Spot, tiêu chí Jev ở mốc 30 lệnh, lịch vòng học hằng tuần, cài timer backup trên VPS, delete request cho phần không dùng.
+- Phần còn lại của file này là bản 2026-10-01. Các mục về Perp decision soak, BTC, SOL và compact Jev thuộc thiết kế trước ADR-007 và không còn là việc đang làm.
+
 ## Đang triển khai
 
 - [x] Phase 0: commit trang System Plan và tài liệu kế hoạch.
@@ -46,17 +54,17 @@ Checkbox code không thay cho quyền activation hoặc bằng chứng vận hà
 
 - [ ] Hoàn tất 5 Perp decision soak ≥14 ngày/100 matured outcomes/coverage.
 - [ ] Perp replay cutoff và validation độc lập: v1 ≥72 giờ; campaign v2 ≥14 ngày mới trước promotion.
-- [ ] Spot candidate pass replay rồi operator start soak ≥14 ngày và đủ setup.
+- [x] Spot candidate pass replay rồi operator start soak ≥14 ngày và đủ setup. (xong 28/10)
 - [ ] Supervised Demo order → native protection → reconcile → close, approval riêng.
-- [ ] Demo per-pair settings write/read-back acceptance khi paused/flat.
+- [x] Demo per-pair settings write/read-back acceptance khi paused/flat. (xong 29/10)
 - [ ] Rollout/kiểm chứng per-asset readiness trên VPS; approval deploy riêng.
-- [ ] Chỉ activate route đúng champion/passing evaluation sau acceptance được phê duyệt.
+- [x] Chỉ activate route đúng champion/passing evaluation sau acceptance được phê duyệt. (xong 29/10, 9 route)
 
 ## Backlog build — chưa triển khai
 
-- [ ] Deploy/accept versioned gate v2 trên VPS sau verified backup; evaluator đã xây local, không rewrite v1 evidence.
+- [x] Deploy/accept versioned gate v2 trên VPS sau verified backup; evaluator đã xây local, không rewrite v1 evidence. (xong, gate-v2.1 chạy trên VPS)
 - [ ] Unified multi-coin Demo positions/orders/protection projection.
-- [ ] Scheduled backup/retention/restore drill và Demo operational alerts.
+- [ ] Scheduled backup/retention/restore drill và Demo operational alerts. (đã xây 31/10, chưa cài timer trên VPS; cảnh báo pause đã deploy)
 - [ ] Hyperliquid execution adapter; live/multi-venue allocation cần spec riêng.
 
 ## Đồng bộ tài liệu hiện hành
