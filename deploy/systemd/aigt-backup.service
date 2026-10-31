@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up the AIGT source database and Demo journal on the VPS
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/AIgorithmic-trading/scripts/vps_backup.py
+TimeoutStartSec=2h
