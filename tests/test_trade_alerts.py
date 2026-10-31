@@ -83,3 +83,22 @@ def test_telegram_settings_come_from_the_worker_environment():
         assert "TELEGRAM_BOT_TOKEN" in str(error)
     else:
         raise AssertionError("enabled Telegram without a bot must fail")
+
+
+def test_demo_pause_alert_is_sent_once_per_pause_and_retried_after_a_failed_send():
+    class Bot:
+        def __init__(self): self.sent, self.fail = [], True
+        def send(self, message):
+            if self.fail:
+                raise OSError("down")
+            self.sent.append(message)
+    bot = Bot()
+    paused = {"status": "paused", "reason": "venue_or_state_unavailable_reconcile_required", "error": "DemoApiError: x"}
+    assert trade_alerts.notify_demo_pause(paused, bot, alerted=False) is False
+    bot.fail = False
+    assert trade_alerts.notify_demo_pause(paused, bot, alerted=False) is True
+    assert trade_alerts.notify_demo_pause(paused, bot, alerted=True) is True
+    assert len(bot.sent) == 1 and "DemoApiError: x" in bot.sent[0]
+    assert trade_alerts.notify_demo_pause({"status": "running"}, bot, alerted=True) is False
+    assert trade_alerts.notify_demo_pause(paused, bot, alerted=False) is True
+    assert len(bot.sent) == 2

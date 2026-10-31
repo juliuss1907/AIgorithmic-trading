@@ -10,7 +10,8 @@ from intraday.execution.allocation import DemoAllocation
 from intraday.execution.contracts import (AccountRef, AccountSnapshot, SpotAccountSnapshot, SpotBalance, Position,
                                          OpenOrder, Quote, InstrumentRules, ExecutionFill, OrderUpdate, ExecutionUnavailable)
 from intraday.execution.journal import ExecutionJournal
-from intraday.execution.multi_runtime import MultiDemoRuntime
+from intraday.execution.binance_demo import DemoApiError
+from intraday.execution.multi_runtime import MultiDemoRuntime, TRANSIENT_CYCLE_LIMIT
 
 
 NOW = datetime(2026,9,30,3,tzinfo=timezone.utc)
@@ -222,6 +223,66 @@ def test_wrong_scope_evidence_configuration_mismatch_and_manual_cash_reset_block
     exchange.wallet -= 100
     runtime.activate("ETHUSDT","perp",evaluation_id="ETHUSDT-perp-pass",now=NOW)
     assert "error" not in runtime.journal.portfolio(ACCOUNT)
+
+
+def _flaky_quote(runtime,error):
+    """Every Perp quote fails until the returned switch is cleared."""
+    build = runtime.venue_factory
+    failing = {"on":True}
+    def factory(symbol,market):
+        venue = build(symbol,market)
+        quote = venue.quote
+        venue.quote = lambda *a,**k: (_ for _ in ()).throw(error) if failing["on"] else quote(*a,**k)
+        return venue
+    runtime.venue_factory = factory
+    return failing
+
+
+@pytest.mark.parametrize("error",[ExecutionUnavailable("stale Demo execution quote"),
+                                  ExecutionUnavailable("Binance Demo transport failure; reconcile order status"),
+                                  DemoApiError(-1021,400)])
+def test_transient_read_failure_does_not_pause_and_recovery_clears_the_count(tmp_path,error):
+    runtime,exchange = runner(tmp_path,DemoAllocation(capital=1000,perp_weights={"ETHUSDT":1}))
+    runtime.activate("ETHUSDT","perp",evaluation_id="ETHUSDT-perp-pass",now=NOW)
+    failing = _flaky_quote(runtime,error)
+    for count in (1,2):
+        report = runtime.cycle(now=NOW)
+        assert report["status"] == "degraded" and report["transient_errors"] == count
+    assert runtime.journal.portfolio(ACCOUNT)["paused"] is False
+    failing["on"] = False
+    assert runtime.cycle(now=NOW)["status"] != "degraded"
+    assert "transient_errors" not in runtime.journal.portfolio(ACCOUNT)
+
+
+def test_transient_failure_pauses_at_the_limit_and_keeps_an_earlier_pause_reason(tmp_path):
+    runtime,exchange = runner(tmp_path,DemoAllocation(capital=1000,perp_weights={"ETHUSDT":1}))
+    runtime.activate("ETHUSDT","perp",evaluation_id="ETHUSDT-perp-pass",now=NOW)
+    _flaky_quote(runtime,DemoApiError(-1021,400))
+    for _ in range(TRANSIENT_CYCLE_LIMIT-1):
+        assert runtime.cycle(now=NOW)["status"] == "degraded"
+    report = runtime.cycle(now=NOW)
+    assert report["status"] == "paused" and report["reason"] == "venue_or_state_unavailable_reconcile_required"
+    assert "transient_errors" not in runtime.journal.portfolio(ACCOUNT)
+    stored = runtime.journal.portfolio(ACCOUNT)
+    stored.update(reason="operator_pause",error="before")
+    runtime.journal.save_portfolio(ACCOUNT,stored,now=NOW,kind="test")
+    assert runtime.cycle(now=NOW) == {"status":"paused","reason":"operator_pause"}
+    assert runtime.journal.portfolio(ACCOUNT)["error"] == "before"
+
+
+def test_non_transient_api_error_still_pauses_at_once(tmp_path):
+    runtime,exchange = runner(tmp_path,DemoAllocation(capital=1000,perp_weights={"ETHUSDT":1}))
+    runtime.activate("ETHUSDT","perp",evaluation_id="ETHUSDT-perp-pass",now=NOW)
+    _flaky_quote(runtime,DemoApiError(-2015,401))
+    assert runtime.cycle(now=NOW)["status"] == "paused"
+
+
+def test_transient_failure_after_an_uncertain_order_still_pauses(tmp_path):
+    runtime,exchange = runner(tmp_path,DemoAllocation(capital=1000,perp_weights={"ETHUSDT":1}))
+    runtime.activate("ETHUSDT","perp",evaluation_id="ETHUSDT-perp-pass",now=NOW)
+    runtime._uncertain_orders = lambda before: True
+    _flaky_quote(runtime,DemoApiError(-1021,400))
+    assert runtime.cycle(now=NOW)["status"] == "paused"
 
 
 def test_unknown_perp_entry_is_not_repeated_and_observed_exposure_gets_reducing_stop(tmp_path):

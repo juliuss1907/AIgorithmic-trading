@@ -13,6 +13,7 @@ import uuid
 from intraday import setup2 as setup2_module
 from intraday.contracts import DecisionScope, is_setup2_profile
 from intraday.execution.allocation import DemoAllocation
+from intraday.execution.binance_demo import DemoApiError
 from intraday.execution.contracts import ExecutionUnavailable, OrderIntent
 from intraday.execution.journal import OrderCoordinator
 from intraday.portfolio_coordinator import ParentPortfolioCoordinator, ParentPortfolioPolicy, ParentPortfolioState
@@ -25,6 +26,19 @@ JEV_GRACE_SECONDS = 600  # How long a bar's ranking waits for the other coins' J
 
 def identity(*parts):
     return "ag"+hashlib.sha256(":".join(map(str,parts)).encode()).hexdigest()[:32]
+
+
+# Read failures the Demo venue recovers from by itself; every other error still pauses at once.
+TRANSIENT_MESSAGES = {"Binance Demo transport failure; reconcile order status","stale Demo execution quote"}
+TRANSIENT_API_CODES = {-1000,-1001,-1007,-1021}
+# Consecutive cycles: about 5 minutes at the default 30 second interval. Native stops stay on the venue meanwhile.
+TRANSIENT_CYCLE_LIMIT = 10
+
+
+def _transient(error):
+    if isinstance(error,DemoApiError):
+        return error.code in TRANSIENT_API_CODES or (error.http_status or 0) >= 500
+    return isinstance(error,ExecutionUnavailable) and str(error) in TRANSIENT_MESSAGES
 
 
 def _error_text(error):
@@ -123,6 +137,16 @@ class MultiDemoRuntime:
         for intent,update in self._orders(venue):
             if intent.order_type == "MARKET" and update.status in {"NEW","PARTIALLY_FILLED"}:
                 orders.cancel(intent)
+
+    def _journal_orders(self):
+        return [order for market in ("spot","perp")
+                for order in self.journal.orders(self.account.model_copy(update={"market":market}))]
+
+    def _uncertain_orders(self,orders_before):
+        orders = self._journal_orders()
+        return len(orders) != len(orders_before) or any(
+            i.order_type == "MARKET" and (not u.terminal or sum((f.quantity for f in u.fills),Decimal(0)) != u.executed_quantity)
+            for i,u in orders)
 
     def _pending(self,venue):
         return any(not u.terminal or sum((f.quantity for f in u.fills),Decimal(0)) != u.executed_quantity
@@ -271,7 +295,7 @@ class MultiDemoRuntime:
             if previous:
                 route["consumed_bar"] = previous.get("consumed_bar")
             p["routes"][market+":"+symbol] = route
-            p.update(enabled=True,paused=False,reason=None);p.pop("error",None)
+            p.update(enabled=True,paused=False,reason=None);p.pop("error",None);p.pop("transient_errors",None)
             self._save(p,"operator_route_activate")
             return {"status":"activated","symbol":symbol,"market":market,"orders_submitted":False}
 
@@ -463,9 +487,25 @@ class MultiDemoRuntime:
             p = self._portfolio()
             if p.get("enabled") is not True:
                 return {"status":"paused","reason":"explicit_activation_required"}
+            orders_before = self._journal_orders()
             try:
-                return self._cycle(p,now=now)
+                report = self._cycle(p,now=now)
+                if "transient_errors" in p:
+                    p.pop("transient_errors")
+                    self._save(p,"transient_errors_cleared")
+                return report
             except Exception as error:
+                # Only when this cycle sent nothing and no market order is uncertain: the next cycle sees the same state.
+                if _transient(error) and not self._uncertain_orders(orders_before):
+                    stored = self._portfolio()
+                    if stored["paused"]:
+                        return {"status":"paused","reason":stored["reason"]}
+                    count = stored.get("transient_errors",0)+1
+                    if count < TRANSIENT_CYCLE_LIMIT:
+                        stored.update(transient_errors=count)
+                        self._save(stored,"transient_venue_error")
+                        return {"status":"degraded","error":_error_text(error),"transient_errors":count}
+                p.pop("transient_errors",None)
                 if isinstance(error,ExecutionUnavailable) and str(error)=="portfolio_loss_limit":
                     p.update(paused=True,reason="portfolio_loss_limit")
                     self._save(p,"portfolio_loss_limit")
@@ -863,7 +903,7 @@ class MultiDemoRuntime:
                 self._save(p,"active_set_changed")
         if p["paused"]:
             self._save(p,"paused_reconciled")
-            return {"status":"paused","reason":p["reason"]}
+            return {"status":"paused","reason":p["reason"],**({"error":p["error"]} if p.get("error") else {})}
         if plan.is_slots:
             return self._slots_cycle(p,plan,equity,spot_gross,perp_gross,markets,now=now)
         results = []
