@@ -259,6 +259,9 @@ def _flaky_quote(runtime,error):
 
 @pytest.mark.parametrize("error",[ExecutionUnavailable("stale Demo execution quote"),
                                   ExecutionUnavailable("Binance Demo transport failure; reconcile order status"),
+                                  ExecutionUnavailable("Spot Demo quote identity or freshness unavailable"),
+                                  ExecutionUnavailable("Spot Demo clock skew exceeds one second"),
+                                  ExecutionUnavailable("Demo clock skew exceeds one second; synchronize system time"),
                                   DemoApiError(-1021,400)])
 def test_transient_read_failure_does_not_pause_and_recovery_clears_the_count(tmp_path,error):
     runtime,exchange = runner(tmp_path,DemoAllocation(capital=1000,perp_weights={"ETHUSDT":1}))

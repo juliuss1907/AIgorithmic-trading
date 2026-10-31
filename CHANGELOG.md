@@ -4,6 +4,13 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-31 — Runner Demo pause lần nữa vì quote Spot chậm: danh sách lỗi tạm thời bỏ sót
+
+- **Sự cố:** 13:01:29Z, sau hơn 5 giờ và 508 chu kỳ `running`, runner pause với `Spot Demo quote identity or freshness unavailable`. Adapter Spot báo lỗi này khi quote về quá 3 giây hoặc sai symbol. Telegram đã báo đúng, lần đầu cảnh báo này chạy thật.
+- **Nguyên nhân:** bản `cf3d8e4` chỉ liệt kê thông báo quote cũ của Perp, bỏ sót thông báo tương ứng của Spot. Lỗi lặp trong log sau đó chỉ là `error` đã lưu được in lại ở mỗi chu kỳ pause, không phải lỗi mới.
+- **Ảnh hưởng:** 0 lệnh, 0 fill. Từ nến 04:00Z tới 12:00Z ngày 31/10 không có tín hiệu vào lệnh. Đo lúc 13:04Z từ trong container runner: quote về khoảng 0,3 giây trên cả 5 coin.
+- **Sửa:** thêm thông báo quote của Spot và thông báo lệch đồng hồ của Spot, Perp vào danh sách lỗi tạm thời. Lệch đồng hồ thật vẫn pause sau 10 chu kỳ liền.
+
 ## 2026-10-31 — Gom nhánh về `main`, giảm journal, sửa lịch gate Perp, thêm backup tự động
 
 - **Khôi phục bản sửa đang chạy:** `871dd9d` (HYPE Spot thiếu context 1d) đang chạy trên VPS nhưng chưa từng vào `feature/slot-runtime`. Nếu gộp hoặc deploy từ nhánh này mà không có nó, route HYPE Spot sẽ lỗi lại. Đã cherry-pick vào nhánh.

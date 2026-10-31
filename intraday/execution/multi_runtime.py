@@ -29,7 +29,9 @@ def identity(*parts):
 
 
 # Read failures the Demo venue recovers from by itself; every other error still pauses at once.
-TRANSIENT_MESSAGES = {"Binance Demo transport failure; reconcile order status","stale Demo execution quote"}
+TRANSIENT_MESSAGES = {"Binance Demo transport failure; reconcile order status","stale Demo execution quote",
+                      "Spot Demo quote identity or freshness unavailable","Spot Demo clock skew exceeds one second",
+                      "Demo clock skew exceeds one second; synchronize system time"}
 TRANSIENT_API_CODES = {-1000,-1001,-1007,-1021}
 # Consecutive cycles: about 5 minutes at the default 30 second interval. Native stops stay on the venue meanwhile.
 TRANSIENT_CYCLE_LIMIT = 10
