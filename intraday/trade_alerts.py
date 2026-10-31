@@ -215,6 +215,23 @@ def notify_demo(journal, notifier, *, exit_level_for, now, max_attempts=5) -> di
     return {"delivered": sent, "failed": failed} if sent or failed else None
 
 
+def notify_demo_pause(report, notifier, *, alerted) -> bool:
+    """Announce a paused portfolio once per pause; returns whether it is announced, so a failed send retries next cycle."""
+    if report.get("status") != "paused":
+        return False
+    if alerted:
+        return True
+    lines = [f"[DEMO] Runner đang pause: {report.get('reason')}"]
+    if report.get("error"):
+        lines.append(f"Lỗi: {report['error']}")
+    lines.append("Không vào lệnh mới; stop trên sàn giữ nguyên. Kiểm tra rồi activate để mở lại.")
+    try:
+        notifier.send("\n".join(lines))
+    except Exception:
+        return False
+    return True
+
+
 def telegram_from_environment(environ=None):
     """The worker's Telegram settings (TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID); None when off."""
     import os
