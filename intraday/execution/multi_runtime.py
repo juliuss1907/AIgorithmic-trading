@@ -35,6 +35,15 @@ TRANSIENT_API_CODES = {-1000,-1001,-1007,-1021}
 TRANSIENT_CYCLE_LIMIT = 10
 
 
+ROUTINE_SAVES = {"portfolio_cycle","paused_reconciled"}
+
+
+def _without_cycle_time(portfolio):
+    if not portfolio or not isinstance(portfolio.get("slot_selection"),dict):
+        return portfolio
+    return {**portfolio,"slot_selection":{**portfolio["slot_selection"],"at":None}}
+
+
 def _transient(error):
     if isinstance(error,DemoApiError):
         return error.code in TRANSIENT_API_CODES or (error.http_status or 0) >= 500
@@ -118,6 +127,9 @@ class MultiDemoRuntime:
         return version,RULE_SCOPES
 
     def _save(self,p,kind):
+        # Quiet cycles rewrite the same state every 30 seconds; only keep the ones that changed something.
+        if kind in ROUTINE_SAVES and _without_cycle_time(p) == _without_cycle_time(self.journal.portfolio(self.account)):
+            return
         self.journal.save_portfolio(self.account,p,now=self.clock(),kind=kind)
 
     def _portfolio(self):

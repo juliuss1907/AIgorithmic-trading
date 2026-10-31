@@ -225,6 +225,25 @@ def test_wrong_scope_evidence_configuration_mismatch_and_manual_cash_reset_block
     assert "error" not in runtime.journal.portfolio(ACCOUNT)
 
 
+def test_quiet_cycles_do_not_add_journal_events(tmp_path):
+    runtime,exchange = runner(tmp_path,DemoAllocation(capital=1000,perp_weights={"ETHUSDT":1}))
+    runtime.activate("ETHUSDT","perp",evaluation_id="ETHUSDT-perp-pass",now=NOW)
+    def events():
+        with runtime.journal.connect() as connection:
+            return connection.execute("SELECT COUNT(*) FROM execution_events").fetchone()[0]
+    runtime.cycle(now=NOW)
+    settled = events()
+    runtime.cycle(now=NOW)
+    assert events() == settled
+    stored = runtime.journal.portfolio(ACCOUNT)
+    stored.update(paused=True,reason="test_pause")
+    runtime.journal.save_portfolio(ACCOUNT,stored,now=NOW,kind="test")
+    before = events()
+    assert runtime.cycle(now=NOW)["status"] == "paused"
+    assert runtime.cycle(now=NOW)["status"] == "paused"
+    assert events() == before
+
+
 def _flaky_quote(runtime,error):
     """Every Perp quote fails until the returned switch is cleared."""
     build = runtime.venue_factory
