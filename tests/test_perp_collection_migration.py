@@ -92,6 +92,12 @@ def test_cli_inheritance_and_readiness_show_collection_without_changing_champion
     from intraday.__main__ import main
     from intraday.asset_readiness import build_asset_readiness
     store, champion = source(tmp_path)
+    from datetime import datetime
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW+timedelta(days=1)
+    monkeypatch.setattr("intraday.__main__.datetime", Clock)
     monkeypatch.setattr(sys, "argv", ["aigt", "assets", "rules", "inherit-perp", "DOGE",
         "--collection-from", NOW.isoformat(), "--database", str(store.database)])
     main()
