@@ -274,6 +274,15 @@ def allows(store, symbol, scope):
     return is_active(store, symbol, scope) is not False
 
 
+def route_in_plan(store, symbol, market):
+    """Gate scheduling: Setup-2 Perp routes hold a weight but never the Jev-only perp_intraday scope in `is_active`."""
+    version = current(store)
+    if version is None:
+        return True
+    coin = version.plan.coins.get(normalize_symbol(symbol))
+    return bool(coin and getattr(coin, market+'_weight') > 0)
+
+
 def watched(store, symbol, *, version=None):
     version = version or current(store)
     return bool(version and normalize_symbol(symbol) in version.plan.watch)

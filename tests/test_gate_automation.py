@@ -80,6 +80,24 @@ def perp_setup(tmp_path):
     return store, store.load_scoped_rule('research-rule'), later
 
 
+def test_setup2_perp_route_in_the_active_set_is_scheduled_and_one_outside_is_not(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    store, rule, later = perp_setup(tmp_path)
+    attempts = []
+    def offline(*args,**kwargs):
+        attempts.append(args)
+        raise OSError('offline')
+    outside = SimpleNamespace(plan=SimpleNamespace(coins={}))
+    monkeypatch.setattr('intraday.active_set.current',lambda store: outside)
+    run_tick(store,now=later,report_dir=tmp_path/'reports',fetch_funding=offline)
+    assert attempts == []
+    # The active set never lists perp_intraday as a Jev scope; its Perp weight is what selects the route.
+    inside = SimpleNamespace(plan=SimpleNamespace(coins={rule.symbol:SimpleNamespace(perp_weight=1)}))
+    monkeypatch.setattr('intraday.active_set.current',lambda store: inside)
+    run_tick(store,now=later,report_dir=tmp_path/'reports',fetch_funding=offline)
+    assert len(attempts) == 1
+
+
 def test_funding_retries_are_bounded_persistent_and_never_zero(tmp_path):
     store, rule, later = perp_setup(tmp_path)
     attempts = []
