@@ -4,6 +4,18 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-10-31 — Runner Demo không còn tự pause vì một lỗi API tạm thời
+
+**Sự cố:** runner tự pause lúc 22:53Z ngày 29/10 vì `stale Demo execution quote`, lần thứ hai sau khi bật G6, và không ai được báo. Đến 03:29Z ngày 31/10 vẫn pause, 0 lệnh, 0 fill. Tín hiệu ETH Perp SHORT ở nến đóng 00:00Z ngày 30/10 (giá 2252,34) không thành lệnh Demo. Trong lúc pause còn gặp 13 lỗi nữa: 6 transport, 5 `-1021`, 2 quote cũ. Đồng hồ VPS đã đồng bộ NTP, lệch khoảng 85 ms so với Binance; chưa rõ vì sao API Demo lỗi.
+
+**Sửa:**
+- Quote cũ, lỗi transport và mã `-1000`, `-1001`, `-1007`, `-1021` hoặc HTTP 5xx: bỏ qua chu kỳ, báo `degraded`, thử lại ở chu kỳ sau. Pause khi lỗi lặp 10 chu kỳ liền (khoảng 5 phút).
+- Chỉ bỏ qua khi chu kỳ đó không tạo lệnh mới và không có lệnh market chưa rõ trạng thái. Các lỗi khác (cash drift, loss limit, khoá bị từ chối) vẫn pause ngay.
+- Lỗi tạm thời khi đang pause không còn ghi đè lý do pause.
+- Runner báo Telegram một lần cho mỗi lần pause, kèm lý do và lỗi; gửi hỏng thì thử lại ở chu kỳ sau.
+
+Chưa deploy; portfolio trên VPS vẫn pause cho tới khi được `activate`. `_protect` lỗi vì API vẫn dẫn tới `protection_failed` và đóng vị thế; giữ nguyên vì an toàn.
+
 ## 2026-10-28 — Kết thúc soak 14 ngày: 9 route pass gate, HYPE Spot hoãn
 
 **Soak paper (14/10–28/10):**
