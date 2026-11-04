@@ -307,6 +307,76 @@ def test_transient_failure_after_an_uncertain_order_still_pauses(tmp_path):
     assert runtime.cycle(now=NOW)["status"] == "paused"
 
 
+def _open_perp_with_failing_protection(tmp_path,error,times=1):
+    """ETH Perp is entered with a live stop; afterwards the next `times` instrument reads fail,
+    so the first failure lands in the protection re-check and a close can still succeed."""
+    runtime,exchange = runner(tmp_path,DemoAllocation(capital=1000,perp_weights={"ETHUSDT":1}))
+    runtime.activate("ETHUSDT","perp",evaluation_id="ETHUSDT-perp-pass",now=NOW)
+    assert runtime.cycle(now=NOW)["status"] == "running" and exchange.positions["ETHUSDT"]
+    build = runtime.venue_factory
+    failing = {"left":times}
+    def factory(symbol,market):
+        venue = build(symbol,market)
+        instrument = venue.instrument
+        def flaky(*a,**k):
+            if failing["left"]:
+                failing["left"] -= 1
+                raise error
+            return instrument(*a,**k)
+        venue.instrument = flaky
+        return venue
+    runtime.venue_factory = factory
+    return runtime,exchange,failing
+
+
+def _live_stops(exchange):
+    return [i for i,u in exchange.orders.values() if i.order_type=="STOP_MARKET" and not u.terminal]
+
+
+@pytest.mark.parametrize("error",[ExecutionUnavailable("Binance Demo transport failure; reconcile order status"),
+                                  DemoApiError(-1021,400),DemoApiError(None,502)])
+def test_transient_failure_while_rechecking_a_live_stop_keeps_the_position(tmp_path,error):
+    runtime,exchange,failing = _open_perp_with_failing_protection(tmp_path,error)
+    position = exchange.positions["ETHUSDT"]
+    market_orders = len([i for i,u in exchange.orders.values() if i.order_type=="MARKET"])
+    report = runtime.cycle(now=NOW)
+    assert report["status"] == "degraded" and report["transient_errors"] == 1
+    assert exchange.positions["ETHUSDT"] == position and len(_live_stops(exchange)) == 1
+    assert len([i for i,u in exchange.orders.values() if i.order_type=="MARKET"]) == market_orders
+    assert runtime.journal.portfolio(ACCOUNT)["paused"] is False
+    assert runtime.cycle(now=NOW)["status"] == "running"
+    assert exchange.positions["ETHUSDT"] == position and len(_live_stops(exchange)) == 1
+    assert "transient_errors" not in runtime.journal.portfolio(ACCOUNT)
+
+
+def test_persistent_transient_protection_failure_pauses_without_flattening(tmp_path):
+    runtime,exchange,_ = _open_perp_with_failing_protection(tmp_path,DemoApiError(-1021,400),times=10**6)
+    position = exchange.positions["ETHUSDT"]
+    for _ in range(TRANSIENT_CYCLE_LIMIT-1):
+        assert runtime.cycle(now=NOW)["status"] == "degraded"
+    report = runtime.cycle(now=NOW)
+    assert report["status"] == "paused" and report["reason"] == "venue_or_state_unavailable_reconcile_required"
+    assert exchange.positions["ETHUSDT"] == position and len(_live_stops(exchange)) == 1
+
+
+def test_non_transient_protection_failure_still_flattens_and_records_the_cause(tmp_path):
+    runtime,exchange,_ = _open_perp_with_failing_protection(tmp_path,ExecutionUnavailable("native protection unconfirmed"))
+    report = runtime.cycle(now=NOW)
+    assert report == {"status":"paused","reason":"protection_failed",
+                      "error":"ExecutionUnavailable: native protection unconfirmed"}
+    assert not exchange.positions["ETHUSDT"] and not _live_stops(exchange)
+    assert runtime.journal.portfolio(ACCOUNT)["error"] == report["error"]
+
+
+def test_transient_failure_without_a_live_stop_still_flattens(tmp_path):
+    runtime,exchange,_ = _open_perp_with_failing_protection(tmp_path,DemoApiError(-1021,400))
+    for key,(intent,update) in list(exchange.orders.items()):
+        if intent.order_type == "STOP_MARKET":  # e.g. cancelled by hand on the exchange
+            exchange.orders[key] = (intent,update.model_copy(update={"status":"CANCELED"}))
+    assert runtime.cycle(now=NOW)["reason"] == "protection_failed"
+    assert not exchange.positions["ETHUSDT"]
+
+
 def test_unknown_perp_entry_is_not_repeated_and_observed_exposure_gets_reducing_stop(tmp_path):
     runtime,exchange = runner(tmp_path,DemoAllocation(capital=1000,perp_weights={"ETHUSDT":1}))
     runtime.activate("ETHUSDT","perp",evaluation_id="ETHUSDT-perp-pass",now=NOW)

@@ -102,3 +102,14 @@ def test_demo_pause_alert_is_sent_once_per_pause_and_retried_after_a_failed_send
     assert trade_alerts.notify_demo_pause({"status": "running"}, bot, alerted=True) is False
     assert trade_alerts.notify_demo_pause(paused, bot, alerted=False) is True
     assert len(bot.sent) == 2
+
+
+def test_protection_failure_alert_says_the_route_was_closed():
+    class Bot:
+        def __init__(self): self.sent = []
+        def send(self, message): self.sent.append(message)
+    bot = Bot()
+    report = {"status": "paused", "reason": "protection_failed", "error": "ExecutionUnavailable: native protection unconfirmed"}
+    assert trade_alerts.notify_demo_pause(report, bot, alerted=False) is True
+    assert "đã bị đóng" in bot.sent[0] and "native protection unconfirmed" in bot.sent[0]
+    assert "stop trên sàn giữ nguyên" not in bot.sent[0]
