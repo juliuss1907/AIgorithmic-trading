@@ -4,6 +4,31 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-11-04 — SOL Perp bị đóng sớm do lỗi API tạm thời lúc kiểm tra stop; sửa và deploy `ad398df`
+
+- **Sự cố:**
+  - Chu kỳ bắt đầu 03:16:23Z kéo dài 43 giây; chu kỳ thường khoảng 15 giây.
+  - Một lệnh gọi Binance Demo gặp lỗi tạm thời trong lúc kiểm tra lại stop 95,17. Stop này vẫn đang nằm trên sàn.
+  - Bước kiểm tra stop coi mọi `ExecutionUnavailable` là mất bảo vệ, nên lúc 03:17Z runner mua đóng 1,81 SOL @ 90,62, huỷ stop rồi pause `protection_failed`.
+  - Log không lưu nội dung lỗi, nên không biết chính xác lệnh gọi nào hỏng.
+- **Nguyên nhân gốc:** bản `cf3d8e4`/`af5708f` chỉ bắt lỗi tạm thời ở tầng ngoài của chu kỳ. Bước kiểm tra stop có khối `except` riêng nên lỗi không tới được tầng đó.
+- **Kết quả lệnh:**
+  - Vào 91,57, ra 90,62: lãi gộp +1,7195 USDT, phí 0,1319 USDT.
+  - Ví Futures từ 5000,00 lên 5001,65 USDT (gồm funding).
+  - Fill và phí trong journal khớp với `userTrades` trên sàn; sau khi đóng không còn vị thế, lệnh chờ hay algo stop nào. Đối chiếu G6 đạt.
+  - Lệnh đóng vì sự cố, không phải tín hiệu thoát, nên khi đánh giá hiệu quả chiến lược phải tách riêng lệnh này.
+- **Sửa (`ad398df`):**
+  - Khi journal cho thấy stop đang sống trên sàn, lỗi tạm thời trong bước kiểm tra stop chuyển sang đường `degraded` và được thử lại ở chu kỳ sau. Sau 10 chu kỳ lỗi liền, runner pause nhưng không đóng lệnh.
+  - Stop chưa xác nhận được (bị từ chối, bị huỷ tay, hoặc vừa vào lệnh) vẫn bị đóng ngay như cũ.
+  - Pause `protection_failed` giờ lưu nội dung lỗi. Tin Telegram ghi rõ route đã bị đóng.
+  - Test mới tái hiện đúng sự cố: đỏ trên code cũ, xanh trên code mới. Toàn bộ 1959 test đều qua.
+- **Deploy, chỉ `demo-execution`** (Julius tự chạy), khoảng 03:36Z:
+  - Code được chuyển sang VPS bằng git bundle; commit chưa push lên GitHub.
+  - Image cũ được tag `intraday-demo-execution:rollback-af5708f-20261104`; image mới `565391c82ca2`. Web và worker giữ nguyên container.
+  - Journal được sao lưu thành `binance-demo-backup-20261104T0336Z-ad398df.sqlite3`.
+  - Activate lại route SOL Perp, xoá `entry_id` và trail cũ, đồng thời mở pause cho portfolio.
+  - Kiểm tra lúc 04:00Z: 9 route active, `paused=false`, không có chu kỳ `degraded` hay `paused` trong 23 phút sau khi chạy lại.
+
 ## 2026-11-04 — Lệnh Demo đầu tiên: SOL Perp SHORT; NEAR Perp bị chặn vì spread
 
 Kiểm tra chỉ đọc lúc 00:56Z ngày 04/11, VPS chạy `af5708f`.
