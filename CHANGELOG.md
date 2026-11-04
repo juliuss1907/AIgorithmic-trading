@@ -4,6 +4,21 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-11-04 — Lệnh Demo đầu tiên: SOL Perp SHORT; NEAR Perp bị chặn vì spread
+
+Kiểm tra chỉ đọc lúc 00:56Z ngày 04/11, VPS chạy `af5708f`.
+
+- **SOL Perp SHORT** (tín hiệu ở nến đóng 20:00Z ngày 02/11, giá đóng 91,74):
+  - Khớp market 1,81 SOL @ 91,57 lúc 20:00:52Z (notional khoảng 166 USDT, phí 0,066 USDT).
+  - Stop gốc 95,54 (ATR×3, khoảng 4,3%), được sàn nhận; siết còn 95,17 lúc 00:00Z ngày 03/11.
+  - Telegram gửi đủ: tin khớp lệnh, tin đặt stop, tin dời stop.
+  - Jev tư vấn "Strong Buy" 0,51, tức không đồng ý short; chỉ ghi lại để chấm tiêu chí Jev.
+  - Lúc kiểm tra: mark 92,41, lỗ khoảng −1,5 USDT. Nếu chạm stop thì lỗ khoảng −6,5 USDT (−0,65% vốn).
+- **NEAR Perp SHORT** (nến đóng 08:00Z ngày 03/11, giá đóng 3,785) bị chặn với `spread_limit`: spread Demo lúc đó vượt 10 bps. Nến đã được đánh dấu là đã xét nên runner không thử lại. Lúc kiểm tra spread chỉ còn 2,6 bps. Replay không mô phỏng spread nên đây là một chỗ lệch so với replay.
+- **Lỗi API tạm thời:** từ 11:47 tới 11:51Z ngày 03/11 có `-1021` và lỗi transport, tối đa 3 chu kỳ liền. Runner báo `degraded` rồi tự hồi phục, không pause. Tổng cộng 14 chu kỳ `degraded`.
+- **Backup:** timer chạy đủ 01/11, 02/11 và 03/11 lúc 02:00Z. Mỗi lần còn sót một cặp `.intraday-backup.*.tmp-shm/-wal` (32 KB), do lệnh `backup create` để lại, không phải `prune`.
+- **Journal:** tăng lên 30 MB. Khi có vị thế mở, PnL đổi ở mỗi chu kỳ nên mỗi chu kỳ đều được ghi; tốc độ phình này là bình thường.
+
 ## 2026-10-31 — Dọn nhánh và file thừa theo delete request (Julius duyệt)
 
 - **Đã xoá:**
