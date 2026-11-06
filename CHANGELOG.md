@@ -4,12 +4,68 @@ File này ghi lại các thay đổi đáng chú ý của dự án, bắt đầu
 
 Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu chi tiết. Mục mới nhất nằm trên cùng.
 
+## 2026-11-04 — SOL Perp bị đóng sớm do lỗi API tạm thời lúc kiểm tra stop; sửa và deploy `ad398df`
+
+- **Sự cố:**
+  - Chu kỳ bắt đầu 03:16:23Z kéo dài 43 giây; chu kỳ thường khoảng 15 giây.
+  - Một lệnh gọi Binance Demo gặp lỗi tạm thời trong lúc kiểm tra lại stop 95,17. Stop này vẫn đang nằm trên sàn.
+  - Bước kiểm tra stop coi mọi `ExecutionUnavailable` là mất bảo vệ, nên lúc 03:17Z runner mua đóng 1,81 SOL @ 90,62, huỷ stop rồi pause `protection_failed`.
+  - Log không lưu nội dung lỗi, nên không biết chính xác lệnh gọi nào hỏng.
+- **Nguyên nhân gốc:** bản `cf3d8e4`/`af5708f` chỉ bắt lỗi tạm thời ở tầng ngoài của chu kỳ. Bước kiểm tra stop có khối `except` riêng nên lỗi không tới được tầng đó.
+- **Kết quả lệnh:**
+  - Vào 91,57, ra 90,62: lãi gộp +1,7195 USDT, phí 0,1319 USDT.
+  - Ví Futures từ 5000,00 lên 5001,65 USDT (gồm funding).
+  - Fill và phí trong journal khớp với `userTrades` trên sàn; sau khi đóng không còn vị thế, lệnh chờ hay algo stop nào. Đối chiếu G6 đạt.
+  - Lệnh đóng vì sự cố, không phải tín hiệu thoát, nên khi đánh giá hiệu quả chiến lược phải tách riêng lệnh này.
+  - Phản thực tế (kiểm tra ngày 06/11): SOL lên 96,69 ở nến đóng 16:00Z ngày 04/11. Nếu còn giữ, lệnh đã chạm stop 95,17 với lỗ khoảng −6,5 USDT cộng phí. Vì vậy theo đúng chiến lược, lệnh này phải ghi là một lệnh thua.
+- **Sửa (`ad398df`):**
+  - Khi journal cho thấy stop đang sống trên sàn, lỗi tạm thời trong bước kiểm tra stop chuyển sang đường `degraded` và được thử lại ở chu kỳ sau. Sau 10 chu kỳ lỗi liền, runner pause nhưng không đóng lệnh.
+  - Stop chưa xác nhận được (bị từ chối, bị huỷ tay, hoặc vừa vào lệnh) vẫn bị đóng ngay như cũ.
+  - Pause `protection_failed` giờ lưu nội dung lỗi. Tin Telegram ghi rõ route đã bị đóng.
+  - Test mới tái hiện đúng sự cố: đỏ trên code cũ, xanh trên code mới. Toàn bộ 1959 test đều qua.
+- **Deploy, chỉ `demo-execution`** (Julius tự chạy), khoảng 03:36Z:
+  - Code được chuyển sang VPS bằng git bundle; commit chưa push lên GitHub.
+  - Image cũ được tag `intraday-demo-execution:rollback-af5708f-20261104`; image mới `565391c82ca2`. Web và worker giữ nguyên container.
+  - Journal được sao lưu thành `binance-demo-backup-20261104T0336Z-ad398df.sqlite3`.
+  - Activate lại route SOL Perp, xoá `entry_id` và trail cũ, đồng thời mở pause cho portfolio.
+  - Kiểm tra lúc 04:00Z: 9 route active, `paused=false`, không có chu kỳ `degraded` hay `paused` trong 23 phút sau khi chạy lại.
+
+## 2026-11-04 — Lệnh Demo đầu tiên: SOL Perp SHORT; NEAR Perp bị chặn vì spread
+
+Kiểm tra chỉ đọc lúc 00:56Z ngày 04/11, VPS chạy `af5708f`.
+
+- **SOL Perp SHORT** (tín hiệu ở nến đóng 20:00Z ngày 02/11, giá đóng 91,74):
+  - Khớp market 1,81 SOL @ 91,57 lúc 20:00:52Z (notional khoảng 166 USDT, phí 0,066 USDT).
+  - Stop gốc 95,54 (ATR×3, khoảng 4,3%), được sàn nhận; siết còn 95,17 lúc 00:00Z ngày 03/11.
+  - Telegram gửi đủ: tin khớp lệnh, tin đặt stop, tin dời stop.
+  - Jev tư vấn "Strong Buy" 0,51, tức không đồng ý short; chỉ ghi lại để chấm tiêu chí Jev.
+  - Lúc kiểm tra: mark 92,41, lỗ khoảng −1,5 USDT. Nếu chạm stop thì lỗ khoảng −6,5 USDT (−0,65% vốn).
+- **NEAR Perp SHORT** (nến đóng 08:00Z ngày 03/11, giá đóng 3,785) bị chặn với `spread_limit`: spread Demo lúc đó vượt 10 bps. Nến đã được đánh dấu là đã xét nên runner không thử lại. Lúc kiểm tra spread chỉ còn 2,6 bps. Replay không mô phỏng spread nên đây là một chỗ lệch so với replay.
+- **Lỗi API tạm thời:** từ 11:47 tới 11:51Z ngày 03/11 có `-1021` và lỗi transport, tối đa 3 chu kỳ liền. Runner báo `degraded` rồi tự hồi phục, không pause. Tổng cộng 14 chu kỳ `degraded`.
+- **Backup:** timer chạy đủ 01/11, 02/11 và 03/11 lúc 02:00Z. Mỗi lần còn sót một cặp `.intraday-backup.*.tmp-shm/-wal` (32 KB), do lệnh `backup create` để lại, không phải `prune`.
+- **Journal:** tăng lên 30 MB. Khi có vị thế mở, PnL đổi ở mỗi chu kỳ nên mỗi chu kỳ đều được ghi; tốc độ phình này là bình thường.
+
+## 2026-10-31 — Dọn nhánh và file thừa theo delete request (Julius duyệt)
+
+- **Đã xoá:**
+  - 15 nhánh local đã merge vào `main`.
+  - Bản local của `research/donchian-adx-single`, `research/donchian-setup2-diagnostics`, `research/recent-48h-perp5x`, `feature/three-coin-runtime`, sau khi push và kiểm hash khớp GitHub.
+  - Worktree `system-trading-jev-review`. `state/` và `data/` trong đó (83 file, gồm bằng chứng kiểm chứng Jev 16/10) được chép trước sang `state/verification/jev-review-worktree-20261031/` và `diff -r` khớp.
+  - Trên VPS: 20 file `.intraday-backup.*.tmp-*` và 10 backup thủ công từ 13/10 tới 24/10. Thư mục backup giảm từ 34 GB còn 7 GB.
+- **Giữ lại:** backup 29/10 và `backups/daily/`.
+- **Chưa xoá vì còn điều kiện:** 4 nhánh `fix/*`, image rollback và build cache trên VPS chờ một lệnh Demo khép kín; timer BTC paper chờ sau G6; key Demo local chờ Julius xác nhận không còn dùng từ máy này.
+
 ## 2026-10-31 — Runner Demo pause lần nữa vì quote Spot chậm: danh sách lỗi tạm thời bỏ sót
 
 - **Sự cố:** 13:01:29Z, sau hơn 5 giờ và 508 chu kỳ `running`, runner pause với `Spot Demo quote identity or freshness unavailable`. Adapter Spot báo lỗi này khi quote về quá 3 giây hoặc sai symbol. Telegram đã báo đúng, lần đầu cảnh báo này chạy thật.
 - **Nguyên nhân:** bản `cf3d8e4` chỉ liệt kê thông báo quote cũ của Perp, bỏ sót thông báo tương ứng của Spot. Lỗi lặp trong log sau đó chỉ là `error` đã lưu được in lại ở mỗi chu kỳ pause, không phải lỗi mới.
 - **Ảnh hưởng:** 0 lệnh, 0 fill. Từ nến 04:00Z tới 12:00Z ngày 31/10 không có tín hiệu vào lệnh. Đo lúc 13:04Z từ trong container runner: quote về khoảng 0,3 giây trên cả 5 coin.
 - **Sửa:** thêm thông báo quote của Spot và thông báo lệch đồng hồ của Spot, Perp vào danh sách lỗi tạm thời. Lệch đồng hồ thật vẫn pause sau 10 chu kỳ liền.
+- **Deploy `af5708f`, chỉ `demo-execution`** (Julius tự chạy), khoảng 13:55–13:56Z:
+  - Image cũ được tag `intraday-demo-execution:rollback-d2cb428-20261031`; image mới `d18b2a8dd048`. Web và worker giữ nguyên container.
+  - Journal được sao lưu thành `binance-demo-backup-20261031T1355Z-af5708f.sqlite3`: `integrity_check` ok.
+  - `activate` bỏ pause: 9 route active, không có `spot:HYPEUSDT`, 0 lệnh, 0 fill. Ba chu kỳ đầu báo `running`.
+  - Runner dừng từ 13:01Z tới 13:56Z, không có nến H4 nào đóng trong khoảng này.
 
 ## 2026-10-31 — Gom nhánh về `main`, giảm journal, sửa lịch gate Perp, thêm backup tự động
 

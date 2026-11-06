@@ -381,6 +381,10 @@ class MultiDemoRuntime:
                     total += max(Decimal(0),intent.quantity-update.executed_quantity)*quote.ask/snapshot.leverage
         return total
 
+    def _live_stop(self,venue):
+        """The journal's last confirmed state shows a protective stop still open on the exchange."""
+        return any(intent.order_type != "MARKET" and update.status == "NEW" for intent,update in self._orders(venue))
+
     def _clean_stops(self,venue,*,keep=None):
         coordinator = OrderCoordinator(self.journal,venue)
         for intent,update in self._orders(venue):
@@ -674,8 +678,8 @@ class MultiDemoRuntime:
         if self._quantity(venue,market):
             try:
                 self._protect(p,route,venue,confirmed,venue.quote(symbol,now=self.clock()),now=self.clock())
-            except (ExecutionUnavailable,ValueError):
-                p.update(paused=True,reason="protection_failed")
+            except (ExecutionUnavailable,ValueError) as error:
+                p.update(paused=True,reason="protection_failed",error=_error_text(error))
                 self._save(p,"protection_failure")
                 self._close(p,route,venue,now=self.clock(),reason="protection_failure")
                 return "protection_failed"
@@ -879,7 +883,8 @@ class MultiDemoRuntime:
             status = self._place_slot_entry(p,candidate,cap,auth,venue,snapshot,now=self.clock(),advisory=advisory)
             result(step.symbol,step.market,status=status)
             if status == "protection_failed":
-                return {"status":"paused","reason":"protection_failed",**({"routes":results} if advisory else {})}
+                return {"status":"paused","reason":"protection_failed","error":p.get("error"),
+                        **({"routes":results} if advisory else {})}
             # Recompute the shared exposure after every mutation before the next entry.
             equity,spot_gross,perp_gross,markets = self._risk(p,now=self.clock())
             sleeves = self._sleeves(p,plan,markets,now=self.clock())
@@ -898,11 +903,15 @@ class MultiDemoRuntime:
             venue,snapshot,quote = markets[key]
             try:
                 self._protect(p,route,venue,snapshot,quote,now=now)
-            except (ExecutionUnavailable,ValueError):
-                p.update(paused=True,reason="protection_failed")
+            except (ExecutionUnavailable,ValueError) as error:
+                # A venue hiccup while re-checking a stop that is already live must not flatten the
+                # position: the exchange still holds the stop, so let cycle() retry it as degraded.
+                if _transient(error) and self._live_stop(venue):
+                    raise
+                p.update(paused=True,reason="protection_failed",error=_error_text(error))
                 self._save(p,"protection_failure")
                 self._close(p,route,venue,now=now,reason="protection_failure")
-                return {"status":"paused","reason":"protection_failed"}
+                return {"status":"paused","reason":"protection_failed","error":p["error"]}
         if any(market == "perp" and (not self._settings_match(venue, snapshot)
                or any(r["symbol"] == symbol for r in self.journal.settings_requests(self.account)))
                for (symbol,market),(venue,snapshot,quote) in markets.items()):
@@ -1035,11 +1044,11 @@ class MultiDemoRuntime:
             if self._quantity(venue,market):
                 try:
                     self._protect(p,route,venue,confirmed,venue.quote(symbol,now=self.clock()),now=self.clock())
-                except (ExecutionUnavailable,ValueError):
-                    p.update(paused=True,reason="protection_failed")
+                except (ExecutionUnavailable,ValueError) as error:
+                    p.update(paused=True,reason="protection_failed",error=_error_text(error))
                     self._save(p,"protection_failure")
                     self._close(p,route,venue,now=self.clock(),reason="protection_failure")
-                    return {"status":"paused","reason":"protection_failed"}
+                    return {"status":"paused","reason":"protection_failed","error":p["error"]}
             if self._pending(venue):
                 raise ExecutionUnavailable("entry fill unconfirmed")
             # Recompute actual shared exposure after every mutation before another coin.

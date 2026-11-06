@@ -224,7 +224,11 @@ def notify_demo_pause(report, notifier, *, alerted) -> bool:
     lines = [f"[DEMO] Runner đang pause: {report.get('reason')}"]
     if report.get("error"):
         lines.append(f"Lỗi: {report['error']}")
-    lines.append("Không vào lệnh mới; stop trên sàn giữ nguyên. Kiểm tra rồi activate để mở lại.")
+    if report.get("reason") == "protection_failed":
+        lines.append("Route không xác nhận được stop đã bị đóng bằng lệnh market; route khác giữ stop trên sàn.")
+        lines.append("Không vào lệnh mới. Kiểm tra rồi activate để mở lại.")
+    else:
+        lines.append("Không vào lệnh mới; stop trên sàn giữ nguyên. Kiểm tra rồi activate để mở lại.")
     try:
         notifier.send("\n".join(lines))
     except Exception:
