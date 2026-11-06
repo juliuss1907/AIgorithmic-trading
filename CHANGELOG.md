@@ -17,6 +17,7 @@ Mỗi mục gồm ngày, tóm tắt, commit liên quan và link sang tài liệu
   - Ví Futures từ 5000,00 lên 5001,65 USDT (gồm funding).
   - Fill và phí trong journal khớp với `userTrades` trên sàn; sau khi đóng không còn vị thế, lệnh chờ hay algo stop nào. Đối chiếu G6 đạt.
   - Lệnh đóng vì sự cố, không phải tín hiệu thoát, nên khi đánh giá hiệu quả chiến lược phải tách riêng lệnh này.
+  - Phản thực tế (kiểm tra ngày 06/11): SOL lên 96,69 ở nến đóng 16:00Z ngày 04/11. Nếu còn giữ, lệnh đã chạm stop 95,17 với lỗ khoảng −6,5 USDT cộng phí. Vì vậy theo đúng chiến lược, lệnh này phải ghi là một lệnh thua.
 - **Sửa (`ad398df`):**
   - Khi journal cho thấy stop đang sống trên sàn, lỗi tạm thời trong bước kiểm tra stop chuyển sang đường `degraded` và được thử lại ở chu kỳ sau. Sau 10 chu kỳ lỗi liền, runner pause nhưng không đóng lệnh.
   - Stop chưa xác nhận được (bị từ chối, bị huỷ tay, hoặc vừa vào lệnh) vẫn bị đóng ngay như cũ.
